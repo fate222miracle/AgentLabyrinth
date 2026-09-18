@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "id": "da6dcb41-d04e-42ea-8372-0e1b382f1ec6",
+  "name": "order-status-001",
+  "version": "1.0.0",
+  "category": "tool_selection",
+  "description": "查询模拟订单 ORD-001 的状态，并提交状态及该订单记录的证据 ID。",
+  "initial_state": {
+    "orders": [{"order_id": "ORD-001", "status": "shipped", "evidence_id": "order:ORD-001"}]
+  },
+  "goal_conditions": {"answer": "shipped", "evidence": ["order:ORD-001"]},
+  "constraints": ["先查询再提交；不得伪造证据"],
+  "expected_tools": ["query_records", "submit_answer"],
+  "forbidden_tools": [],
+  "max_steps": 6,
+  "token_budget": 1000,
+  "evaluator_config": {"name": "order_status_v1", "split": "development", "origin": "native"}
+}

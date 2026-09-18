@@ -1,0 +1,31 @@
+[project]
+name = "agent-labyrinth"
+version = "0.0.1"
+description = "M0 contracts and handoff scaffold; not a complete V0.1"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2.10,<3",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.34,<1",
+]
+
+[dependency-groups]
+dev = ["pytest>=9.0.3,<10", "ruff>=0.9,<1", "mypy>=1.14,<2", "httpx>=0.28,<1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [".uv-cache", ".venv", "artifacts", "apps/web"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["packages", "tests", "scripts", "apps/api"]
+plugins = ["pydantic.mypy"]

@@ -1,0 +1,1 @@
+"""AgentLabyrinth applications namespace."""

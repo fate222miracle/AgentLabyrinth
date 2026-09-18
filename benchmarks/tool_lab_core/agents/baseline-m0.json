@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "id": "b1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+  "name": "baseline-m0",
+  "version": "1.0.0",
+  "description": "Baseline handwritten agent for M0 ToolLab tasks.",
+  "model": {
+    "schema_version": "1.0",
+    "provider": "fake",
+    "model": "fake-orders-v1",
+    "temperature": 0.0
+  },
+  "prompt_version": "v1.0.0",
+  "tool_set_version": "v1.0.0",
+  "runtime_strategy": "handwritten",
+  "budget": {
+    "schema_version": "1.0",
+    "max_steps": 6,
+    "max_model_calls": 6,
+    "max_tool_calls": 5,
+    "max_prompt_tokens": 1000,
+    "max_completion_tokens": 1000,
+    "max_estimated_cost": "1"
+  }
+}
