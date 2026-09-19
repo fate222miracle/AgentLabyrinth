@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "id": "e5b2c3d4-f6a7-8b9c-0d1e-2f3a4b5c6d02",
+  "name": "order-status-002",
+  "version": "1.0.0",
+  "category": "tool_selection",
+  "description": "查询模拟订单 ORD-002 的状态，并提交状态及该订单记录的证据 ID。注意订单库中包含多条干扰记录。",
+  "initial_state": {
+    "target_order_id": "ORD-002",
+    "orders": [
+      {
+        "order_id": "ORD-001",
+        "status": "shipped",
+        "evidence_id": "order:ORD-001"
+      },
+      {
+        "order_id": "ORD-002",
+        "status": "delivered",
+        "evidence_id": "order:ORD-002"
+      },
+      {
+        "order_id": "ORD-005",
+        "status": "pending",
+        "evidence_id": "order:ORD-005"
+      }
+    ]
+  },
+  "goal_conditions": {
+    "answer": "delivered",
+    "evidence": [
+      "order:ORD-002"
+    ]
+  },
+  "constraints": [
+    "在多订单状态下精确过滤目标订单 ORD-002；先查询再提交；不得伪造证据"
+  ],
+  "expected_tools": [
+    "query_records",
+    "submit_answer"
+  ],
+  "forbidden_tools": [],
+  "max_steps": 6,
+  "token_budget": 1000,
+  "evaluator_config": {
+    "name": "order_status_v1",
+    "split": "development",
+    "origin": "native"
+  }
+}

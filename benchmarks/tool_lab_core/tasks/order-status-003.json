@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "id": "f6c3d4e5-a7b8-9c0d-1e2f-3a4b5c6d7e03",
+  "name": "order-status-003",
+  "version": "1.0.0",
+  "category": "tool_selection",
+  "description": "查询已取消的模拟订单 ORD-003，并提交其状态与证据 ID。",
+  "initial_state": {
+    "target_order_id": "ORD-003",
+    "orders": [
+      {
+        "order_id": "ORD-003",
+        "status": "cancelled",
+        "evidence_id": "order:ORD-003"
+      }
+    ]
+  },
+  "goal_conditions": {
+    "answer": "cancelled",
+    "evidence": [
+      "order:ORD-003"
+    ]
+  },
+  "constraints": [
+    "确认已取消状态并提取合规证据；先查询再提交"
+  ],
+  "expected_tools": [
+    "query_records",
+    "submit_answer"
+  ],
+  "forbidden_tools": [],
+  "max_steps": 6,
+  "token_budget": 1000,
+  "evaluator_config": {
+    "name": "order_status_v1",
+    "split": "development",
+    "origin": "native"
+  }
+}

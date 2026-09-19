@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90",
+  "name": "recovery-m1",
+  "version": "1.0.0",
+  "description": "Recovery handwritten agent with single controlled retry for invalid arguments in ToolLab tasks.",
+  "model": {
+    "schema_version": "1.0",
+    "provider": "fake",
+    "model": "fake-orders-v1",
+    "temperature": 0.0
+  },
+  "prompt_version": "v1.0.0",
+  "tool_set_version": "v1.0.0",
+  "runtime_strategy": "handwritten_recovery",
+  "budget": {
+    "schema_version": "1.0",
+    "max_steps": 6,
+    "max_model_calls": 6,
+    "max_tool_calls": 5,
+    "max_prompt_tokens": 1000,
+    "max_completion_tokens": 1000,
+    "max_estimated_cost": "1"
+  }
+}

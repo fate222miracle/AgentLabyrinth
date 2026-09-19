@@ -10,8 +10,10 @@ from fastapi.responses import JSONResponse
 
 from apps.api.schemas import (
     CreateEpisodeRequest,
+    CreateExperimentRequest,
     EpisodeResponse,
     ErrorResponse,
+    ExperimentResponse,
     MetaResponse,
 )
 from apps.api.service import EpisodeService
@@ -153,4 +155,59 @@ async def get_episode(
         schema_version="1.0",
         request_id=uuid4(),
         artifact=artifact,
+    )
+
+
+@app.post(
+    "/api/v1/experiments",
+    response_model=ExperimentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Execute a paired comparison experiment (Baseline vs Recovery)",
+)
+async def create_experiment(
+    req: CreateExperimentRequest,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> ExperimentResponse:
+    """Run paired episodes serially and return the aggregated ExperimentArtifact."""
+    try:
+        artifact = await service.execute_experiment(req)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Experiment execution encountered an unexpected runtime failure.",
+        ) from exc
+
+    return ExperimentResponse(
+        schema_version="1.0",
+        request_id=req.request_id,
+        experiment=artifact,
+    )
+
+
+@app.get(
+    "/api/v1/experiments/{experiment_id}",
+    response_model=ExperimentResponse,
+    summary="Retrieve a previously executed experiment artifact by UUID",
+)
+async def get_experiment(
+    experiment_id: UUID,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> ExperimentResponse:
+    """Read a saved ExperimentArtifact by its strictly validated UUID."""
+    artifact = service.get_experiment(experiment_id)
+    if artifact is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' not found.",
+        )
+
+    return ExperimentResponse(
+        schema_version="1.0",
+        request_id=uuid4(),
+        experiment=artifact,
     )

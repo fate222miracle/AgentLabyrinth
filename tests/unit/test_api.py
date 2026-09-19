@@ -38,8 +38,8 @@ def test_get_meta(client: TestClient) -> None:
     assert resp.status_code == 200
     data = resp.json()
     meta = MetaResponse.model_validate(data)
-    assert meta.default_model == "gemini-3.7-flash-free"
-    assert any(m.id == "gemini-3.7-flash-free" and m.is_default for m in meta.models)
+    assert meta.default_model == "coding-glm-5.3-free"
+    assert any(m.id == "coding-glm-5.3-free" and m.is_default for m in meta.models)
     assert any(m.id == "fake" for m in meta.models)
     assert any(m.id == "coding-kimi-k3-free" and m.is_experimental for m in meta.models)
     assert any(t.id == "order-status-001" for t in meta.tasks)
@@ -164,3 +164,56 @@ def test_no_secret_or_absolute_path_leaks(client: TestClient) -> None:
     # Verify no local Windows user directory path leak
     assert "C:\\Users\\" not in resp_text
     assert "c:/users/" not in resp_text.lower()
+
+
+def test_get_meta_returns_all_four_tasks(client: TestClient) -> None:
+    """Verify get_meta includes all 4 native evaluation tasks."""
+    resp = client.get("/api/v1/meta")
+    assert resp.status_code == 200
+    task_ids = {t["id"] for t in resp.json()["tasks"]}
+    expected = {
+        "order-status-001",
+        "order-status-002",
+        "order-status-003",
+        "order-status-004",
+    }
+    assert expected.issubset(task_ids)
+
+
+def test_create_and_get_experiment(client: TestClient, temp_artifacts_dir: Path) -> None:
+    """Execute paired comparison experiment and verify persistence and read isolation."""
+    payload = {
+        "provider": "fake",
+        "model": "fake-model",
+        "scenario": "invalid-then-success",
+        "task_ids": ["order-status-001", "order-status-002"],
+        "seed": 1,
+    }
+    resp = client.post("/api/v1/experiments", json=payload)
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["schema_version"] == "1.0"
+    exp = body["experiment"]
+    assert exp["metrics"]["total_pairs"] == 2
+    assert exp["metrics"]["baseline_success_count"] == 0
+    assert exp["metrics"]["recovery_success_count"] == 2
+    assert exp["metrics"]["retry_recovery_count"] == 2
+
+    exp_id = exp["experiment_id"]
+    saved_file = temp_artifacts_dir / "experiments" / f"{exp_id}.json"
+    assert saved_file.is_file()
+
+    # Read back and ensure no model invocation
+    with patch("packages.providers.fake.FakeModelProvider.generate") as mock_fake:
+        get_resp = client.get(f"/api/v1/experiments/{exp_id}")
+        assert get_resp.status_code == 200
+        get_data = get_resp.json()
+        assert get_data["experiment"]["experiment_id"] == exp_id
+        mock_fake.assert_not_called()
+
+
+def test_get_nonexistent_experiment_404(client: TestClient) -> None:
+    """Non-existent experiment UUID returns 404."""
+    random_id = uuid4()
+    resp = client.get(f"/api/v1/experiments/{random_id}")
+    assert resp.status_code == 404

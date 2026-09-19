@@ -80,6 +80,7 @@ class HandwrittenRuntime(AgentRuntime):
             price_table_version=default_price_table,
         )
         seen_call_ids: set[str] = set()
+        retried_invalid_arguments: bool = False
         last_state: dict[str, JsonValue] = {}
         events = recorder.events
         parent_event_id: UUID | None = events[-1].event_id if events else None
@@ -231,6 +232,38 @@ class HandwrittenRuntime(AgentRuntime):
 
                     # Check argument validity and permission
                     if not inspection.arguments_valid:
+                        # Recovery strategy: allow at most one controlled retry
+                        # for INVALID_ARGUMENTS
+                        if (
+                            agent.runtime_strategy == "handwritten_recovery"
+                            and inspection.error_code == "INVALID_ARGUMENTS"
+                            and not retried_invalid_arguments
+                        ):
+                            retried_invalid_arguments = True
+                            available = environment.available_tools()
+                            tool_schema = next(
+                                (t for t in available if t.name == action.name), None
+                            )
+                            expected_params: dict[str, JsonValue] = (
+                                tool_schema.parameters if tool_schema else {}
+                            )
+                            feedback: dict[str, JsonValue] = {
+                                "error": "INVALID_ARGUMENTS",
+                                "message": (
+                                    f"Parameter validation failed for tool '{action.name}'. "
+                                    f"Parameters must conform to schema."
+                                ),
+                                "tool": action.name,
+                                "parameters_schema": expected_params,
+                            }
+                            messages.append(Message(role="assistant", tool_calls=(action,)))
+                            messages.append(
+                                Message(role="tool", content=feedback, tool_call_id=action.call_id)
+                            )
+                            # Re-prompt model; tool call count is not incremented
+                            # because tool execution was rejected before start
+                            continue
+
                         termination_reason = TerminationReason.FAILED
                         detail = (
                             "unknown_tool"

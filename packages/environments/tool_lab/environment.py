@@ -199,7 +199,11 @@ class ToolLabEnvironment(Environment):
         self._done = False
         self._description = task.description
 
-        self._target_order_id = cast(str, self._orders[0]["order_id"])
+        target_id_override = task.initial_state.get("target_order_id")
+        if isinstance(target_id_override, str) and target_id_override:
+            self._target_order_id = target_id_override
+        else:
+            self._target_order_id = cast(str, self._orders[0]["order_id"])
 
         return Observation(
             content={

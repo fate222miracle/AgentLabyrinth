@@ -22,4 +22,4 @@ SSOT：`docs/product/requirements.md` V0.5。ADR-003 Accepted。切片 A 已由 
 
 ## 后续口径
 
-本切片不放宽工具参数严格校验。GLM 的嵌套 JSON 字符串若要兼容，应先证明是稳定的网关格式问题，再由 Codex 评审仅在 Provider 边界做有界转换及负例测试；不能让 Executor 接受任意字符串。DeepSeek 的预算停止属于按现有 TaskSpec 执行；将来比较模型时必须固定并公开同一预算，改变任务预算或评分口径先走 ADR/SSOT。BFCL 切片 C 开始前，须先处理其与 SSOT“外部数据 V0.2 起接入”的版本边界。
+本切片不放宽工具参数严格校验。GLM 的嵌套 JSON 字符串若要兼容，应先证明是稳定的网关格式问题，再由 Codex 评审仅在 Provider 边界做有界转换及负例测试；不能让 Executor 接受任意字符串。DeepSeek 的预算停止属于按现有 TaskSpec 执行；将来比较模型时必须固定并公开同一预算，改变任务预算或评分口径先走 ADR/SSOT。后续顺序已由 ADR-004 调整：切片 C 先完成 Agent 对照实验，BFCL 为切片 D。

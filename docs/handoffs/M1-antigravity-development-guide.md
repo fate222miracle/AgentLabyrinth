@@ -1,10 +1,10 @@
 # M1 给 Antigravity 的开发交接
 
-**状态：M1 已启动，ADR-003 已 Accepted；切片 A 已用 Gemini 真实 Episode 签收，当前执行切片 B。** 需求唯一来源是 `docs/product/requirements.md` V0.5；本文件指导已授权切片，不替代需求。切片 B 的具体执行范围见 `docs/tasks/M1-slice-B-antigravity.md`。四个月是课程截止缓冲，首个网页演示闭环应尽快交付。
+**状态：M1 已启动，ADR-003/004 Accepted；切片 A 已签收，切片 B 的基本网页流程已复核，当前执行切片 C。** 需求唯一来源是 `docs/product/requirements.md` V0.5；本文件指导已授权切片，不替代需求。切片 C 的具体范围见 `docs/tasks/M1-slice-C-antigravity.md`，BFCL 已顺延至切片 D。
 
 ## 1. 启动前阅读与分工
 
-按 `AGENTS.md` 的顺序阅读需求全文、ADR-001/002/003、`docs/handoffs/current-state.md`、`docs/tasks/M1-course-demo.md`、相关测试与源码。不要以本交接代替需求。
+按 `AGENTS.md` 的顺序阅读需求全文、ADR-001/002/003/004、`docs/handoffs/current-state.md`、当前任务卡、相关测试与源码。不要以本交接代替需求。
 
 - **Codex 先做**：让 M1 范围进入需求和 Accepted ADR；决定下文 3 个契约阻塞点；只建立必要的公共接口、迁移约束和契约测试。核心 Schema、Runtime、预算与评测口径由 Codex 审查。
 - **Antigravity 随后做**：按已接受契约实现 Provider、数据 Adapter、API、页面和相应测试。以一个能跑通的端到端切片为单位交付，串行修改；不同时编辑同一文件，不覆盖未知改动。
@@ -40,10 +40,11 @@ Provider 只实现现有 `ModelProvider.generate` 的边界映射：公开消息
 |---|---|---|
 | A. 模型闭环 | 已定契约后接后端 Provider，先用真实 Kimi 跑 ToolLab CLI 一次；Fake 保留 | 脱敏请求配置、真实响应 usage/工具调用摘要、完整 JSON Trace、失败路径；无 Key 的自动测试 |
 | B. 网页闭环 | FastAPI `/api/v1` 接 Runner；React/Vite 做实验配置、结果、Trace 三个视图；先接 ToolLab | 浏览器启动真实 Episode、刷新后读取保存结果、手机与桌面截图；前端网络请求无 Key |
-| C. 外部子集 | 固定 BFCL 版本与 manifest，单轮 Adapter 与独立评分；同一入口选择 Suite | 样本 ID/哈希/许可与转换报告、正负评分测试、真实模型子集运行结果 |
-| D. 演示完善 | 结果对比、按步回放、导出与重读、明确状态与错误文案 | 现场脚本，从启动到真实结果与回放；断网、限额和无 Key 情况可解释 |
+| C. Agent 对照 | Baseline/Recovery 在相同条件下串行运行；4 条原生任务；汇总与成对 Trace | Fake 的确定性恢复证据、公平性检查、真实 Gemini 探索性结果、Experiment JSON |
+| D. 外部子集 | 切片 C 验收后固定 BFCL 版本与 manifest，单轮 Adapter 与独立评分 | 样本 ID/哈希/许可与转换报告、正负评分测试、真实模型子集运行结果 |
+| E. 演示完善 | 按步回放、导出与重读、明确状态与错误文案 | 现场脚本，从启动到真实结果与回放；断网、限额和无 Key 情况可解释 |
 
-首版先做到 **一个真实 ToolLab Episode 从 CLI 到网页可见**，再接 BFCL。四个月不是等待 UI 或外部数据的理由。每步完成即保存一个可演示版本；批量运行与复杂图表只在真实需求和额度允许时增加。页面不能用静态假数据冒充真实结果：显示模型 ID、真实/Fake 标识、Suite 来源、运行时间、样本分母、成功/失败、步骤、token、时延、费用“已知/未知”；Trace 回放只读 JSON，不再次调用模型。
+一个真实 ToolLab Episode 已从 CLI 进入网页。现在先证明 **Agent 策略变化能够在固定条件下被比较**，再接 BFCL。每步完成即保存一个可演示版本；复杂图表只在真实需求和额度允许时增加。页面不能用静态假数据冒充真实结果：显示模型 ID、Agent 版本、真实/Fake 标识、Suite 来源、运行时间、样本分母、成功/失败、步骤、token、时延、费用“已知/未知”；Trace 回放只读 JSON，不再次调用模型。
 
 接口统一校验 `schema_version`、返回 `request_id` 与安全错误码；前端不保存 Key、不显示隐藏思维链。保存配置、来源、运行结果、Trace、评分和适配版本，读取时再次严格校验。真实模型执行采用低并发与运行前请求数提示，先保守控制在页面公布配额内；遇 429 显示“额度/速率限制”，不要无限重试。API 不能返回供应商原始 SDK 对象或本机绝对路径。
 

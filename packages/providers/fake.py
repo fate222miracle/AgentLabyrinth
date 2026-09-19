@@ -59,7 +59,18 @@ class FakeModelProvider(ModelProvider):
         if self.scenario == "invalid_arguments":
             return ModelResponse(
                 action=ToolCall(
-                    call_id="call_inv_1",
+                    call_id=f"call_inv_{self._call_count}",
+                    name="query_records",
+                    arguments={"table": "invalid_table", "filters": {}},
+                ),
+                token_usage=token_usage,
+                estimated_cost=estimated_cost,
+            )
+
+        if self.scenario == "invalid_then_success" and self._call_count == 1:
+            return ModelResponse(
+                action=ToolCall(
+                    call_id=f"call_inv_{self._call_count}",
                     name="query_records",
                     arguments={"table": "invalid_table", "filters": {}},
                 ),

@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0",
+  "default_model": "coding-glm-5.3-free",
+  "models": [
+    {
+      "id": "coding-glm-5.3-free",
+      "name": "Coding GLM 5.3 Free",
+      "provider": "aihubmix",
+      "is_default": true,
+      "is_experimental": false,
+      "notes": "智谱 GLM 5.3 免费模型，原生工具调用与真实用量报告正常"
+    },
+    {
+      "id": "coding-glm-5.2-free",
+      "name": "Coding GLM 5.2 Free",
+      "provider": "aihubmix",
+      "is_default": false,
+      "is_experimental": false,
+      "notes": "智谱 GLM 5.2 免费模型，原生工具调用与真实用量报告正常"
+    },
+    {
+      "id": "gemini-3.8-flash-free",
+      "name": "Gemini 3.8 Flash Free",
+      "provider": "aihubmix",
+      "is_default": false,
+      "is_experimental": true,
+      "notes": "最新 Gemini 3.8 免费模型通道（视网关排队与通道可用性）"
+    },
+    {
+      "id": "coding-kimi-k3-free",
+      "name": "Coding Kimi K3 Free",
+      "provider": "aihubmix",
+      "is_default": false,
+      "is_experimental": true,
+      "notes": "月之暗面 Kimi K3 免费模型（视网关排队与通道可用性）"
+    },
+    {
+      "id": "fake",
+      "name": "Fake / Mock Engine (离线测试)",
+      "provider": "fake",
+      "is_default": false,
+      "is_experimental": false,
+      "notes": "确定性离线模拟场景，无需 API Key 与网络连接",
+      "scenarios": [
+        "clean",
+        "invalid-arguments",
+        "invalid-then-success",
+        "max-steps",
+        "success",
+        "wrong-answer"
+      ]
+    }
+  ]
+}

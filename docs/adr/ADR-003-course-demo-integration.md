@@ -20,7 +20,7 @@ Accepted（2026-09-18；项目负责人批准启动 M1 切片 A，三项契约�
 - 三项契约阻塞点裁决如下：
   1. **多轮工具调用消息**：在 `Message` 契约中增加可选 `tool_calls: tuple[ToolCall, ...] | None = None`，`HandwrittenRuntime` 在工具调用成功后成对追加 assistant 消息（含 tool_calls）与 tool 反馈消息，满足 OpenAI 标准格式且保持 call ID 关联。
   2. **真实 usage 与费用**：真实 Provider 返回时显式设置 `TokenUsage.simulated = False`；在 `EstimatedCost` 增加 `is_known: bool = True`，未知或未验证价格（如 aihubmix free tier）标为 `is_known = False`，价格表版本记录 `aihubmix-free-unverified`，避免误记为 `$0`。
-  3. **BFCL 题目与 Runner**：切片 C 接入单轮题目，作为独立 Adapter 与评分器接入，结果标记为 `AgentLabyrinth-adapted subset`。
+  3. **BFCL 题目与 Runner**：按 ADR-004 顺延至切片 D接入单轮题目，作为独立 Adapter 与评分器接入，结果标记为 `AgentLabyrinth-adapted subset`。
 
 ## 原因
 第一版可以同时证明“受控环境里的多轮 Agent 行为”和“国外公开基准上的真实模型工具调用”，并能从浏览器完整演示。固定子集、版本和评分口径可复现，也便于组员后续增加其他 Suite。

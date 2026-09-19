@@ -4,7 +4,7 @@
 
 开始工作依次阅读：需求全文 → AGENTS.md → 相关 ADR → `docs/handoffs/current-state.md` → 当前任务卡 → 测试与源码。不得依赖旧聊天；需求版本不符时停止并同步。
 
-当前推进 M1。用户已正式授权启动 M1 课程演示开发，ADR-003 已 Accepted；SSOT V0.5 已增补一个 BFCL 改编子集提前接入例外。切片 A 已用 AIHubMix `gemini-3.7-flash-free` 真实闭环签收；切片 B 的网页基本运行经 Codex 浏览器复核。当前交给 Antigravity 的是切片 C，见 `docs/tasks/M1-slice-C-antigravity.md`。由 Codex 负责契约、预算与评测审查，Antigravity 填充内部实现，Codex 审查。其他模型的可用性与失败结果见 current-state；Key 仅在本机环境/`.env` 配置，不入库不入前端。核心接口/Schema/评测口径变化先走 ADR，不得静默修改。
+当前推进 M1。切片 A 的真实模型闭环已签收，切片 B 的网页基本运行已复核。项目负责人于 2026-09-19 决定先建立与 Agent 开发的直接关系，ADR-004 已 Accepted；当前交给 Antigravity 的切片 C 是 Baseline/Recovery 对照实验，见 `docs/tasks/M1-slice-C-antigravity.md`。BFCL 已顺延为切片 D，切片 C 未经 Codex 验收不得开始。由 Codex 负责契约、预算与评测审查，Antigravity 填充内部实现，Codex 审查。其他模型的可用性与失败结果见 current-state；Key 仅在本机环境/`.env` 配置，不入库不入前端。核心接口/Schema/评测口径变化先走 ADR，不得静默修改。
 
 - Domain 不依赖具体环境、Provider SDK、存储或外部 Agent 框架。
 - Application 通过 Domain Port 编排；Runtime 不包含订单业务；Evaluator 只读、不改状态。

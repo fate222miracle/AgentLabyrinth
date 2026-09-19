@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "id": "a7d4e5f6-b8c9-0d1e-2f3a-4b5c6d7e8f04",
+  "name": "order-status-004",
+  "version": "1.0.0",
+  "category": "tool_selection",
+  "description": "紧凑预算下查询模拟订单 ORD-004 的待处理状态并提交证据。",
+  "initial_state": {
+    "target_order_id": "ORD-004",
+    "orders": [
+      {
+        "order_id": "ORD-004",
+        "status": "pending",
+        "evidence_id": "order:ORD-004"
+      }
+    ]
+  },
+  "goal_conditions": {
+    "answer": "pending",
+    "evidence": [
+      "order:ORD-004"
+    ]
+  },
+  "constraints": [
+    "紧凑步数与 Token 约束；先查询再提交"
+  ],
+  "expected_tools": [
+    "query_records",
+    "submit_answer"
+  ],
+  "forbidden_tools": [],
+  "max_steps": 4,
+  "token_budget": 800,
+  "evaluator_config": {
+    "name": "order_status_v1",
+    "split": "development",
+    "origin": "native"
+  }
+}

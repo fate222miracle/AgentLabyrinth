@@ -76,6 +76,8 @@ interface EpisodeArtifact {
     metrics: Record<string, unknown>;
   };
   agent: {
+    name?: string;
+    runtime_strategy?: string;
     model: {
       provider: string;
       model: string;
@@ -84,19 +86,134 @@ interface EpisodeArtifact {
   events: TraceEvent[];
 }
 
+interface PairComparison {
+  task_id: string;
+  task_name: string;
+  seed: number;
+  baseline_episode_id: string;
+  baseline_success: boolean;
+  baseline_termination_reason: string;
+  baseline_steps: number;
+  baseline_tokens: number;
+  baseline_duration_ms: number;
+  baseline_model_calls?: number;
+  baseline_tool_calls?: number;
+  baseline_tool_selection_accuracy?: number | null;
+  baseline_tool_argument_validity_rate?: number | null;
+  recovery_episode_id: string;
+  recovery_success: boolean;
+  recovery_termination_reason: string;
+  recovery_steps: number;
+  recovery_tokens: number;
+  recovery_duration_ms: number;
+  recovery_model_calls?: number;
+  recovery_tool_calls?: number;
+  recovery_tool_selection_accuracy?: number | null;
+  recovery_tool_argument_validity_rate?: number | null;
+  retry_eligible?: boolean;
+  recovered: boolean;
+}
+
+interface ExperimentAggregateMetrics {
+  total_pairs: number;
+  baseline_success_count: number;
+  recovery_success_count: number;
+  baseline_success_rate: number;
+  recovery_success_rate: number;
+  retry_eligible_count?: number;
+  retry_recovery_count: number;
+  retry_recovery_rate: number;
+  baseline_total_tokens: number;
+  recovery_total_tokens: number;
+  baseline_avg_steps: number;
+  recovery_avg_steps: number;
+  baseline_avg_model_calls?: number;
+  recovery_avg_model_calls?: number;
+  baseline_avg_tool_calls?: number;
+  recovery_avg_tool_calls?: number;
+  baseline_tool_selection_accuracy?: number | null;
+  recovery_tool_selection_accuracy?: number | null;
+  baseline_tool_argument_validity_rate?: number | null;
+  recovery_tool_argument_validity_rate?: number | null;
+  baseline_avg_duration_ms: number;
+  recovery_avg_duration_ms: number;
+  is_cost_known: boolean;
+}
+
+interface ExperimentArtifact {
+  schema_version: string;
+  experiment_id: string;
+  created_at: string;
+  config: Record<string, unknown>;
+  config_hash: string;
+  episode_ids: string[];
+  pairs: PairComparison[];
+  metrics: ExperimentAggregateMetrics;
+}
+
 export default function App() {
+  const [activeTab, setActiveTab] = useState<'single' | 'experiment'>('experiment');
   const [meta, setMeta] = useState<MetaResponse | null>(null);
+
+  // Single Episode states
   const [selectedModel, setSelectedModel] = useState<string>('gemini-3.7-flash-free');
   const [selectedScenario, setSelectedScenario] = useState<string>('success');
+  const [selectedSingleTask, setSelectedSingleTask] = useState<string>('order-status-001');
   const [maxSteps, setMaxSteps] = useState<number>(6);
+  const [artifact, setArtifact] = useState<EpisodeArtifact | null>(null);
+  const [recentEpisodeIds, setRecentEpisodeIds] = useState<string[]>([]);
+  const [inputEpisodeId, setInputEpisodeId] = useState<string>('');
+  const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
+
+  // Experiment states
+  const [expModel, setExpModel] = useState<string>('gemini-3.7-flash-free');
+  const [expScenario, setExpScenario] = useState<string>('invalid-then-success');
+  const [expTasks, setExpTasks] = useState<string[]>([
+    'order-status-001',
+    'order-status-002',
+    'order-status-003',
+    'order-status-004',
+  ]);
+  const [expSeed, setExpSeed] = useState<number>(1);
+  const [experiment, setExperiment] = useState<ExperimentArtifact | null>(null);
+  const [recentExpIds, setRecentExpIds] = useState<string[]>([]);
+  const [inputExpId, setInputExpId] = useState<string>('');
+
+  // Custom Model states
+  const [customModels, setCustomModels] = useState<string[]>([]);
+  const [showCustomModelInputExp, setShowCustomModelInputExp] = useState<boolean>(false);
+  const [customModelTextExp, setCustomModelTextExp] = useState<string>('');
+  const [showCustomModelInputSingle, setShowCustomModelInputSingle] = useState<boolean>(false);
+  const [customModelTextSingle, setCustomModelTextSingle] = useState<string>('');
+
+  // Global loading & error
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [artifact, setArtifact] = useState<EpisodeArtifact | null>(null);
-  const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
-  const [recentIds, setRecentIds] = useState<string[]>([]);
-  const [inputEpisodeId, setInputEpisodeId] = useState<string>('');
 
-  // 1. Fetch Metadata on initial mount
+  const addCustomModel = (modelId: string, target: 'exp' | 'single') => {
+    const cleanId = modelId.trim();
+    if (!cleanId) return;
+    setCustomModels((prev) => {
+      const next = prev.includes(cleanId) ? prev : [...prev, cleanId];
+      try {
+        localStorage.setItem('al_custom_models', JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+    if (target === 'exp') {
+      setExpModel(cleanId);
+      setShowCustomModelInputExp(false);
+      setCustomModelTextExp('');
+    } else {
+      setSelectedModel(cleanId);
+      setShowCustomModelInputSingle(false);
+      setCustomModelTextSingle('');
+    }
+  };
+
+  // 1. Fetch Metadata and parse initial query parameters
   useEffect(() => {
     fetch('/api/v1/meta')
       .then((res) => {
@@ -105,34 +222,62 @@ export default function App() {
       })
       .then((data: MetaResponse) => {
         setMeta(data);
-        if (data.default_model) setSelectedModel(data.default_model);
+        if (data.default_model) {
+          setSelectedModel(data.default_model);
+          setExpModel(data.default_model);
+        }
+        if (data.tasks && data.tasks.length > 0) {
+          setSelectedSingleTask(data.tasks[0].id);
+          setExpTasks(data.tasks.map((t) => t.id));
+        }
       })
       .catch((err) => {
         setErrorMsg(`API 连通性错误: ${err.message}`);
       });
 
-    // Load recent IDs from localStorage
+    // Load recent history from localStorage
     try {
-      const saved = localStorage.getItem('al_recent_episodes');
-      if (saved) setRecentIds(JSON.parse(saved));
+      const savedEpisodes = localStorage.getItem('al_recent_episodes');
+      if (savedEpisodes) setRecentEpisodeIds(JSON.parse(savedEpisodes));
+      const savedExps = localStorage.getItem('al_recent_experiments');
+      if (savedExps) setRecentExpIds(JSON.parse(savedExps));
+      const savedCustom = localStorage.getItem('al_custom_models');
+      if (savedCustom) setCustomModels(JSON.parse(savedCustom));
     } catch {
       // ignore storage error
     }
 
-    // Check URL param ?episode_id=xxx
+    // Check URL params
     const params = new URLSearchParams(window.location.search);
-    const urlEpisodeId = params.get('episode_id');
-    if (urlEpisodeId) {
-      loadEpisodeById(urlEpisodeId);
+    const expId = params.get('experiment_id');
+    const epId = params.get('episode_id');
+
+    if (expId) {
+      setActiveTab('experiment');
+      loadExperimentById(expId);
+    } else if (epId) {
+      setActiveTab('single');
+      loadEpisodeById(epId);
     }
   }, []);
 
-  // Save to recent IDs list
-  const addRecentId = (id: string) => {
-    setRecentIds((prev) => {
+  const addRecentEpisodeId = (id: string) => {
+    setRecentEpisodeIds((prev) => {
       const next = [id, ...prev.filter((item) => item !== id)].slice(0, 5);
       try {
         localStorage.setItem('al_recent_episodes', JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const addRecentExpId = (id: string) => {
+    setRecentExpIds((prev) => {
+      const next = [id, ...prev.filter((item) => item !== id)].slice(0, 5);
+      try {
+        localStorage.setItem('al_recent_experiments', JSON.stringify(next));
       } catch {
         // ignore
       }
@@ -153,11 +298,11 @@ export default function App() {
       }
       const data = await res.json();
       setArtifact(data.artifact);
-      addRecentId(id.trim());
+      addRecentEpisodeId(id.trim());
 
-      // Update URL without full reload
       const url = new URL(window.location.href);
       url.searchParams.set('episode_id', id.trim());
+      url.searchParams.delete('experiment_id');
       window.history.pushState({}, '', url.toString());
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : '加载失败';
@@ -167,8 +312,46 @@ export default function App() {
     }
   };
 
-  // Trigger execution of a new episode
-  const handleRun = async () => {
+  // Load an existing experiment by ID
+  const loadExperimentById = async (id: string) => {
+    if (!id || id.trim().length === 0) return;
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch(`/api/v1/experiments/${encodeURIComponent(id.trim())}`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.message || `未能找到 Experiment (${res.status})`);
+      }
+      const data = await res.json();
+      setExperiment(data.experiment);
+      addRecentExpId(id.trim());
+
+      const expCfg = data.experiment?.config;
+      if (expCfg) {
+        if (expCfg.model) {
+          const mVal = typeof expCfg.model === 'string' ? expCfg.model : (expCfg.model as Record<string, unknown>)?.model;
+          if (mVal && typeof mVal === 'string') setExpModel(mVal);
+        }
+        if (typeof expCfg.scenario === 'string') setExpScenario(expCfg.scenario);
+        if (typeof expCfg.seed === 'number') setExpSeed(expCfg.seed);
+        if (Array.isArray(expCfg.task_ids)) setExpTasks(expCfg.task_ids);
+      }
+
+      const url = new URL(window.location.href);
+      url.searchParams.set('experiment_id', id.trim());
+      url.searchParams.delete('episode_id');
+      window.history.pushState({}, '', url.toString());
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : '加载实验失败';
+      setErrorMsg(message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Execute single episode
+  const handleRunEpisode = async () => {
     setIsLoading(true);
     setErrorMsg(null);
     try {
@@ -179,7 +362,7 @@ export default function App() {
         provider: isFake ? 'fake' : 'aihubmix',
         model: isFake ? 'fake-model' : selectedModel,
         scenario: isFake ? selectedScenario : null,
-        task_id: 'order-status-001',
+        task_id: selectedSingleTask,
         max_steps: maxSteps,
       };
 
@@ -197,14 +380,62 @@ export default function App() {
       const data = await res.json();
       const newArtifact = data.artifact as EpisodeArtifact;
       setArtifact(newArtifact);
-      addRecentId(newArtifact.episode.episode_id);
+      addRecentEpisodeId(newArtifact.episode.episode_id);
 
-      // Update URL query string
       const url = new URL(window.location.href);
       url.searchParams.set('episode_id', newArtifact.episode.episode_id);
+      url.searchParams.delete('experiment_id');
       window.history.pushState({}, '', url.toString());
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : '运行失败';
+      setErrorMsg(message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Execute paired experiment
+  const handleRunExperiment = async () => {
+    if (expTasks.length === 0) {
+      setErrorMsg('请至少选择一个评测任务');
+      return;
+    }
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      const currentModelObj = meta?.models.find((m) => m.id === expModel);
+      const isFake = expModel === 'fake' || currentModelObj?.provider === 'fake';
+
+      const payload = {
+        provider: isFake ? 'fake' : 'aihubmix',
+        model: isFake ? 'fake-model' : expModel,
+        scenario: isFake ? expScenario : null,
+        task_ids: expTasks,
+        seed: expSeed,
+      };
+
+      const res = await fetch('/api/v1/experiments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.message || `对照实验执行失败 (${res.status})`);
+      }
+
+      const data = await res.json();
+      const expArt = data.experiment as ExperimentArtifact;
+      setExperiment(expArt);
+      addRecentExpId(expArt.experiment_id);
+
+      const url = new URL(window.location.href);
+      url.searchParams.set('experiment_id', expArt.experiment_id);
+      url.searchParams.delete('episode_id');
+      window.history.pushState({}, '', url.toString());
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : '对照实验运行失败';
       setErrorMsg(message);
     } finally {
       setIsLoading(false);
@@ -215,7 +446,14 @@ export default function App() {
     setExpandedEvents((prev) => ({ ...prev, [eventId]: !prev[eventId] }));
   };
 
-  const currentModelMeta = meta?.models.find((m) => m.id === selectedModel);
+  const toggleTaskSelection = (taskId: string) => {
+    setExpTasks((prev) =>
+      prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId]
+    );
+  };
+
+  const currentSingleModelMeta = meta?.models.find((m) => m.id === selectedModel);
+  const currentExpModelMeta = meta?.models.find((m) => m.id === expModel);
 
   return (
     <div>
@@ -226,59 +464,39 @@ export default function App() {
             <span className="brand-icon">🧭</span>
             <div>
               <div className="brand-title">AgentLabyrinth</div>
-              <div className="brand-subtitle">M1 ToolLab Web 演示闭环 (切片 B)</div>
+              <div className="brand-subtitle">M1 ToolLab 对照实验闭环 (切片 C)</div>
             </div>
           </div>
-          <div className="header-badges">
-            <span className="badge badge-blue">单用户本地演示</span>
-            <span className="badge badge-green">ADR-003 Accepted</span>
-            <span className="badge">SSOT V0.5</span>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div className="nav-tabs">
+              <button
+                id="tab-experiment"
+                className={`nav-tab ${activeTab === 'experiment' ? 'active' : ''}`}
+                onClick={() => setActiveTab('experiment')}
+              >
+                🔬 对照实验 (Baseline vs Recovery)
+              </button>
+              <button
+                id="tab-single"
+                className={`nav-tab ${activeTab === 'single' ? 'active' : ''}`}
+                onClick={() => setActiveTab('single')}
+              >
+                ⚡ 单次运行 (Single Episode)
+              </button>
+            </div>
+
+            <div className="header-badges">
+              <span className="badge badge-purple">ADR-004 Accepted</span>
+              <span className="badge badge-blue">单用户本地验证</span>
+              <span className="badge">SSOT V0.5</span>
+            </div>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="main-container">
-        {/* Persistent ID Bar */}
-        <div className="persistence-bar">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <span style={{ color: 'var(--text-muted)' }}>当前 Episode:</span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-primary)' }}>
-              {artifact ? artifact.episode.episode_id : '尚未运行'}
-            </span>
-            {artifact && (
-              <button
-                id="btn-copy-id"
-                className="btn-secondary"
-                onClick={() => {
-                  navigator.clipboard.writeText(artifact.episode.episode_id);
-                  alert('Episode ID 已复制到剪贴板！');
-                }}
-              >
-                复制 ID
-              </button>
-            )}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <input
-              id="input-episode-id"
-              className="form-input"
-              style={{ width: '220px', padding: '0.35rem 0.6rem', fontSize: '0.75rem' }}
-              placeholder="输入 UUID 快速读取"
-              value={inputEpisodeId}
-              onChange={(e) => setInputEpisodeId(e.target.value)}
-            />
-            <button
-              id="btn-load-id"
-              className="btn-secondary"
-              onClick={() => loadEpisodeById(inputEpisodeId)}
-              disabled={isLoading || !inputEpisodeId.trim()}
-            >
-              重读
-            </button>
-          </div>
-        </div>
-
         {/* Error Alert Box */}
         {errorMsg && (
           <div id="error-alert" className="alert-box alert-error">
@@ -287,285 +505,923 @@ export default function App() {
           </div>
         )}
 
-        <div className="dashboard-grid">
-          {/* Panel 1: Configuration */}
-          <section className="card" id="config-panel">
-            <div className="card-title">
-              <span>实验配置</span>
-              <span className="badge badge-blue">ToolLab</span>
-            </div>
-            <div className="card-desc">选择模型模式与限制，发起单次受控评测。</div>
-
-            <div className="form-group">
-              <label htmlFor="model-select" className="form-label">评测模型</label>
-              <select
-                id="model-select"
-                className="form-select"
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                disabled={isLoading}
-              >
-                {meta?.models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name} {m.is_default ? '★ 默认推荐' : ''} {m.is_experimental ? '⚠️ 实验性' : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Model Notes Box */}
-            {currentModelMeta && (
-              <div className="form-group">
-                <div className="model-note-box">
-                  <strong>说明：</strong> {currentModelMeta.notes}
-                </div>
-              </div>
-            )}
-
-            {/* Scenario selector if Fake model */}
-            {selectedModel === 'fake' && (
-              <div className="form-group">
-                <label htmlFor="scenario-select" className="form-label">Fake 模拟场景</label>
-                <select
-                  id="scenario-select"
-                  className="form-select"
-                  value={selectedScenario}
-                  onChange={(e) => setSelectedScenario(e.target.value)}
-                  disabled={isLoading}
-                >
-                  <option value="success">success (完整通过，答案匹配)</option>
-                  <option value="wrong-answer">wrong-answer (提交错误答案，评测失败)</option>
-                  <option value="invalid-arguments">invalid-arguments (工具参数校验失败)</option>
-                  <option value="max-steps">max-steps (步数超限终止)</option>
-                </select>
-              </div>
-            )}
-
-            {/* Task Info */}
-            <div className="form-group">
-              <label className="form-label">评测任务</label>
-              <div
-                style={{
-                  padding: '0.65rem 0.85rem',
-                  background: 'rgba(15, 23, 42, 0.4)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: 'var(--radius-md)',
-                  fontSize: '0.8125rem',
-                }}
-              >
-                <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                  order-status-001 (查询订单状态并提交证据)
-                </div>
-                <div style={{ color: 'var(--text-muted)', marginTop: '0.2rem', fontSize: '0.75rem' }}>
-                  严格预算: 1000 Tokens, 最大 6 步
-                </div>
-              </div>
-            </div>
-
-            {/* Max Steps Override */}
-            <div className="form-group">
-              <label htmlFor="steps-input" className="form-label">步数上限 (Max Steps)</label>
-              <input
-                id="steps-input"
-                type="number"
-                className="form-input"
-                min={1}
-                max={20}
-                value={maxSteps}
-                onChange={(e) => setMaxSteps(parseInt(e.target.value) || 6)}
-                disabled={isLoading}
-              />
-            </div>
-
-            <button
-              id="run-button"
-              className="btn-primary"
-              onClick={handleRun}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <>
-                  <div className="spinner" />
-                  <span>正在运行 Episode...</span>
-                </>
-              ) : (
-                <>
-                  <span>🚀</span>
-                  <span>开始运行 Episode</span>
-                </>
-              )}
-            </button>
-
-            {/* Recent Runs */}
-            {recentIds.length > 0 && (
-              <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-                  最近运行历史：
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                  {recentIds.map((rid) => (
-                    <button
-                      key={rid}
-                      className="btn-secondary"
-                      style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                      onClick={() => loadEpisodeById(rid)}
-                    >
-                      🕒 {rid}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </section>
-
-          {/* Right Column: Result Summary + Trace View */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-            {/* Panel 2: Result Summary */}
-            <section className="card" id="results-panel">
-              <div className="card-title">
-                <span>运行结果指标</span>
-                {artifact && (
-                  <span
-                    id="eval-badge"
-                    className={`badge ${artifact.evaluation.success ? 'badge-green' : 'badge-red'}`}
+        {/* TAB 1: EXPERIMENT MODE */}
+        {activeTab === 'experiment' && (
+          <div>
+            {/* Persistent ID Bar */}
+            <div className="persistence-bar" style={{ marginBottom: '1.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text-muted)' }}>当前 Experiment:</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                  {experiment ? experiment.experiment_id : '尚未运行'}
+                </span>
+                {experiment && (
+                  <button
+                    id="btn-copy-exp-id"
+                    className="btn-secondary"
+                    onClick={() => {
+                      navigator.clipboard.writeText(experiment.experiment_id);
+                      alert('Experiment ID 已复制到剪贴板！');
+                    }}
                   >
-                    {artifact.evaluation.success ? '✓ 评测通过 (SUCCESS)' : '✕ 评测未通过 (FAILED)'}
-                  </span>
+                    复制 ID
+                  </button>
                 )}
               </div>
-              <div className="card-desc">展示当前 Episode 的终态判定、用量与真实性审计指标。</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  id="input-exp-id"
+                  className="form-input"
+                  style={{ width: '220px', padding: '0.35rem 0.6rem', fontSize: '0.75rem' }}
+                  placeholder="输入实验 UUID 快速读取"
+                  value={inputExpId}
+                  onChange={(e) => setInputExpId(e.target.value)}
+                />
+                <button
+                  id="btn-load-exp-id"
+                  className="btn-secondary"
+                  onClick={() => loadExperimentById(inputExpId)}
+                  disabled={isLoading || !inputExpId.trim()}
+                >
+                  重读实验
+                </button>
+              </div>
+            </div>
 
-              {artifact ? (
-                <div>
-                  <div className="metrics-grid">
-                    {/* Model Info */}
-                    <div className="metric-box">
-                      <div className="metric-label">执行模型</div>
-                      <div className="metric-value" style={{ fontSize: '1rem' }} id="metric-model">
-                        {artifact.agent.model.model}
-                      </div>
-                      <div className="metric-sub">
-                        {artifact.episode.token_usage.simulated ? (
-                          <span className="badge badge-yellow">离线模拟 (Fake)</span>
-                        ) : (
-                          <span className="badge badge-green">真实网络模型</span>
-                        )}
-                      </div>
-                    </div>
+            <div className="dashboard-grid">
+              {/* Left Panel: Experiment Config */}
+              <section className="card" id="exp-config-panel">
+                <div className="card-title">
+                  <span>对照实验配置</span>
+                  <span className="badge badge-purple">Baseline vs Recovery</span>
+                </div>
+                <div className="card-desc">
+                  严格在相同模型、任务、工具集、种子与预算下，对比单次容错恢复机制的有效性与开销。
+                </div>
 
-                    {/* Termination */}
-                    <div className="metric-box">
-                      <div className="metric-label">终止状态</div>
-                      <div className="metric-value" id="metric-status" style={{ fontSize: '1.1rem' }}>
-                        {artifact.episode.termination_reason}
-                      </div>
-                      <div className="metric-sub" style={{ color: 'var(--text-muted)' }}>
-                        {artifact.episode.detail || artifact.evaluation.reason}
-                      </div>
-                    </div>
+                {/* Model Selector */}
+                <div className="form-group">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label htmlFor="exp-model-select" className="form-label">评测模型</label>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
+                      onClick={() => setShowCustomModelInputExp(!showCustomModelInputExp)}
+                    >
+                      {showCustomModelInputExp ? '取消' : '+ 自定义模型'}
+                    </button>
+                  </div>
 
-                    {/* Steps & Tool Calls */}
-                    <div className="metric-box">
-                      <div className="metric-label">步数 / 工具调用</div>
-                      <div className="metric-value" id="metric-steps">
-                        {artifact.episode.step_count} 步 / {artifact.episode.tool_call_count} 次工具
-                      </div>
-                      <div className="metric-sub">模型调用: {artifact.episode.model_call_count} 次</div>
+                  {showCustomModelInputExp && (
+                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                      <input
+                        className="form-input"
+                        style={{ fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
+                        placeholder="输入新免费模型 ID (例如: coding-glm-5.2-free)"
+                        value={customModelTextExp}
+                        onChange={(e) => setCustomModelTextExp(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => addCustomModel(customModelTextExp, 'exp')}
+                        disabled={!customModelTextExp.trim()}
+                      >
+                        确定
+                      </button>
                     </div>
+                  )}
 
-                    {/* Token Usage */}
-                    <div className="metric-box">
-                      <div className="metric-label">Token 消耗</div>
-                      <div className="metric-value" id="metric-tokens">
-                        {artifact.episode.token_usage.prompt_tokens + artifact.episode.token_usage.completion_tokens}
-                      </div>
-                      <div className="metric-sub">
-                        P: {artifact.episode.token_usage.prompt_tokens} / C: {artifact.episode.token_usage.completion_tokens}
-                      </div>
-                    </div>
+                  <select
+                    id="exp-model-select"
+                    className="form-select"
+                    value={expModel}
+                    onChange={(e) => setExpModel(e.target.value)}
+                    disabled={isLoading}
+                  >
+                    {meta?.models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} {m.is_default ? '★ 默认推荐' : ''} {m.is_experimental ? '⚠️ 实验性' : ''}
+                      </option>
+                    ))}
+                    {customModels
+                      .filter((cid) => !meta?.models.some((m) => m.id === cid))
+                      .map((cid) => (
+                        <option key={cid} value={cid}>
+                          {cid} (自定义免费模型)
+                        </option>
+                      ))}
+                  </select>
+                </div>
 
-                    {/* Latency */}
-                    <div className="metric-box">
-                      <div className="metric-label">耗时</div>
-                      <div className="metric-value" id="metric-duration">
-                        {artifact.episode.duration_ms} ms
-                      </div>
-                      <div className="metric-sub">运行耗时</div>
-                    </div>
-
-                    {/* Cost: Strictly "未知" when is_known is False */}
-                    <div className="metric-box">
-                      <div className="metric-label">预估费用</div>
-                      <div className="metric-value" id="metric-cost" style={{ color: artifact.episode.estimated_cost.is_known ? 'var(--text-primary)' : 'var(--warn-text)' }}>
-                        {artifact.episode.estimated_cost.is_known
-                          ? `$${artifact.episode.estimated_cost.amount} USD`
-                          : '未知 (未验证)'}
-                      </div>
-                      <div className="metric-sub">
-                        版本: {artifact.episode.estimated_cost.price_table_version}
-                      </div>
-                    </div>
+                {/* Model Notes Box */}
+                <div className="form-group">
+                  <div className="model-note-box">
+                    <strong>说明：</strong>{' '}
+                    {currentExpModelMeta
+                      ? currentExpModelMeta.notes
+                      : `自定义免费模型 (${expModel})，将使用 AIHubMix 接口发起真实测试。`}
                   </div>
                 </div>
-              ) : (
-                <div className="empty-state">
-                  <div className="empty-icon">📊</div>
-                  <div>请在左侧选择模型并点击“开始运行 Episode”，或输入已有 ID 查看历史结果。</div>
-                </div>
-              )}
-            </section>
 
-            {/* Panel 3: Trace Timeline */}
-            <section className="card" id="trace-panel">
-              <div className="card-title">
-                <span>事件级 Trace 时间线</span>
-                {artifact && (
-                  <span className="badge" style={{ fontFamily: 'var(--font-mono)' }}>
-                    {artifact.events.length} 个事件
-                  </span>
+                {/* Scenario selector if Fake model */}
+                {expModel === 'fake' && (
+                  <div className="form-group">
+                    <label htmlFor="exp-scenario-select" className="form-label">
+                      Fake 模拟场景
+                    </label>
+                    <select
+                      id="exp-scenario-select"
+                      className="form-select"
+                      value={expScenario}
+                      onChange={(e) => setExpScenario(e.target.value)}
+                      disabled={isLoading}
+                    >
+                      <option value="invalid-then-success">
+                        invalid-then-success (★ 核心因果场景：Baseline 失败 / Recovery 挽救成功)
+                      </option>
+                      <option value="clean">clean / success (基准全通对照)</option>
+                      <option value="invalid-arguments">invalid-arguments (参数错误且无法纠正)</option>
+                      <option value="wrong-answer">wrong-answer (提交错误答案)</option>
+                      <option value="max-steps">max-steps (步数超限)</option>
+                    </select>
+                  </div>
                 )}
-              </div>
-              <div className="card-desc">
-                按事件时间戳严格呈现模型提议、工具格式校验、执行反馈及环境状态。
-              </div>
 
-              {artifact && artifact.events.length > 0 ? (
-                <div className="timeline-container" id="timeline-list">
-                  {artifact.events.map((ev) => {
-                    const isExpanded = !!expandedEvents[ev.event_id];
-                    return (
-                      <div key={ev.event_id} className="timeline-event">
-                        <div
-                          className="event-header"
-                          onClick={() => toggleEventExpand(ev.event_id)}
-                        >
-                          <div className="event-info">
-                            <span className="event-step-pill">Step {ev.step_index}</span>
-                            <span className="event-name">{ev.event_type}</span>
-                          </div>
-                          <div className="event-meta">
-                            <span>{new Date(ev.timestamp).toLocaleTimeString()}</span>
-                            <span>{isExpanded ? '▲ 收起' : '▼ 展开'}</span>
+                {/* Task Checkbox List */}
+                <div className="form-group">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label className="form-label">评测任务 (多选)</label>
+                    <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.75rem' }}>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
+                        onClick={() => setExpTasks(meta?.tasks.map((t) => t.id) || [])}
+                      >
+                        全选
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
+                        onClick={() => setExpTasks([])}
+                      >
+                        清空
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="checkbox-list" id="task-checkbox-list">
+                    {meta?.tasks.map((task) => (
+                      <label key={task.id} className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={expTasks.includes(task.id)}
+                          onChange={() => toggleTaskSelection(task.id)}
+                          disabled={isLoading}
+                        />
+                        <div>
+                          <div style={{ fontWeight: 600 }}>{task.name}</div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                            {task.description.slice(0, 32)}...
                           </div>
                         </div>
-                        {isExpanded && (
-                          <div className="event-body">
-                            <pre>{JSON.stringify(ev.payload, null, 2)}</pre>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Seed Input */}
+                <div className="form-group">
+                  <label htmlFor="exp-seed-input" className="form-label">随机种子 (Seed)</label>
+                  <input
+                    id="exp-seed-input"
+                    type="number"
+                    className="form-input"
+                    value={expSeed}
+                    onChange={(e) => setExpSeed(parseInt(e.target.value) || 1)}
+                    disabled={isLoading}
+                  />
+                </div>
+
+                <button
+                  id="run-exp-button"
+                  className="btn-primary"
+                  onClick={handleRunExperiment}
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <>
+                      <div className="spinner" />
+                      <span>正在串行执行成对评测...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>🔬</span>
+                      <span>开始运行对照实验 ({expTasks.length * 2} 次执行)</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Recent Experiments History */}
+                {recentExpIds.length > 0 && (
+                  <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+                      最近实验历史：
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                      {recentExpIds.map((rid) => (
+                        <button
+                          key={rid}
+                          className="btn-secondary"
+                          style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                          onClick={() => loadExperimentById(rid)}
+                        >
+                          🧪 {rid}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+
+              {/* Right Panel: Aggregate Metrics + Comparison Table */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                {/* Aggregate Summary Cards */}
+                <section className="card" id="exp-metrics-panel">
+                  <div className="card-title">
+                    <span>聚合对照指标</span>
+                    {experiment && (
+                      <span className="badge badge-purple">
+                        {experiment.pairs.length} 组任务对比
+                      </span>
+                    )}
+                  </div>
+                  <div className="card-desc">
+                    衡量容错恢复策略相较基线的成功率提升、挽救转化率与代价比（Tokens / 耗时）。
+                  </div>
+
+                  {experiment ? (
+                    <div>
+                      {/* Preserved Experiment Configuration Panel */}
+                      <div
+                        style={{
+                          marginBottom: '1.25rem',
+                          padding: '0.85rem 1rem',
+                          borderRadius: '8px',
+                          border: '1px solid rgba(59, 130, 246, 0.3)',
+                          background: 'rgba(59, 130, 246, 0.04)',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: '0.5rem',
+                            flexWrap: 'wrap',
+                            gap: '0.5rem',
+                          }}
+                        >
+                          <strong style={{ fontSize: '0.85rem', color: '#93c5fd' }}>
+                            📌 已保存实验配置 (固定变量与哈希)
+                          </strong>
+                          <span
+                            style={{
+                              fontFamily: 'var(--font-mono)',
+                              fontSize: '0.72rem',
+                              color: 'var(--text-muted)',
+                            }}
+                          >
+                            Hash: {experiment.config_hash ? experiment.config_hash.slice(0, 16) + '...' : 'N/A'}
+                          </span>
+                        </div>
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                            gap: '0.4rem 1rem',
+                            fontSize: '0.78rem',
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          <div>
+                            <strong>模型：</strong>{' '}
+                            {typeof experiment.config.model === 'string'
+                              ? experiment.config.model
+                              : (experiment.config.model as Record<string, unknown>)?.model as string || 'N/A'}
                           </div>
-                        )}
+                          <div>
+                            <strong>场景：</strong>{' '}
+                            {(experiment.config.scenario as string) || 'N/A (真实模型)'}
+                          </div>
+                          <div>
+                            <strong>种子 (Seed)：</strong>{' '}
+                            {String(experiment.config.seed ?? 1)}
+                          </div>
+                          <div>
+                            <strong>评测器：</strong>{' '}
+                            {(experiment.config.evaluator as string) || 'order_status_v1'}
+                          </div>
+                          <div>
+                            <strong>基准策略：</strong>{' '}
+                            {(experiment.config.baseline_strategy as string) ||
+                              ((experiment.config.baseline_agent as Record<string, unknown>)?.runtime_strategy as string) ||
+                              'handwritten'}
+                          </div>
+                          <div>
+                            <strong>容错策略：</strong>{' '}
+                            {(experiment.config.recovery_strategy as string) ||
+                              ((experiment.config.recovery_agent as Record<string, unknown>)?.runtime_strategy as string) ||
+                              'handwritten_recovery'}
+                          </div>
+                        </div>
                       </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="empty-state">
-                  <div className="empty-icon">📜</div>
-                  <div>Trace 数据将在 Episode 执行完成后呈现在此。</div>
-                </div>
-              )}
-            </section>
+
+                      <div className="metrics-grid">
+                        {/* Baseline Success */}
+                        <div className="metric-box">
+                          <div className="metric-label">Baseline 成功率</div>
+                          <div
+                            className="metric-value"
+                            style={{
+                              color:
+                                experiment.metrics.baseline_success_rate > 0
+                                  ? 'var(--success-text)'
+                                  : 'var(--fail-text)',
+                            }}
+                          >
+                            {(experiment.metrics.baseline_success_rate * 100).toFixed(1)}%
+                          </div>
+                          <div className="metric-sub">
+                            {experiment.metrics.baseline_success_count} / {experiment.metrics.total_pairs} 通过
+                          </div>
+                        </div>
+
+                        {/* Recovery Success */}
+                        <div className="metric-box">
+                          <div className="metric-label">Recovery 成功率</div>
+                          <div
+                            className="metric-value"
+                            style={{
+                              color:
+                                experiment.metrics.recovery_success_rate > 0
+                                  ? 'var(--success-text)'
+                                  : 'var(--fail-text)',
+                            }}
+                          >
+                            {(experiment.metrics.recovery_success_rate * 100).toFixed(1)}%
+                          </div>
+                          <div className="metric-sub">
+                            {experiment.metrics.recovery_success_count} / {experiment.metrics.total_pairs} 通过
+                          </div>
+                        </div>
+
+                        {/* Retry Recovery Count & Rate */}
+                        <div
+                          className="metric-box"
+                          style={{
+                            border: '1px solid var(--accent-primary)',
+                            background: 'rgba(59, 130, 246, 0.08)',
+                          }}
+                        >
+                          <div className="metric-label" style={{ color: '#93c5fd' }}>
+                            ★ 挽救转化 (Recovery)
+                          </div>
+                          <div className="metric-value" style={{ color: '#60a5fa' }}>
+                            {experiment.metrics.retry_recovery_count} 例
+                          </div>
+                          <div className="metric-sub">
+                            转化率: {(experiment.metrics.retry_recovery_rate * 100).toFixed(1)}% ({experiment.metrics.retry_recovery_count} / {experiment.metrics.retry_eligible_count ?? experiment.metrics.total_pairs} 可恢复样本)
+                          </div>
+                        </div>
+
+                        {/* Total Tokens & Delta */}
+                        <div className="metric-box">
+                          <div className="metric-label">Token 总消耗 (Base / Rec)</div>
+                          <div className="metric-value" style={{ fontSize: '1.05rem' }}>
+                            {experiment.metrics.baseline_total_tokens} / {experiment.metrics.recovery_total_tokens}
+                          </div>
+                          <div className="metric-sub">
+                            增量 Delta: +{experiment.metrics.recovery_total_tokens - experiment.metrics.baseline_total_tokens} tokens
+                          </div>
+                        </div>
+
+                        {/* Average Steps */}
+                        <div className="metric-box">
+                          <div className="metric-label">平均步数 (Base / Rec)</div>
+                          <div className="metric-value" style={{ fontSize: '1.1rem' }}>
+                            {experiment.metrics.baseline_avg_steps} / {experiment.metrics.recovery_avg_steps}
+                          </div>
+                          <div className="metric-sub">单任务平均步数</div>
+                        </div>
+
+                        {/* Average Duration */}
+                        <div className="metric-box">
+                          <div className="metric-label">平均耗时 (Base / Rec)</div>
+                          <div className="metric-value" style={{ fontSize: '1.05rem' }}>
+                            {experiment.metrics.baseline_avg_duration_ms} / {experiment.metrics.recovery_avg_duration_ms} ms
+                          </div>
+                          <div className="metric-sub">
+                            费用状态: {experiment.metrics.is_cost_known ? '已确定' : '未知 (未验证)'}
+                          </div>
+                        </div>
+
+                        {/* Tool Selection & Argument Validity Rates */}
+                        <div className="metric-box">
+                          <div className="metric-label">工具选择 / 参数合法率 (Base / Rec)</div>
+                          <div className="metric-value" style={{ fontSize: '1.05rem' }}>
+                            {experiment.metrics.baseline_tool_selection_accuracy !== null && experiment.metrics.baseline_tool_selection_accuracy !== undefined
+                              ? (experiment.metrics.baseline_tool_selection_accuracy * 100).toFixed(0) + '%'
+                              : '-'} / {experiment.metrics.recovery_tool_selection_accuracy !== null && experiment.metrics.recovery_tool_selection_accuracy !== undefined
+                              ? (experiment.metrics.recovery_tool_selection_accuracy * 100).toFixed(0) + '%'
+                              : '-'}
+                          </div>
+                          <div className="metric-sub">
+                            参数合法: {experiment.metrics.baseline_tool_argument_validity_rate !== null && experiment.metrics.baseline_tool_argument_validity_rate !== undefined
+                              ? (experiment.metrics.baseline_tool_argument_validity_rate * 100).toFixed(0) + '%'
+                              : '-'} / {experiment.metrics.recovery_tool_argument_validity_rate !== null && experiment.metrics.recovery_tool_argument_validity_rate !== undefined
+                              ? (experiment.metrics.recovery_tool_argument_validity_rate * 100).toFixed(0) + '%'
+                              : '-'}
+                          </div>
+                        </div>
+
+                        {/* Model & Tool Call Counts */}
+                        <div className="metric-box">
+                          <div className="metric-label">平均模型 / 工具调用 (Base / Rec)</div>
+                          <div className="metric-value" style={{ fontSize: '1.05rem' }}>
+                            {experiment.metrics.baseline_avg_model_calls ?? '-'} / {experiment.metrics.recovery_avg_model_calls ?? '-'}
+                          </div>
+                          <div className="metric-sub">
+                            工具调用: {experiment.metrics.baseline_avg_tool_calls ?? '-'} / {experiment.metrics.recovery_avg_tool_calls ?? '-'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Paired Comparison Table */}
+                      <div className="card-title" style={{ marginTop: '1.25rem' }}>
+                        <span>成对任务明细对比 (Paired Comparison Table)</span>
+                      </div>
+                      <div className="table-container">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>评测任务</th>
+                              <th>Baseline (基准)</th>
+                              <th>Recovery (容错)</th>
+                              <th>判定效果</th>
+                              <th>步数、调用与 Tokens</th>
+                              <th>Trace 审查</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {experiment.pairs.map((pair) => (
+                              <tr key={pair.task_id}>
+                                <td style={{ fontWeight: 600 }}>{pair.task_name}</td>
+                                <td>
+                                  <span className={`badge ${pair.baseline_success ? 'badge-green' : 'badge-red'}`}>
+                                    {pair.baseline_success ? '✓ SUCCESS' : '✕ FAILED'}
+                                  </span>
+                                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                    {pair.baseline_termination_reason}
+                                  </div>
+                                </td>
+                                <td>
+                                  <span className={`badge ${pair.recovery_success ? 'badge-green' : 'badge-red'}`}>
+                                    {pair.recovery_success ? '✓ SUCCESS' : '✕ FAILED'}
+                                  </span>
+                                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                                    {pair.recovery_termination_reason}
+                                  </div>
+                                </td>
+                                <td>
+                                  {pair.recovered ? (
+                                    <span className="badge badge-cyan">★ 挽救成功 (RECOVERED)</span>
+                                  ) : pair.baseline_success && pair.recovery_success ? (
+                                    <span className="badge badge-green">基准均通过 (TIED)</span>
+                                  ) : (
+                                    <span className="badge">未挽救 / 相同状态</span>
+                                  )}
+                                  {pair.retry_eligible && (
+                                    <div style={{ marginTop: '0.25rem' }}>
+                                      <span className="badge badge-purple" style={{ fontSize: '0.65rem' }}>
+                                        可恢复样本
+                                      </span>
+                                    </div>
+                                  )}
+                                </td>
+                                <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
+                                  <div>步数: {pair.baseline_steps} → {pair.recovery_steps}</div>
+                                  <div>Tokens: {pair.baseline_tokens} → {pair.recovery_tokens}</div>
+                                  <div style={{ color: 'var(--text-muted)' }}>
+                                    模型调用: {pair.baseline_model_calls ?? '-'} → {pair.recovery_model_calls ?? '-'}
+                                  </div>
+                                </td>
+                                <td>
+                                  <div style={{ display: 'flex', gap: '0.35rem' }}>
+                                    <button
+                                      className="btn-secondary"
+                                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}
+                                      onClick={() => {
+                                        setActiveTab('single');
+                                        loadEpisodeById(pair.baseline_episode_id);
+                                      }}
+                                    >
+                                      Base Trace
+                                    </button>
+                                    <button
+                                      className="btn-secondary"
+                                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}
+                                      onClick={() => {
+                                        setActiveTab('single');
+                                        loadEpisodeById(pair.recovery_episode_id);
+                                      }}
+                                    >
+                                      Rec Trace
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="empty-state">
+                      <div className="empty-icon">🔬</div>
+                      <div>请在左侧选择模型与任务，点击“开始运行对照实验”，或输入历史实验 UUID 进行复核。</div>
+                    </div>
+                  )}
+                </section>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* TAB 2: SINGLE EPISODE MODE */}
+        {activeTab === 'single' && (
+          <div>
+            {/* Persistent ID Bar */}
+            <div className="persistence-bar" style={{ marginBottom: '1.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text-muted)' }}>当前 Episode:</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                  {artifact ? artifact.episode.episode_id : '尚未运行'}
+                </span>
+                {artifact && (
+                  <button
+                    id="btn-copy-id"
+                    className="btn-secondary"
+                    onClick={() => {
+                      navigator.clipboard.writeText(artifact.episode.episode_id);
+                      alert('Episode ID 已复制到剪贴板！');
+                    }}
+                  >
+                    复制 ID
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  id="input-episode-id"
+                  className="form-input"
+                  style={{ width: '220px', padding: '0.35rem 0.6rem', fontSize: '0.75rem' }}
+                  placeholder="输入 UUID 快速读取"
+                  value={inputEpisodeId}
+                  onChange={(e) => setInputEpisodeId(e.target.value)}
+                />
+                <button
+                  id="btn-load-id"
+                  className="btn-secondary"
+                  onClick={() => loadEpisodeById(inputEpisodeId)}
+                  disabled={isLoading || !inputEpisodeId.trim()}
+                >
+                  重读
+                </button>
+              </div>
+            </div>
+
+            <div className="dashboard-grid">
+              {/* Left Panel: Single Episode Config */}
+              <section className="card" id="config-panel">
+                <div className="card-title">
+                  <span>单次运行配置</span>
+                  <span className="badge badge-blue">ToolLab</span>
+                </div>
+                <div className="card-desc">选择模型模式与限制，发起单次受控评测。</div>
+
+                <div className="form-group">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label htmlFor="model-select" className="form-label">评测模型</label>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
+                      onClick={() => setShowCustomModelInputSingle(!showCustomModelInputSingle)}
+                    >
+                      {showCustomModelInputSingle ? '取消' : '+ 自定义模型'}
+                    </button>
+                  </div>
+
+                  {showCustomModelInputSingle && (
+                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                      <input
+                        className="form-input"
+                        style={{ fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
+                        placeholder="输入新免费模型 ID (例如: coding-glm-5.2-free)"
+                        value={customModelTextSingle}
+                        onChange={(e) => setCustomModelTextSingle(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => addCustomModel(customModelTextSingle, 'single')}
+                        disabled={!customModelTextSingle.trim()}
+                      >
+                        确定
+                      </button>
+                    </div>
+                  )}
+
+                  <select
+                    id="model-select"
+                    className="form-select"
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                    disabled={isLoading}
+                  >
+                    {meta?.models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} {m.is_default ? '★ 默认推荐' : ''} {m.is_experimental ? '⚠️ 实验性' : ''}
+                      </option>
+                    ))}
+                    {customModels
+                      .filter((cid) => !meta?.models.some((m) => m.id === cid))
+                      .map((cid) => (
+                        <option key={cid} value={cid}>
+                          {cid} (自定义免费模型)
+                        </option>
+                      ))}
+                  </select>
+                </div>
+
+                {/* Model Notes Box */}
+                <div className="form-group">
+                  <div className="model-note-box">
+                    <strong>说明：</strong>{' '}
+                    {currentSingleModelMeta
+                      ? currentSingleModelMeta.notes
+                      : `自定义免费模型 (${selectedModel})，将使用 AIHubMix 接口发起真实测试。`}
+                  </div>
+                </div>
+
+                {/* Scenario selector if Fake model */}
+                {selectedModel === 'fake' && (
+                  <div className="form-group">
+                    <label htmlFor="scenario-select" className="form-label">Fake 模拟场景</label>
+                    <select
+                      id="scenario-select"
+                      className="form-select"
+                      value={selectedScenario}
+                      onChange={(e) => setSelectedScenario(e.target.value)}
+                      disabled={isLoading}
+                    >
+                      <option value="success">success (完整通过，答案匹配)</option>
+                      <option value="invalid-then-success">invalid-then-success (一次重试后通过)</option>
+                      <option value="wrong-answer">wrong-answer (提交错误答案)</option>
+                      <option value="invalid-arguments">invalid-arguments (工具参数校验失败)</option>
+                      <option value="max-steps">max-steps (步数超限终止)</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Task Selection */}
+                <div className="form-group">
+                  <label htmlFor="task-select" className="form-label">评测任务</label>
+                  <select
+                    id="task-select"
+                    className="form-select"
+                    value={selectedSingleTask}
+                    onChange={(e) => setSelectedSingleTask(e.target.value)}
+                    disabled={isLoading}
+                  >
+                    {meta?.tasks.map((task) => (
+                      <option key={task.id} value={task.id}>
+                        {task.name} ({task.id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Max Steps Override */}
+                <div className="form-group">
+                  <label htmlFor="steps-input" className="form-label">步数上限 (Max Steps)</label>
+                  <input
+                    id="steps-input"
+                    type="number"
+                    className="form-input"
+                    min={1}
+                    max={20}
+                    value={maxSteps}
+                    onChange={(e) => setMaxSteps(parseInt(e.target.value) || 6)}
+                    disabled={isLoading}
+                  />
+                </div>
+
+                <button
+                  id="run-button"
+                  className="btn-primary"
+                  onClick={handleRunEpisode}
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <>
+                      <div className="spinner" />
+                      <span>正在运行 Episode...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>🚀</span>
+                      <span>开始运行 Episode</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Recent Runs */}
+                {recentEpisodeIds.length > 0 && (
+                  <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+                      最近运行历史：
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                      {recentEpisodeIds.map((rid) => (
+                        <button
+                          key={rid}
+                          className="btn-secondary"
+                          style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                          onClick={() => loadEpisodeById(rid)}
+                        >
+                          🕒 {rid}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+
+              {/* Right Column: Single Episode Result + Trace View */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                {/* Result Summary */}
+                <section className="card" id="results-panel">
+                  <div className="card-title">
+                    <span>运行结果指标</span>
+                    {artifact && (
+                      <span
+                        id="eval-badge"
+                        className={`badge ${artifact.evaluation.success ? 'badge-green' : 'badge-red'}`}
+                      >
+                        {artifact.evaluation.success ? '✓ 评测通过 (SUCCESS)' : '✕ 评测未通过 (FAILED)'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="card-desc">展示当前 Episode 的终态判定、用量与真实性审计指标。</div>
+
+                  {artifact ? (
+                    <div>
+                      <div className="metrics-grid">
+                        {/* Model Info */}
+                        <div className="metric-box">
+                          <div className="metric-label">执行模型 / 策略</div>
+                          <div className="metric-value" style={{ fontSize: '0.95rem' }} id="metric-model">
+                            {artifact.agent.model.model}
+                          </div>
+                          <div className="metric-sub">
+                            {artifact.agent.runtime_strategy === 'handwritten_recovery' ? (
+                              <span className="badge badge-purple">Recovery 容错策略</span>
+                            ) : (
+                              <span className="badge badge-blue">Baseline 策略</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Termination */}
+                        <div className="metric-box">
+                          <div className="metric-label">终止状态</div>
+                          <div className="metric-value" id="metric-status" style={{ fontSize: '1.1rem' }}>
+                            {artifact.episode.termination_reason}
+                          </div>
+                          <div className="metric-sub" style={{ color: 'var(--text-muted)' }}>
+                            {artifact.episode.detail || artifact.evaluation.reason}
+                          </div>
+                        </div>
+
+                        {/* Steps & Tool Calls */}
+                        <div className="metric-box">
+                          <div className="metric-label">步数 / 工具调用</div>
+                          <div className="metric-value" id="metric-steps">
+                            {artifact.episode.step_count} 步 / {artifact.episode.tool_call_count} 次工具
+                          </div>
+                          <div className="metric-sub">模型调用: {artifact.episode.model_call_count} 次</div>
+                        </div>
+
+                        {/* Token Usage */}
+                        <div className="metric-box">
+                          <div className="metric-label">Token 消耗</div>
+                          <div className="metric-value" id="metric-tokens">
+                            {artifact.episode.token_usage.prompt_tokens + artifact.episode.token_usage.completion_tokens}
+                          </div>
+                          <div className="metric-sub">
+                            P: {artifact.episode.token_usage.prompt_tokens} / C: {artifact.episode.token_usage.completion_tokens}
+                          </div>
+                        </div>
+
+                        {/* Latency */}
+                        <div className="metric-box">
+                          <div className="metric-label">耗时</div>
+                          <div className="metric-value" id="metric-duration">
+                            {artifact.episode.duration_ms} ms
+                          </div>
+                          <div className="metric-sub">运行耗时</div>
+                        </div>
+
+                        {/* Cost: Strictly "未知" when is_known is False */}
+                        <div className="metric-box">
+                          <div className="metric-label">预估费用</div>
+                          <div className="metric-value" id="metric-cost" style={{ color: artifact.episode.estimated_cost.is_known ? 'var(--text-primary)' : 'var(--warn-text)' }}>
+                            {artifact.episode.estimated_cost.is_known
+                              ? `$${artifact.episode.estimated_cost.amount} USD`
+                              : '未知 (未验证)'}
+                          </div>
+                          <div className="metric-sub">
+                            版本: {artifact.episode.estimated_cost.price_table_version}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="empty-state">
+                      <div className="empty-icon">📊</div>
+                      <div>请在左侧选择模型并点击“开始运行 Episode”，或输入已有 ID 查看历史结果。</div>
+                    </div>
+                  )}
+                </section>
+
+                {/* Trace Timeline */}
+                <section className="card" id="trace-panel">
+                  <div className="card-title">
+                    <span>事件级 Trace 时间线</span>
+                    {artifact && (
+                      <span className="badge" style={{ fontFamily: 'var(--font-mono)' }}>
+                        {artifact.events.length} 个事件
+                      </span>
+                    )}
+                  </div>
+                  <div className="card-desc">
+                    按事件时间戳严格呈现模型提议、工具格式校验、执行反馈及环境状态。
+                  </div>
+
+                  {artifact && artifact.events.length > 0 ? (
+                    <div className="timeline-container" id="timeline-list">
+                      {artifact.events.map((ev) => {
+                        const isExpanded = !!expandedEvents[ev.event_id];
+                        return (
+                          <div key={ev.event_id} className="timeline-event">
+                            <div
+                              className="event-header"
+                              onClick={() => toggleEventExpand(ev.event_id)}
+                            >
+                              <div className="event-info">
+                                <span className="event-step-pill">Step {ev.step_index}</span>
+                                <span className="event-name">{ev.event_type}</span>
+                              </div>
+                              <div className="event-meta">
+                                <span>{new Date(ev.timestamp).toLocaleTimeString()}</span>
+                                <span>{isExpanded ? '▲ 收起' : '▼ 展开'}</span>
+                              </div>
+                            </div>
+                            {isExpanded && (
+                              <div className="event-body">
+                                <pre>{JSON.stringify(ev.payload, null, 2)}</pre>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="empty-state">
+                      <div className="empty-icon">📜</div>
+                      <div>Trace 数据将在 Episode 执行完成后呈现在此。</div>
+                    </div>
+                  )}
+                </section>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );

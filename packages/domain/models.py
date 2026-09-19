@@ -49,7 +49,7 @@ class AgentSpec(Contract):
     model: ModelConfig = Field(default_factory=ModelConfig)
     prompt_version: str
     tool_set_version: str
-    runtime_strategy: Literal["handwritten"] = "handwritten"
+    runtime_strategy: Literal["handwritten", "handwritten_recovery"] = "handwritten"
     budget: Budget = Field(default_factory=Budget)
 
 

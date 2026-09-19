@@ -26,7 +26,7 @@ from packages.domain.models import (
 from packages.domain.ports import ModelProvider
 
 DEFAULT_BASE_URL = "https://aihubmix.com/v1"
-DEFAULT_MODEL = "coding-kimi-k3-free"
+DEFAULT_MODEL = "coding-glm-5.3-free"
 
 
 def get_aihubmix_api_key() -> str:

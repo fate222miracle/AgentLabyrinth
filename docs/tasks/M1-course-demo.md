@@ -1,6 +1,6 @@
 # M1 课程演示任务卡
  
-SSOT：`docs/product/requirements.md` V0.5。ADR-003 已于 2026-09-18 Accepted；项目负责人已明确授权启动 M1 实现。切片 A 已用 `gemini-3.7-flash-free` 实验签收，当前执行切片 B，详见 `docs/tasks/M1-slice-B-antigravity.md`。
+SSOT：`docs/product/requirements.md` V0.5。ADR-003 与 ADR-004 Accepted。切片 A 已签收，切片 B 的基本网页流程已复核；当前执行切片 C 的 Agent 对照实验，详见 `docs/tasks/M1-slice-C-antigravity.md`。
 
 Antigravity 的具体开发顺序、契约阻塞点和证据格式见 `docs/handoffs/M1-antigravity-development-guide.md` 与 `docs/handoffs/current-state.md`。
 
@@ -10,11 +10,13 @@ Antigravity 的具体开发顺序、契约阻塞点和证据格式见 `docs/hand
 ## 实施顺序
 1. **真实模型闭环（已完成）**：AIHubMix 后端 Provider、多轮工具调用消息、真实 usage/未知费用契约已落地；`gemini-3.7-flash-free` 已通过真实 ToolLab Episode。`coding-kimi-k3-free` 的通道故障单独记录，不影响已验证模型的切片 A 结论。
 2. **Web 第一屏**：最小 FastAPI 端点接收固定实验配置并调用现有 Runner；React/Vite 提供实验配置、运行状态和单次结果。API Key 从不传给浏览器；页面展示真实/Fake 标识。
-3. **外部数据**：锁定 BFCL 上游 commit 和 Apache-2.0 许可文件；建立机器可读 manifest、选题 ID 和校验值。仅接支持一轮单工具调用的非 Live 题目，提供独立评分、适配偏差说明与复现测试。
-4. **演示完整度**：最小批量运行、结果对比、Trace 单步回看、JSON 导出；统一视觉设计、空状态、加载状态、错误与断网反馈。录制现场演示脚本并完成一次真实 API 运行记录。
+3. **Agent 对照实验**：同一模型、任务、工具、Seed 和预算下运行 Baseline 与 Recovery；先用 Fake 确定性证明一次参数纠错的收益与代价，再保留真实 Gemini 的探索性结果。
+4. **外部数据**：切片 C 验收后再锁定 BFCL 上游 commit 和许可文件；建立机器可读 manifest、选题 ID 和校验值。仅接支持一轮单工具调用的非 Live 题目，提供独立评分、适配偏差说明与复现测试。
+5. **演示完整度**：完善 Trace 回看、JSON 导出、信息层级、空状态、加载状态、错误与断网反馈。录制现场演示脚本并完成一次真实 API 运行记录。
 
 ## M1 验收
 - 一次真实 AIHubMix 工具调用成功，模型 ID、响应 usage、实际限制和错误路径有记录；不提交 Key。
+- Baseline 与 Recovery 能在相同模型、任务、工具、Seed 和预算下成对运行，页面能展示哪些任务被恢复以及增加的步骤、Token 和时延。
 - 至少一个 ToolLab 多轮任务和一个固定 BFCL 改编子集可由同一 Web 入口启动，运行结果能分清数据来源与评分协议。
 - 实验可设置模型、数据集/子集和预算；运行时展示进度与安全错误；结果页展示成功次数/总数、工具选择与参数指标、步骤、Token、费用是否可用、时延。
 - Episode 页可按步骤查看公开消息、工具提议、校验、执行反馈和环境状态；回看不重新请求模型。
@@ -31,4 +33,4 @@ Antigravity 的具体开发顺序、契约阻塞点和证据格式见 `docs/hand
 - 项目负责人：已取得 AIHubMix Key；在本机后端环境配置 `AIHUBMIX_API_KEY` 并执行一次真实联网演示；组织最终课程验收。不得分享或提交 Key。
 
 ## 快速交付目标
-开发启动且本机 Key 可用后，建议前 2–3 个工作日接通真实模型与 ToolLab CLI；第 1 周让网页完成一次真实 Episode；第 2 周接固定 BFCL 子集；第 3 周完善对比、Replay 与视觉。各阶段一通过就保留可演示版本，不等待后续功能。具体时间以实际验证为准，四个月留作课程交付缓冲、组员扩展与报告视频；不提前建立未使用模块。
+真实模型与网页单 Episode 已完成。当前先交付 Baseline/Recovery 对照实验与 4 条原生任务；通过后再接固定 BFCL 子集，最后完善 Replay 与视觉。各阶段一通过就保留可演示版本，不等待后续功能；四个月继续作为课程交付缓冲、组员扩展与报告视频时间。

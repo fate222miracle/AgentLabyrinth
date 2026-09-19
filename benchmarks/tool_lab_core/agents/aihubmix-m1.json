@@ -7,7 +7,7 @@
   "model": {
     "schema_version": "1.0",
     "provider": "aihubmix",
-    "model": "gemini-3.7-flash-free",
+    "model": "coding-glm-5.3-free",
     "temperature": 0.0
   },
   "prompt_version": "v1.0.0",

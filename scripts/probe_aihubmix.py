@@ -11,9 +11,19 @@ Outputs a sanitized summary. Does NOT log or reveal the API key.
 import asyncio
 import json
 import sys
+from pathlib import Path
 
-from packages.domain.models import FinalAnswer, Message, ModelConfig, ToolCall, ToolSchema
-from packages.providers.aihubmix import AIHubMixModelProvider, get_aihubmix_api_key
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from packages.domain.models import (  # noqa: E402
+    FinalAnswer,
+    Message,
+    ModelConfig,
+    ToolCall,
+    ToolSchema,
+)
+from packages.providers.aihubmix import AIHubMixModelProvider, get_aihubmix_api_key  # noqa: E402
 
 
 async def run_probe() -> int:
