@@ -66,6 +66,25 @@ def test_runtime_normal_execution_flow() -> None:
     assert EventType.TOOL_SUCCEEDED in events
     assert EventType.ENVIRONMENT_UPDATED in events
 
+    observation = next(
+        event for event in recorder.events if event.event_type == EventType.OBSERVATION_CREATED
+    )
+    updates = [
+        event for event in recorder.events if event.event_type == EventType.ENVIRONMENT_UPDATED
+    ]
+    initial_state = observation.payload["initial_state"]
+    assert isinstance(initial_state, dict)
+    assert initial_state["acquired_evidence"] == []
+    assert len(updates) == 2
+    first_state = updates[0].payload["state"]
+    final_state = updates[1].payload["state"]
+    assert isinstance(first_state, dict)
+    assert isinstance(final_state, dict)
+    assert first_state["acquired_evidence"] == ["order:ORD-001"]
+    assert first_state["submission"] is None
+    assert final_state == res.final_state
+    assert final_state["done"] is True
+
 
 def test_runtime_handles_invalid_arguments_rejection() -> None:
     """HandwrittenRuntime rejects invalid arguments without executing tool."""

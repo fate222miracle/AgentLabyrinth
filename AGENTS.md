@@ -4,7 +4,7 @@
 
 开始工作依次阅读：需求全文 → AGENTS.md → 相关 ADR → `docs/handoffs/current-state.md` → 当前任务卡 → 测试与源码。不得依赖旧聊天；需求版本不符时停止并同步。
 
-当前推进 M1。切片 A 的真实模型闭环已签收，切片 B 的网页基本运行已复核。项目负责人于 2026-09-19 决定先建立与 Agent 开发的直接关系，ADR-004 已 Accepted；当前交给 Antigravity 的切片 C 是 Baseline/Recovery 对照实验，见 `docs/tasks/M1-slice-C-antigravity.md`。BFCL 已顺延为切片 D，切片 C 未经 Codex 验收不得开始。由 Codex 负责契约、预算与评测审查，Antigravity 填充内部实现，Codex 审查。其他模型的可用性与失败结果见 current-state；Key 仅在本机环境/`.env` 配置，不入库不入前端。核心接口/Schema/评测口径变化先走 ADR，不得静默修改。
+当前推进 M1。切片 A、B、C 已签收；切片 D 的核心实现和代码门禁已由 Codex 复核，最终真实网页成功证据待补。Antigravity 暂不可用期间，Codex 已按 ADR-007 接管切片 E 的 Trace Replay、JSON 导出和移动端演示完整度，任务卡见 `docs/tasks/M1-slice-E-codex.md`。仓库记录了两个真实模型的 BFCL 成功样本；当前检出环境在 Process、User、Machine 和 `.env` 四处均没有 Key，因此本轮真实免费模型复测仍是明确阻塞。其他模型的已有可用性与失败结果见 current-state；Key 仅在本机环境/`.env` 配置，不入库、不入前端、不在聊天中传递。核心接口/Schema/评测口径变化先走 ADR，不得静默修改。
 
 - Domain 不依赖具体环境、Provider SDK、存储或外部 Agent 框架。
 - Application 通过 Domain Port 编排；Runtime 不包含订单业务；Evaluator 只读、不改状态。

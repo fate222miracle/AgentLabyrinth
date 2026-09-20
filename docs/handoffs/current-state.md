@@ -4,16 +4,22 @@
 
 ## 最新复核结论（2026-09-20）
 
+Antigravity 暂不可用期间，Codex 已接管并实现 M1 切片 E：ADR-007 规定用已保存 Environment Snapshot 做只读 Replay；页面增加事件筛选、前后移动、Step 跳转、当前状态/事件双栏、Episode/Experiment JSON 导出和移动端布局。Fake Episode `9b81c7f9-4fce-48fb-8a52-80d730d39e12` 产生 17 个事件和 2 个中间状态快照。Edge DevTools 在 390px 下验证 `clientWidth=scrollWidth=390`，Replay 交互及 20682-byte Episode JSON 下载成功。阅读与实验入口见 [M1 Trace Replay](../learning/M1-trace-replay.md)。
+
+用户要求每轮还应验证页面中的真实免费模型。本轮已确认 Process、User、Machine 环境变量和项目 `.env` 均无 `AIHUBMIX_API_KEY`，因此不能进行新的真实联网复测，也不使用 Fake 代替。`scripts.verify_selected_models` 现支持默认四模型或 `--all-catalog` 全目录串行复测，并在缺 Key 时于联网前明确停止。下述已有模型结果仍是 2026-09-20 较早运行记录，不冒充本轮结果。
+
 新增四模型复测：**小米 MiMo V2.5 Pro 与 MiniMax M2.7 各自通过真实 BFCL 示例和两轮 ToolLab 订单任务**。DeepSeek 返回无可用通道，Qwen 返回限流。四个 ID 已放行后端并进入网页目录，小米设为默认。结果、预算、复现命令与四份成功 Trace ID 见 [新模型验收记录](../experiments/selected-models-20260920.md)。下文较早的“尚无 BFCL 成功样本”状态已由本记录补足；不将单题成功等同于完整子集通过。
 
-切片 C 的四项阻塞均已修复并通过回归，Codex 已签收。切片 D 已由 Codex 完成首版核心：固定 BFCL V4 `simple_python` 的 8 道非 Live 单轮真题、可复现导入与哈希校验、独立 Adapter/Environment/Evaluator、API 与 Web 单次运行入口。原始数据不入库，本机缓存由导入脚本生成。
+切片 C 的四项阻塞均已修复并通过回归，Codex 已签收。切片 D 已由 Codex 完成并复核核心：固定 BFCL V4 `simple_python` 的 8 道非 Live 单轮真题、可复现导入与哈希校验、独立 Adapter/Environment/Evaluator、API 与 Web 单次运行入口。原始数据不入库，本机缓存由导入脚本生成。导入器现已覆盖离线缓存重建、来源哈希损坏和下载失败，并显式固定转换文件换行格式，避免跨平台哈希漂移。
 
-最终质量门禁：`85 passed`，Ruff、Mypy、前端生产构建通过。浏览器已验证 BFCL 选择、点击运行、独立数据集标签、Trace 和 URL 刷新回读。真实 `coding-glm-5.3-free` BFCL 运行 `6e1ea4db-568b-4db2-9646-75dd44c37d11` 如实记录 `RATE_LIMIT_EXCEEDED`；这证明真实请求与错误链路成立，不代表题目通过。
+2026-09-20 当前检出版本的最终质量门禁：`91 passed, 2 warnings in 2.07s`，Ruff format、Ruff lint、Mypy 和前端生产构建通过；Vite 构建 27 modules、954ms。两条 warning 来自 FastAPI/Starlette 的未来依赖弃用提示。浏览器已验证 BFCL 选择、点击运行、独立数据集标签、Trace 和 URL 刷新回读。真实 `coding-glm-5.3-free` BFCL 运行 `6e1ea4db-568b-4db2-9646-75dd44c37d11` 如实记录 `RATE_LIMIT_EXCEEDED`；这证明真实请求与错误链路成立，不代表题目通过。
 
 免费模型实测结论：GLM 5.3 普通请求和工具调用曾成功，本次 BFCL 请求受账号限流；GLM 5.2 普通请求成功但 BFCL 工具请求返回 `MODEL_NOT_FOUND`；Gemini 3.8 已退役；Kimi K3 当前无可用上游通道。平台已修复 JSON Schema `$defs` 兼容、显式 Token 预算、固定错误码和本地请求节流，不自动换模型或伪造通过。详见 ADR-006。
 
 ## 当前阶段
-**M1 切片 A、B、C 已签收；切片 D 的 BFCL 核心闭环已实现，等待一次上游可用时的真实成功样本后做最终签收。**
+**M1 切片 A、B、C 已签收；切片 D 的实现与代码门禁已通过；切片 E Replay 与导出已实现并完成 Fake 浏览器验证。完整实证签收还差有 Key 环境中的真实免费模型网页成功与目录复测。**
+- 当前检出环境没有 `AIHUBMIX_API_KEY` 或 `.env` Key，且 `artifacts/` 被忽略，因此本轮不能重新核验既有成功 Trace 文件，也不把文档记录改写成本机本轮实测。
+- 切片 D 复核和给 Antigravity 的最后交接见 `docs/handoffs/M1-slice-D-review-20260920.md`。
 - 严格落实 ADR-004 决策边界：BFCL 顺延为切片 D，切片 C 聚焦在相同模型、任务、工具、种子与预算下，对比 Baseline 与一次受控参数容错重试的 Recovery Agent 表现。
 - 完成 4 个原生 ToolLab 任务（ORD-001 shipped, ORD-002 delivered 多订单库, ORD-003 cancelled, ORD-004 pending 紧凑预算）。
 - 完成 Application 串行对照实验 Runner 与指标聚合（成功率、挽救率、Token 增量、平均步数与耗时）。

@@ -1,7 +1,10 @@
-"""Run the four user-selected models through the actual service and persist evidence."""
+"""Run selected free models through the actual service and persist evidence."""
 
+import argparse
 import asyncio
 import json
+import os
+from collections.abc import Sequence
 from pathlib import Path
 
 from apps.api.schemas import CreateEpisodeRequest
@@ -13,13 +16,28 @@ MODELS = (
     "xiaomi-mimo-v2.5-pro-free",
     "coding-minimax-m2.7-free",
 )
+ROOT = Path(__file__).resolve().parents[1]
+MODEL_CATALOG = ROOT / "benchmarks/tool_lab_core/models.json"
+DEFAULT_OUTPUT = ROOT / "artifacts/selected-model-results.json"
 
 
-async def main() -> None:
+def catalog_model_ids(path: Path = MODEL_CATALOG) -> tuple[str, ...]:
+    """Return every configured AIHubMix model ID in catalog order."""
+    catalog = json.loads(path.read_text(encoding="utf-8"))
+    return tuple(item["id"] for item in catalog["models"] if item.get("provider") == "aihubmix")
+
+
+async def verify_models(models: Sequence[str], output: Path = DEFAULT_OUTPUT) -> None:
     """Test two fixed tasks serially without automatic retries or model substitution."""
+    if not os.environ.get("AIHUBMIX_API_KEY", "").strip():
+        raise SystemExit(
+            "AIHUBMIX_API_KEY is not configured. Set it in the local backend environment; "
+            "never put the key in source, frontend code, or chat."
+        )
     service = EpisodeService()
-    results = []
-    for model in MODELS:
+    results: list[dict[str, object]] = []
+    output.parent.mkdir(parents=True, exist_ok=True)
+    for model in models:
         for suite, task in (
             ("bfcl_adapted", "bfcl-simple_python_0"),
             ("tool_lab_core", "order-status-001"),
@@ -48,10 +66,30 @@ async def main() -> None:
             )
             results.append(row)
             print(json.dumps(row, ensure_ascii=False), flush=True)
-            Path("artifacts/selected-model-results.json").write_text(
-                json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            output.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def main() -> None:
+    """Parse an explicit model scope and run real serial verification."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--all-catalog",
+        action="store_true",
+        help="verify every AIHubMix model currently shown in the web catalog",
+    )
+    parser.add_argument(
+        "--model",
+        action="append",
+        dest="models",
+        help="verify one model ID; repeat to test multiple models",
+    )
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    args = parser.parse_args()
+    models = (
+        tuple(args.models) if args.models else catalog_model_ids() if args.all_catalog else MODELS
+    )
+    asyncio.run(verify_models(models, args.output))
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

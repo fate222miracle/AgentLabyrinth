@@ -76,6 +76,7 @@ interface EpisodeArtifact {
       price_table_version: string;
       is_known: boolean;
     };
+    final_state: Record<string, unknown>;
   };
   evaluation: {
     success: boolean;
@@ -178,6 +179,49 @@ function explainFailure(detail: string): string {
   return explanations[code] ? `${explanations[code]} (${code})` : detail;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function snapshotAt(
+  artifact: EpisodeArtifact,
+  activeEventId: string | undefined,
+): { state: Record<string, unknown> | null; source: string } {
+  let state: Record<string, unknown> | null = null;
+  let source = '尚无环境快照';
+  for (const event of artifact.events) {
+    if (isRecord(event.payload.initial_state)) {
+      state = event.payload.initial_state;
+      source = '初始状态';
+    }
+    if (isRecord(event.payload.state)) {
+      state = event.payload.state;
+      source = `Step ${event.step_index} 更新后`;
+    }
+    if (event.event_id === activeEventId) break;
+  }
+  const lastEvent = artifact.events[artifact.events.length - 1];
+  if (activeEventId === lastEvent?.event_id && isRecord(artifact.episode.final_state)) {
+    state = artifact.episode.final_state;
+    source = 'Episode 最终状态';
+  }
+  return { state, source };
+}
+
+function downloadJson(filename: string, value: unknown): void {
+  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], {
+    type: 'application/json;charset=utf-8',
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'single' | 'experiment'>('experiment');
   const [meta, setMeta] = useState<MetaResponse | null>(null);
@@ -192,6 +236,8 @@ export default function App() {
   const [recentEpisodeIds, setRecentEpisodeIds] = useState<string[]>([]);
   const [inputEpisodeId, setInputEpisodeId] = useState<string>('');
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
+  const [eventTypeFilter, setEventTypeFilter] = useState<string>('ALL');
+  const [replayIndex, setReplayIndex] = useState<number>(0);
 
   // Experiment states
   const [expModel, setExpModel] = useState<string>('gemini-3.7-flash-free');
@@ -322,6 +368,12 @@ export default function App() {
       loadEpisodeById(epId);
     }
   }, []);
+
+  useEffect(() => {
+    setEventTypeFilter('ALL');
+    setReplayIndex(Math.max((artifact?.events.length ?? 1) - 1, 0));
+    setExpandedEvents({});
+  }, [artifact?.episode.episode_id]);
 
   const addRecentEpisodeId = (id: string) => {
     setRecentEpisodeIds((prev) => {
@@ -540,6 +592,17 @@ export default function App() {
   const experimentTasks = meta?.tasks.filter((task) => task.suite === 'tool_lab_core') ?? [];
   const singleTasks = meta?.tasks.filter((task) => task.suite === selectedSuite) ?? [];
   const bfclTaskCount = meta?.tasks.filter((task) => task.suite === 'bfcl_adapted').length ?? 0;
+  const eventTypes = Array.from(new Set(artifact?.events.map((event) => event.event_type) ?? []));
+  const visibleEvents =
+    artifact?.events.filter(
+      (event) => eventTypeFilter === 'ALL' || event.event_type === eventTypeFilter,
+    ) ?? [];
+  const safeReplayIndex = Math.min(replayIndex, Math.max(visibleEvents.length - 1, 0));
+  const activeReplayEvent = visibleEvents[safeReplayIndex];
+  const replaySnapshot = artifact
+    ? snapshotAt(artifact, activeReplayEvent?.event_id)
+    : { state: null, source: '尚无环境快照' };
+  const replaySteps = Array.from(new Set(visibleEvents.map((event) => event.step_index)));
 
   return (
     <div>
@@ -554,21 +617,21 @@ export default function App() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div className="header-actions">
             <div className="nav-tabs">
               <button
                 id="tab-experiment"
                 className={`nav-tab ${activeTab === 'experiment' ? 'active' : ''}`}
                 onClick={() => setActiveTab('experiment')}
               >
-                🔬 对照实验 (Baseline vs Recovery)
+                🔬 对照实验 <span className="nav-english">(Baseline vs Recovery)</span>
               </button>
               <button
                 id="tab-single"
                 className={`nav-tab ${activeTab === 'single' ? 'active' : ''}`}
                 onClick={() => setActiveTab('single')}
               >
-                ⚡ 单次运行 (Single Episode)
+                ⚡ 单次运行 <span className="nav-english">(Single Episode)</span>
               </button>
             </div>
 
@@ -602,16 +665,30 @@ export default function App() {
                   {experiment ? experiment.experiment_id : '尚未运行'}
                 </span>
                 {experiment && (
-                  <button
-                    id="btn-copy-exp-id"
-                    className="btn-secondary"
-                    onClick={() => {
-                      navigator.clipboard.writeText(experiment.experiment_id);
-                      alert('Experiment ID 已复制到剪贴板！');
-                    }}
-                  >
-                    复制 ID
-                  </button>
+                  <>
+                    <button
+                      id="btn-copy-exp-id"
+                      className="btn-secondary"
+                      onClick={() => {
+                        navigator.clipboard.writeText(experiment.experiment_id);
+                        alert('Experiment ID 已复制到剪贴板！');
+                      }}
+                    >
+                      复制 ID
+                    </button>
+                    <button
+                      id="btn-export-experiment"
+                      className="btn-secondary"
+                      onClick={() =>
+                        downloadJson(
+                          `agentlabyrinth-experiment-${experiment.experiment_id}.json`,
+                          experiment,
+                        )
+                      }
+                    >
+                      导出 JSON
+                    </button>
+                  </>
                 )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -1186,16 +1263,30 @@ export default function App() {
                   {artifact ? artifact.episode.episode_id : '尚未运行'}
                 </span>
                 {artifact && (
-                  <button
-                    id="btn-copy-id"
-                    className="btn-secondary"
-                    onClick={() => {
-                      navigator.clipboard.writeText(artifact.episode.episode_id);
-                      alert('Episode ID 已复制到剪贴板！');
-                    }}
-                  >
-                    复制 ID
-                  </button>
+                  <>
+                    <button
+                      id="btn-copy-id"
+                      className="btn-secondary"
+                      onClick={() => {
+                        navigator.clipboard.writeText(artifact.episode.episode_id);
+                        alert('Episode ID 已复制到剪贴板！');
+                      }}
+                    >
+                      复制 ID
+                    </button>
+                    <button
+                      id="btn-export-episode"
+                      className="btn-secondary"
+                      onClick={() =>
+                        downloadJson(
+                          `agentlabyrinth-episode-${artifact.episode.episode_id}.json`,
+                          artifact,
+                        )
+                      }
+                    >
+                      导出 JSON
+                    </button>
+                  </>
                 )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -1536,7 +1627,7 @@ export default function App() {
                 {/* Trace Timeline */}
                 <section className="card" id="trace-panel">
                   <div className="card-title">
-                    <span>事件级 Trace 时间线</span>
+                    <span>Trace Replay</span>
                     {artifact && (
                       <span className="badge" style={{ fontFamily: 'var(--font-mono)' }}>
                         {artifact.events.length} 个事件
@@ -1544,37 +1635,160 @@ export default function App() {
                     )}
                   </div>
                   <div className="card-desc">
-                    按事件时间戳严格呈现模型提议、工具格式校验、执行反馈及环境状态。
+                    仅回放已保存的事件和环境快照，不重新请求模型或执行工具。
                   </div>
 
                   {artifact && artifact.events.length > 0 ? (
-                    <div className="timeline-container" id="timeline-list">
-                      {artifact.events.map((ev) => {
-                        const isExpanded = !!expandedEvents[ev.event_id];
-                        return (
-                          <div key={ev.event_id} className="timeline-event">
-                            <div
-                              className="event-header"
-                              onClick={() => toggleEventExpand(ev.event_id)}
-                            >
-                              <div className="event-info">
-                                <span className="event-step-pill">Step {ev.step_index}</span>
-                                <span className="event-name">{ev.event_type}</span>
-                              </div>
-                              <div className="event-meta">
-                                <span>{new Date(ev.timestamp).toLocaleTimeString()}</span>
-                                <span>{isExpanded ? '▲ 收起' : '▼ 展开'}</span>
-                              </div>
+                    <>
+                      <div className="replay-toolbar" aria-label="Replay controls">
+                        <label>
+                          <span>事件类型</span>
+                          <select
+                            id="trace-event-filter"
+                            className="form-select"
+                            value={eventTypeFilter}
+                            onChange={(event) => {
+                              setEventTypeFilter(event.target.value);
+                              setReplayIndex(0);
+                            }}
+                          >
+                            <option value="ALL">全部事件</option>
+                            {eventTypes.map((eventType) => (
+                              <option key={eventType} value={eventType}>
+                                {eventType}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>跳转 Step</span>
+                          <select
+                            id="trace-step-jump"
+                            className="form-select"
+                            value={activeReplayEvent?.step_index ?? ''}
+                            disabled={visibleEvents.length === 0}
+                            onChange={(event) => {
+                              const step = Number(event.target.value);
+                              const index = visibleEvents.findIndex(
+                                (candidate) => candidate.step_index === step,
+                              );
+                              setReplayIndex(Math.max(index, 0));
+                            }}
+                          >
+                            {replaySteps.map((step) => (
+                              <option key={step} value={step}>
+                                Step {step}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="replay-buttons">
+                          <button
+                            id="trace-previous"
+                            className="btn-secondary"
+                            disabled={safeReplayIndex <= 0 || visibleEvents.length === 0}
+                            onClick={() => setReplayIndex((index) => Math.max(index - 1, 0))}
+                          >
+                            ← 上一步
+                          </button>
+                          <span className="replay-position">
+                            {visibleEvents.length === 0
+                              ? '0 / 0'
+                              : `${safeReplayIndex + 1} / ${visibleEvents.length}`}
+                          </span>
+                          <button
+                            id="trace-next"
+                            className="btn-secondary"
+                            disabled={
+                              visibleEvents.length === 0 ||
+                              safeReplayIndex >= visibleEvents.length - 1
+                            }
+                            onClick={() =>
+                              setReplayIndex((index) =>
+                                Math.min(index + 1, visibleEvents.length - 1),
+                              )
+                            }
+                          >
+                            下一步 →
+                          </button>
+                        </div>
+                      </div>
+
+                      {activeReplayEvent ? (
+                        <div className="replay-grid">
+                          <aside className="replay-state-panel" aria-label="Environment snapshot">
+                            <div className="replay-panel-heading">
+                              <span>Environment State</span>
+                              <span className="badge badge-cyan">{replaySnapshot.source}</span>
                             </div>
-                            {isExpanded && (
-                              <div className="event-body">
-                                <pre>{JSON.stringify(ev.payload, null, 2)}</pre>
+                            {replaySnapshot.state ? (
+                              <pre>{JSON.stringify(replaySnapshot.state, null, 2)}</pre>
+                            ) : (
+                              <div className="replay-unavailable">
+                                当前事件之前没有已保存快照。历史产物仍可继续浏览事件。
                               </div>
                             )}
+                          </aside>
+
+                          <div className="replay-event-panel">
+                            <div className="replay-panel-heading">
+                              <span>当前事件</span>
+                              <span className="event-step-pill">
+                                Step {activeReplayEvent.step_index}
+                              </span>
+                            </div>
+                            <div className="active-event-name">{activeReplayEvent.event_type}</div>
+                            <div className="event-meta">
+                              {new Date(activeReplayEvent.timestamp).toLocaleString()} ·{' '}
+                              {activeReplayEvent.duration_ms} ms
+                            </div>
+                            <pre>{JSON.stringify(activeReplayEvent.payload, null, 2)}</pre>
                           </div>
-                        );
-                      })}
-                    </div>
+                        </div>
+                      ) : (
+                        <div className="empty-state compact-empty">
+                          当前筛选没有匹配事件，请选择其他事件类型。
+                        </div>
+                      )}
+
+                      {visibleEvents.length > 0 && (
+                        <div className="timeline-container" id="timeline-list">
+                          {visibleEvents.map((ev, index) => {
+                            const isExpanded = !!expandedEvents[ev.event_id];
+                            const isActive = ev.event_id === activeReplayEvent?.event_id;
+                            return (
+                              <div
+                                key={ev.event_id}
+                                className={`timeline-event ${isActive ? 'active' : ''}`}
+                              >
+                                <button
+                                  type="button"
+                                  className="event-header"
+                                  onClick={() => {
+                                    setReplayIndex(index);
+                                    toggleEventExpand(ev.event_id);
+                                  }}
+                                >
+                                  <div className="event-info">
+                                    <span className="event-step-pill">Step {ev.step_index}</span>
+                                    <span className="event-name">{ev.event_type}</span>
+                                  </div>
+                                  <div className="event-meta">
+                                    <span>{new Date(ev.timestamp).toLocaleTimeString()}</span>
+                                    <span>{isExpanded ? '▲ 收起' : '▼ 展开'}</span>
+                                  </div>
+                                </button>
+                                {isExpanded && (
+                                  <div className="event-body">
+                                    <pre>{JSON.stringify(ev.payload, null, 2)}</pre>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
                   ) : (
                     <div className="empty-state">
                       <div className="empty-icon">📜</div>

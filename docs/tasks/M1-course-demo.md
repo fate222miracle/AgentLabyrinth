@@ -1,6 +1,6 @@
 # M1 课程演示任务卡
  
-SSOT：`docs/product/requirements.md` V0.5。ADR-003 与 ADR-004 Accepted。切片 A 已签收，切片 B 的基本网页流程已复核；当前执行切片 C 的 Agent 对照实验，详见 `docs/tasks/M1-slice-C-antigravity.md`。
+SSOT：`docs/product/requirements.md` V0.5。ADR-003、ADR-004 与 ADR-007 Accepted。切片 A、B、C 已签收，切片 D 代码门禁通过；当前由 Codex 执行切片 E 的 Replay 与演示完整度，详见 `docs/tasks/M1-slice-E-codex.md`。
 
 Antigravity 的具体开发顺序、契约阻塞点和证据格式见 `docs/handoffs/M1-antigravity-development-guide.md` 与 `docs/handoffs/current-state.md`。
 
@@ -9,10 +9,10 @@ Antigravity 的具体开发顺序、契约阻塞点和证据格式见 `docs/hand
 
 ## 实施顺序
 1. **真实模型闭环（已完成）**：AIHubMix 后端 Provider、多轮工具调用消息、真实 usage/未知费用契约已落地；`gemini-3.7-flash-free` 已通过真实 ToolLab Episode。`coding-kimi-k3-free` 的通道故障单独记录，不影响已验证模型的切片 A 结论。
-2. **Web 第一屏**：最小 FastAPI 端点接收固定实验配置并调用现有 Runner；React/Vite 提供实验配置、运行状态和单次结果。API Key 从不传给浏览器；页面展示真实/Fake 标识。
-3. **Agent 对照实验**：同一模型、任务、工具、Seed 和预算下运行 Baseline 与 Recovery；先用 Fake 确定性证明一次参数纠错的收益与代价，再保留真实 Gemini 的探索性结果。
-4. **外部数据**：切片 C 验收后再锁定 BFCL 上游 commit 和许可文件；建立机器可读 manifest、选题 ID 和校验值。仅接支持一轮单工具调用的非 Live 题目，提供独立评分、适配偏差说明与复现测试。
-5. **演示完整度**：完善 Trace 回看、JSON 导出、信息层级、空状态、加载状态、错误与断网反馈。录制现场演示脚本并完成一次真实 API 运行记录。
+2. **Web 第一屏（已完成）**：最小 FastAPI 端点接收固定实验配置并调用现有 Runner；React/Vite 提供实验配置、运行状态和单次结果。API Key 从不传给浏览器；页面展示真实/Fake 标识。
+3. **Agent 对照实验（已完成）**：同一模型、任务、工具、Seed 和预算下运行 Baseline 与 Recovery；Fake 确定性结果证明一次参数纠错的收益与代价，真实模型故障如实记录。
+4. **外部数据（代码完成）**：已锁定 BFCL 上游 commit、许可判断、机器可读 manifest、选题 ID 与校验值，接入 8 道单轮单工具非 Live 题目；最终网页真实成功证据待有 Key 时补录。
+5. **演示完整度（切片 E 已实现）**：已完成 Trace 单步回看、事件筛选、Environment Snapshot、Episode/Experiment JSON 导出和 390px 响应式验证；还需在有 Key 的环境复测免费模型并录制最终现场演示。
 
 ## M1 验收
 - 一次真实 AIHubMix 工具调用成功，模型 ID、响应 usage、实际限制和错误路径有记录；不提交 Key。

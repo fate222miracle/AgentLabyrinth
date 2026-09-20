@@ -1,6 +1,6 @@
-# M1 切片 D：真实 BFCL 子集接入（暂缓）
+# M1 切片 D：真实 BFCL 子集接入（代码验收通过，网页成功实证待补）
 
-SSOT：`docs/product/requirements.md` V0.5（M1 例外增补）；ADR-003/004 Accepted。项目负责人已决定先完成 Agent 对照实验，因此本卡顺延为切片 D，**切片 C 未经 Codex 验收前不得开始**。之后才授权 Antigravity 实现一个真实、固定、非 Live 的 BFCL 改编子集，从同一 Web 入口运行并查看结果。
+SSOT：`docs/product/requirements.md` V0.5（M1 例外增补）；ADR-003/004 Accepted。切片 C 已验收，切片 D 已完成一个真实、固定、非 Live 的 BFCL 改编子集，并从同一 Web 入口运行和查看结果。2026-09-20 Codex 已通过代码、来源、评分和自动化门禁复核；仓库已有两个真实模型通过 BFCL 示例的记录，但当前检出环境没有 Key 和对应忽略产物，尚需补存一次真实模型网页成功证据后再作完整实证签收。
 
 ## 先固定来源，再编码
 
@@ -26,3 +26,12 @@ SSOT：`docs/product/requirements.md` V0.5（M1 例外增补）；ADR-003/004 Ac
 ## 当前禁止
 
 BFCL 全集、Live、并行/多工具、官方榜单评分、第二个公开数据集、任意上游代码执行、数据库、批量任务及 UI 美化。以后扩大范围先更新 SSOT/ADR。
+
+## 2026-09-20 Codex 复核记录
+
+- 固定来源提交、两个原始文件 SHA256、8 个题目 ID、转换快照 SHA256、许可判断和非官方协议标签均已落入 manifest。
+- 导入器显式固定 CRLF 字节格式，先校验原始文件和转换结果，再写出子集；已覆盖缓存离线重建、来源损坏和无缓存下载失败。
+- 独立 Adapter、无副作用 Environment、Evaluator、API 白名单、Web 选择与 Trace 回读均复用现有主调用链，未修改公共 Domain 契约。
+- 全量门禁：`89 passed`，Ruff format、Ruff lint、mypy、前端生产构建和 `git diff --check` 通过。第三方依赖产生 2 条弃用警告，不影响本切片行为。
+- 真实服务成功记录：小米 `43895e64-447e-487c-93aa-2f5fa2c418e8`、MiniMax `b3b9f69b-b68e-4372-ad95-b6cce0e7ee66`，均为 `simple_python_0` 的 `exact_call_match`；这些由脚本经 EpisodeService 产生，不冒充网页成功截图。
+- 最终待办只有实证留档：在配置本机 Key 的环境中从网页运行上述任一可用真实模型，刷新回读同一 Episode ID，并记录题目 ID、模型 ID、Trace、usage、独立匹配指标和页面证据。不得用 Fake 或已有脚本记录替代。

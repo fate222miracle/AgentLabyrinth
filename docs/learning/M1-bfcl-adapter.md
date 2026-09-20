@@ -30,7 +30,7 @@ Web POST /api/v1/episodes (suite=bfcl_adapted)
 
 ## 状态变化
 
-1. Adapter 校验 manifest 与本地子集 SHA256，找不到缓存或哈希不一致就停止。
+1. 导入器先校验两个固定原始文件的 SHA256，在内存中生成固定 CRLF 字节快照并核对转换 SHA256，全部通过后才写出子集；Adapter 加载时再次校验 manifest 与本地子集 SHA256。
 2. Runtime 只拿到公开问题、约束与工具 schema；`goal_conditions.expected_call` 不进入模型消息。
 3. 模型提出一个 `ToolCall`。Registry 校验工具名、必填字段、类型和额外字段。
 4. Environment 只保存被校验的提议，立即结束；不运行 Python、Shell 或外部 API。
@@ -38,7 +38,8 @@ Web POST /api/v1/episodes (suite=bfcl_adapted)
 
 ## 失败路径
 
-- 缓存缺失或来源/转换哈希不一致：拒绝加载，不生成虚构题。
+- 缓存缺失且下载失败：明确报告哪个来源不可用；已缓存来源可断网重建。
+- 来源或转换哈希不一致：写出前停止并保留已有快照，不生成虚构题。
 - 非白名单题目 ID：API 返回 400。
 - 无工具、错工具、错参数、多工具：独立失败原因，不把 JSON 合法等同于答案正确。
 - 模型网关认证、限流、退役、无通道或网络错误：Trace 只保存固定安全错误码。
@@ -53,4 +54,6 @@ cd apps/web
 npm run dev
 ```
 
-浏览器进入“单次运行”，选择“BFCL 改编子集”。2026-09-20 的真实网页证据均使用 `simple_python_0`：GLM 5.3 Episode `6e1ea4db-568b-4db2-9646-75dd44c37d11` 返回 `RATE_LIMIT_EXCEEDED`；GLM 5.2 Episode `b5659967-5c72-4149-9c77-ab8b45b9433e` 返回 `MODEL_NOT_FOUND`。刷新后仍回读同一 ID、结果和 4 个事件。这些结果证明真实请求、错误分类、持久化与回放成立；它们不证明题目通过。正确调用、错工具、错参数、无调用、非法 ID、哈希不一致和只读回放由自动化测试覆盖。
+浏览器进入“单次运行”，选择“BFCL 改编子集”。2026-09-20 的真实网页失败证据均使用 `simple_python_0`：GLM 5.3 Episode `6e1ea4db-568b-4db2-9646-75dd44c37d11` 返回 `RATE_LIMIT_EXCEEDED`；GLM 5.2 Episode `b5659967-5c72-4149-9c77-ab8b45b9433e` 返回 `MODEL_NOT_FOUND`。刷新后仍回读同一 ID、结果和 4 个事件。这些结果证明真实请求、错误分类、持久化与回放成立；它们不证明题目通过。
+
+同日脚本通过 EpisodeService 得到两个真实成功样本：小米 `xiaomi-mimo-v2.5-pro-free` Episode `43895e64-447e-487c-93aa-2f5fa2c418e8`（502 Tokens），MiniMax `coding-minimax-m2.7-free` Episode `b3b9f69b-b68e-4372-ad95-b6cce0e7ee66`（391 Tokens），均为 `simple_python_0` 的一次模型调用、一次工具提议和 `exact_call_match`。这些记录证明真实 Provider 闭环成功，不替代任务卡要求的网页成功实证。当前检出环境没有本机 Key 和被忽略的 Trace 文件，需在有 Key 的机器补录网页证据。正确调用、错工具、错参数、无调用、非法 ID、来源/转换哈希不一致、离线缓存和只读回放由自动化测试覆盖。

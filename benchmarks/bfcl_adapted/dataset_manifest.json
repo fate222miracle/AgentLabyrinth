@@ -7,7 +7,7 @@
   "data_license": "No separate dataset license found at the pinned commit",
   "upstream_dependencies": [],
   "import_mode": "reference_adapter_local_cache",
-  "transformation_script": "scripts/import_bfcl_subset.py@1.0.0",
+  "transformation_script": "scripts/import_bfcl_subset.py@1.1.0",
   "attribution": "BFCL by the Gorilla / UC Berkeley authors; cite the upstream dataset README and papers.",
   "redistribution_allowed": false,
   "official_protocol_compatible": false,

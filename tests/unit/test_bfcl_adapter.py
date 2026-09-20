@@ -89,9 +89,7 @@ def run_case(action: ToolCall | FinalAnswer) -> EpisodeArtifact:
 
 
 def test_correct_call_succeeds_and_wrong_cases_fail() -> None:
-    correct = run_case(
-        ToolCall(call_id="1", name="math.factorial", arguments={"number": 5})
-    )
+    correct = run_case(ToolCall(call_id="1", name="math.factorial", arguments={"number": 5}))
     assert correct.evaluation.success is True
     assert correct.evaluation.metrics["official_bfcl_score"] is False
     assert correct.episode.tool_call_count == 1
@@ -100,9 +98,7 @@ def test_correct_call_succeeds_and_wrong_cases_fail() -> None:
     assert wrong_tool.evaluation.success is False
     assert wrong_tool.evaluation.reason == "wrong_tool"
 
-    wrong_args = run_case(
-        ToolCall(call_id="1", name="math.factorial", arguments={"number": 6})
-    )
+    wrong_args = run_case(ToolCall(call_id="1", name="math.factorial", arguments={"number": 6}))
     assert wrong_args.evaluation.success is False
     assert wrong_args.evaluation.reason == "wrong_arguments"
 

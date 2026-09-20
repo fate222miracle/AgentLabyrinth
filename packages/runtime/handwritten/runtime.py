@@ -346,7 +346,7 @@ class HandwrittenRuntime(AgentRuntime):
                         record(
                             EventType.ENVIRONMENT_UPDATED,
                             step_idx,
-                            {"done": step_res.done},
+                            {"done": step_res.done, "state": last_state},
                         )
                         messages.append(
                             Message(
