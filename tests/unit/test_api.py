@@ -1,17 +1,33 @@
 """Unit tests for FastAPI endpoints (apps.api)."""
 
+import hashlib
+import json
 import os
 from collections.abc import Generator
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
 from apps.api.main import app, get_episode_service
-from apps.api.schemas import MetaResponse
+from apps.api.schemas import MetaResponse, is_model_permitted
 from apps.api.service import EpisodeService
+from packages.domain.models import ModelResponse, ToolCall
+from packages.environments.bfcl.adapter import BFCLAdapter
+
+
+def test_user_selected_models_are_permitted() -> None:
+    """The four explicitly authorized model IDs pass the shared API gate."""
+    for model in (
+        "deepseek-v4-flash-0731-free",
+        "qwen3.8-27b-free",
+        "xiaomi-mimo-v2.5-pro-free",
+        "coding-minimax-m2.7-free",
+    ):
+        assert is_model_permitted(model)
+    assert not is_model_permitted("unapproved-paid-model")
 
 
 @pytest.fixture
@@ -38,8 +54,8 @@ def test_get_meta(client: TestClient) -> None:
     assert resp.status_code == 200
     data = resp.json()
     meta = MetaResponse.model_validate(data)
-    assert meta.default_model == "coding-glm-5.3-free"
-    assert any(m.id == "coding-glm-5.3-free" and m.is_default for m in meta.models)
+    assert meta.default_model == "xiaomi-mimo-v2.5-pro-free"
+    assert any(m.id == "xiaomi-mimo-v2.5-pro-free" and m.is_default for m in meta.models)
     assert any(m.id == "fake" for m in meta.models)
     assert any(m.id == "coding-kimi-k3-free" and m.is_experimental for m in meta.models)
     assert any(t.id == "order-status-001" for t in meta.tasks)
@@ -217,3 +233,160 @@ def test_get_nonexistent_experiment_404(client: TestClient) -> None:
     random_id = uuid4()
     resp = client.get(f"/api/v1/experiments/{random_id}")
     assert resp.status_code == 404
+
+
+def test_execute_experiment_preserves_full_model_config_and_scenario(
+    client: TestClient, temp_artifacts_dir: Path
+) -> None:
+    """API execution preserves authoritative model dictionary and resolved scenario."""
+    # Scenario omitted, default should be resolved to 'invalid-then-success'
+    payload = {
+        "provider": "fake",
+        "model": "fake-model",
+        "task_ids": ["order-status-001"],
+        "seed": 1,
+    }
+    resp = client.post("/api/v1/experiments", json=payload)
+    assert resp.status_code == 201
+    exp = resp.json()["experiment"]
+
+    # Model configuration must be an authoritative dict, not a string
+    assert isinstance(exp["config"]["model"], dict)
+    assert exp["config"]["model"]["provider"] == "fake"
+    assert exp["config"]["model"]["model"] == "fake-model"
+    assert exp["config"]["model"]["temperature"] == 0.0
+    assert exp["config"]["scenario"] == "invalid-then-success"
+
+    config_hash_1 = exp["config_hash"]
+
+    # Read back from disk via GET
+    exp_id = exp["experiment_id"]
+    get_resp = client.get(f"/api/v1/experiments/{exp_id}")
+    assert get_resp.status_code == 200
+    saved_cfg = get_resp.json()["experiment"]["config"]
+    assert isinstance(saved_cfg["model"], dict)
+    assert saved_cfg["scenario"] == "invalid-then-success"
+
+    # Running with different scenario must change config_hash
+    payload2 = {
+        "provider": "fake",
+        "model": "fake-model",
+        "scenario": "success",
+        "task_ids": ["order-status-001"],
+        "seed": 1,
+    }
+    resp2 = client.post("/api/v1/experiments", json=payload2)
+    assert resp2.status_code == 201
+    exp2 = resp2.json()["experiment"]
+    config_hash_2 = exp2["config_hash"]
+    assert config_hash_1 != config_hash_2
+
+
+def test_explicit_budget_is_saved_for_both_agents(client: TestClient) -> None:
+    """An override is explicit and identical in both persisted episodes."""
+    response = client.post(
+        "/api/v1/experiments",
+        json={
+            "provider": "fake",
+            "model": "fake-model",
+            "task_ids": ["order-status-001"],
+            "token_budget": 8000,
+        },
+    )
+    assert response.status_code == 201
+    experiment = response.json()["experiment"]
+    assert experiment["config"]["token_budget"] == 8000
+    for episode_id in experiment["episode_ids"]:
+        artifact = client.get(f"/api/v1/episodes/{episode_id}").json()["artifact"]
+        assert artifact["task"]["token_budget"] == 8000
+        assert artifact["task"]["evaluator_config"]["source_token_budget"] == 1000
+        assert artifact["agent"]["budget"]["max_prompt_tokens"] == 8000
+    invalid = client.post(
+        "/api/v1/episodes",
+        json={
+            "provider": "fake",
+            "model": "fake-model",
+            "token_budget": 20001,
+        },
+    )
+    assert invalid.status_code == 422
+
+
+def test_bfcl_episode_whitelist_and_readback_do_not_recall_model(
+    tmp_path: Path,
+) -> None:
+    """Run one adapted case, reject unknown IDs, and read the saved trace offline."""
+    case = {
+        "id": "simple_python_test",
+        "split": "evaluation",
+        "question": "Calculate the factorial of 5.",
+        "tool": {
+            "name": "math.factorial",
+            "description": "Calculate a factorial.",
+            "parameters": {
+                "type": "object",
+                "properties": {"number": {"type": "integer"}},
+                "required": ["number"],
+            },
+        },
+        "ground_truth": {"math.factorial": {"number": [5]}},
+    }
+    subset = tmp_path / "subset.json"
+    subset.write_text(json.dumps([case]), encoding="utf-8")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "checksum": hashlib.sha256(subset.read_bytes()).hexdigest(),
+                "selected_cases": {"development": [], "evaluation": [case["id"]]},
+                "evaluator_version": "bfcl-local-exact-v1",
+                "source_version_or_commit": "test",
+                "adapter_version": "test",
+                "result_label": "AgentLabyrinth-adapted subset",
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = EpisodeService(artifacts_dir=tmp_path / "artifacts")
+    service.bfcl = BFCLAdapter(manifest, subset)
+    app.dependency_overrides[get_episode_service] = lambda: service
+    response = ModelResponse(
+        action=ToolCall(call_id="bfcl-1", name="math.factorial", arguments={"number": 5})
+    )
+    try:
+        with TestClient(app) as test_client:
+            with patch(
+                "packages.providers.fake.FakeModelProvider.generate",
+                new=AsyncMock(return_value=response),
+            ) as generate:
+                created = test_client.post(
+                    "/api/v1/episodes",
+                    json={
+                        "provider": "fake",
+                        "model": "fake-model",
+                        "suite": "bfcl_adapted",
+                        "task_id": "bfcl-simple_python_test",
+                    },
+                )
+                assert created.status_code == 201
+                assert created.json()["artifact"]["evaluation"]["success"] is True
+                assert generate.await_count == 1
+
+            episode_id = created.json()["artifact"]["episode"]["episode_id"]
+            with patch("packages.providers.fake.FakeModelProvider.generate") as generate:
+                loaded = test_client.get(f"/api/v1/episodes/{episode_id}")
+                assert loaded.status_code == 200
+                generate.assert_not_called()
+
+            invalid = test_client.post(
+                "/api/v1/episodes",
+                json={
+                    "provider": "fake",
+                    "model": "fake-model",
+                    "suite": "bfcl_adapted",
+                    "task_id": "unknown",
+                },
+            )
+            assert invalid.status_code == 400
+    finally:
+        app.dependency_overrides.clear()

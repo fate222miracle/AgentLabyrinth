@@ -16,6 +16,9 @@ ALLOWED_AIHUBMIX_MODELS: set[str] = {
     "coding-kimi-k3-free",
     "coding-glm-5.3-flash-free",
     "deepseek-v4-flash-0731-free",
+    "qwen3.8-27b-free",
+    "xiaomi-mimo-v2.5-pro-free",
+    "coding-minimax-m2.7-free",
 }
 
 ALLOWED_FAKE_SCENARIOS: set[str] = {
@@ -62,6 +65,8 @@ class TaskOption(BaseModel):
     description: str
     max_steps: int
     token_budget: int
+    suite: Literal["tool_lab_core", "bfcl_adapted"] = "tool_lab_core"
+    split: str = "development"
 
 
 class MetaResponse(BaseModel):
@@ -91,7 +96,9 @@ class CreateEpisodeRequest(BaseModel):
         | None
     ) = None
     task_id: str = "order-status-001"
+    suite: Literal["tool_lab_core", "bfcl_adapted"] = "tool_lab_core"
     max_steps: int | None = Field(default=None, ge=1, le=20)
+    token_budget: int | None = Field(default=None, ge=100, le=20000)
 
 
 class EpisodeResponse(BaseModel):
@@ -133,6 +140,7 @@ class CreateExperimentRequest(BaseModel):
         ]
     )
     seed: int = 1
+    token_budget: int | None = Field(default=None, ge=100, le=20000)
 
 
 class ExperimentResponse(BaseModel):

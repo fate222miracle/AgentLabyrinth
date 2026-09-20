@@ -73,10 +73,13 @@ def test_experiment_runner_deterministic_recovery() -> None:
                 provider_factory=lambda: FakeModelProvider(scenario="invalid_then_success"),
                 seed=42,
                 artifacts_dir=artifacts_dir,
+                config_metadata={"model": {"temperature": 1.5}, "seed": 999},
             )
         )
 
         assert artifact.metrics.total_pairs == 4
+        assert artifact.config["model"]["temperature"] == base_agent.model.temperature
+        assert artifact.config["seed"] == 42
         # Baseline failed on all 4 because of initial invalid arguments
         assert artifact.metrics.baseline_success_count == 0
         assert artifact.metrics.baseline_success_rate == 0.0
@@ -193,3 +196,59 @@ def test_config_hash_deterministic() -> None:
     cfg1 = {"b": 2, "a": 1, "c": [3, 4]}
     cfg2 = {"a": 1, "c": [3, 4], "b": 2}
     assert compute_config_hash(cfg1) == compute_config_hash(cfg2)
+
+
+def test_read_legacy_experiment_artifact_preserves_none() -> None:
+    """Reading legacy experiment artifact without new metric fields preserves None."""
+    legacy_file = ROOT / "tests/fixtures/legacy_experiment.json"
+    assert legacy_file.is_file()
+
+    loaded = read_experiment(legacy_file)
+    assert loaded.metrics.retry_eligible_count is None
+    assert loaded.metrics.baseline_avg_model_calls is None
+    assert loaded.metrics.recovery_avg_model_calls is None
+    assert loaded.metrics.baseline_avg_tool_calls is None
+    assert loaded.metrics.recovery_avg_tool_calls is None
+    assert loaded.metrics.retry_recovery_count == 4
+
+    for pair in loaded.pairs:
+        assert pair.retry_eligible is None
+        assert pair.baseline_model_calls is None
+        assert pair.recovery_model_calls is None
+
+
+def test_forbidden_tool_with_invalid_arguments_not_retry_eligible() -> None:
+    """Forbidden tool with invalid arguments must have retry_eligible=False."""
+    tasks = [t.model_copy(update={"forbidden_tools": ("query_records",)}) for t in load_tasks()[:2]]
+    base_agent, rec_agent = make_agents()
+
+    with TemporaryDirectory() as tmp_dir:
+        artifacts_dir = Path(tmp_dir)
+
+        artifact = asyncio.run(
+            run_experiment(
+                baseline_agent=base_agent,
+                recovery_agent=rec_agent,
+                tasks=tasks,
+                provider_factory=lambda: FakeModelProvider(scenario="invalid_arguments"),
+                seed=1,
+                artifacts_dir=artifacts_dir,
+            )
+        )
+
+        assert artifact.metrics.total_pairs == 2
+        assert artifact.metrics.baseline_success_count == 0
+        assert artifact.metrics.recovery_success_count == 0
+        assert artifact.metrics.retry_eligible_count == 0
+        assert artifact.metrics.retry_recovery_count == 0
+        assert artifact.metrics.retry_recovery_rate == 0.0
+
+        for pair in artifact.pairs:
+            assert pair.baseline_success is False
+            assert pair.recovery_success is False
+            assert pair.retry_eligible is False
+            assert pair.recovered is False
+            assert pair.baseline_model_calls == 1
+            assert pair.recovery_model_calls == 1
+            assert pair.baseline_tool_calls == 0
+            assert pair.recovery_tool_calls == 0

@@ -169,3 +169,51 @@ def test_recovery_does_not_retry_when_budget_exceeded() -> None:
     assert res.termination_reason == TerminationReason.MAX_STEPS
     assert "max_model_calls_reached" in res.detail
     assert res.model_call_count == 1
+
+
+def test_forbidden_tool_with_invalid_arguments_terminates_immediately() -> None:
+    """Forbidden tool with invalid arguments must terminate immediately without retry."""
+    task = load_task()
+    forbidden_task = task.model_copy(update={"forbidden_tools": ("query_records",)})
+    agent = make_agent("handwritten_recovery")
+    env = ToolLabEnvironment()
+    provider = FakeModelProvider(scenario="invalid_arguments")
+    runtime = HandwrittenRuntime(provider=provider)
+    recorder = JsonTraceRecorder(RunConfig())
+
+    res = asyncio.run(runtime.run(agent, forbidden_task, env, recorder))
+
+    assert res.termination_reason == TerminationReason.FAILED
+    assert "forbidden_tool" in res.detail
+    # Must stop after exactly 1 model call with 0 tool executions
+    assert res.model_call_count == 1
+    assert res.tool_call_count == 0
+
+    # Verify that validation recorded FORBIDDEN_TOOL and permitted=False
+    validation_events = [
+        e for e in recorder.events if e.event_type == EventType.TOOL_CALL_VALIDATED
+    ]
+    assert len(validation_events) == 1
+    assert validation_events[0].payload["permitted"] is False
+    assert validation_events[0].payload["error_code"] == "FORBIDDEN_TOOL"
+
+
+def test_provider_failure_code_survives_without_retry() -> None:
+    """Known safe provider errors reach the artifact, not their raw upstream body."""
+    from unittest.mock import AsyncMock
+
+    from packages.domain.ports import ModelProviderError
+
+    provider = FakeModelProvider()
+    provider.generate = AsyncMock(side_effect=ModelProviderError("RATE_LIMIT_EXCEEDED"))  # type: ignore[method-assign]
+    result = asyncio.run(
+        HandwrittenRuntime(provider).run(
+            make_agent("handwritten_recovery"),
+            load_task(),
+            ToolLabEnvironment(),
+            JsonTraceRecorder(RunConfig()),
+        )
+    )
+    assert result.detail == "provider_error: RATE_LIMIT_EXCEEDED"
+    assert result.model_call_count == 1
+    assert result.tool_call_count == 0

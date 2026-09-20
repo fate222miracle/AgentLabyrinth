@@ -17,6 +17,8 @@ interface TaskOption {
   description: string;
   max_steps: number;
   token_budget: number;
+  suite: 'tool_lab_core' | 'bfcl_adapted';
+  split: string;
 }
 
 interface MetaResponse {
@@ -50,6 +52,11 @@ interface TraceEvent {
 
 interface EpisodeArtifact {
   schema_version: string;
+  task: {
+    name: string;
+    max_steps: number;
+    evaluator_config: Record<string, unknown>;
+  };
   episode: {
     episode_id: string;
     termination_reason: string;
@@ -96,8 +103,8 @@ interface PairComparison {
   baseline_steps: number;
   baseline_tokens: number;
   baseline_duration_ms: number;
-  baseline_model_calls?: number;
-  baseline_tool_calls?: number;
+  baseline_model_calls?: number | null;
+  baseline_tool_calls?: number | null;
   baseline_tool_selection_accuracy?: number | null;
   baseline_tool_argument_validity_rate?: number | null;
   recovery_episode_id: string;
@@ -106,11 +113,11 @@ interface PairComparison {
   recovery_steps: number;
   recovery_tokens: number;
   recovery_duration_ms: number;
-  recovery_model_calls?: number;
-  recovery_tool_calls?: number;
+  recovery_model_calls?: number | null;
+  recovery_tool_calls?: number | null;
   recovery_tool_selection_accuracy?: number | null;
   recovery_tool_argument_validity_rate?: number | null;
-  retry_eligible?: boolean;
+  retry_eligible?: boolean | null;
   recovered: boolean;
 }
 
@@ -120,17 +127,17 @@ interface ExperimentAggregateMetrics {
   recovery_success_count: number;
   baseline_success_rate: number;
   recovery_success_rate: number;
-  retry_eligible_count?: number;
+  retry_eligible_count?: number | null;
   retry_recovery_count: number;
-  retry_recovery_rate: number;
+  retry_recovery_rate?: number | null;
   baseline_total_tokens: number;
   recovery_total_tokens: number;
   baseline_avg_steps: number;
   recovery_avg_steps: number;
-  baseline_avg_model_calls?: number;
-  recovery_avg_model_calls?: number;
-  baseline_avg_tool_calls?: number;
-  recovery_avg_tool_calls?: number;
+  baseline_avg_model_calls?: number | null;
+  recovery_avg_model_calls?: number | null;
+  baseline_avg_tool_calls?: number | null;
+  recovery_avg_tool_calls?: number | null;
   baseline_tool_selection_accuracy?: number | null;
   recovery_tool_selection_accuracy?: number | null;
   baseline_tool_argument_validity_rate?: number | null;
@@ -151,6 +158,26 @@ interface ExperimentArtifact {
   metrics: ExperimentAggregateMetrics;
 }
 
+function explainFailure(detail: string): string {
+  const explanations: Record<string, string> = {
+    RATE_LIMIT_EXCEEDED: '供应商限流：稍后再试，并检查账号当日配额。',
+    AUTHENTICATION_FAILED: '后端 API Key 缺失、失效或认证失败。',
+    MODEL_NOT_FOUND: '供应商返回 404：模型不存在或当前账号不可访问。',
+    MODEL_RETIRED: '供应商已下线该模型，请选择其他模型。',
+    UPSTREAM_CHANNEL_UNAVAILABLE: '供应商暂无可用通道，请稍后重试或手动换模型。',
+    UPSTREAM_GATEWAY_ERROR: '供应商网关错误，请稍后再试。',
+    NETWORK_CONNECTION_FAILED: '后端无法连接模型网关，请检查网络。',
+    REQUEST_TIMEOUT: '模型请求超时。',
+    OUTPUT_TRUNCATED: '模型输出达到单次上限，未形成完整行动。',
+    INVALID_ARGUMENTS: '工具参数不符合 schema；Baseline 会终止，Recovery 最多纠错一次。',
+    task_token_budget_exceeded: '累计输入与输出超出任务 Token 预算，可在运行前显式调整。',
+    missing_submission: '模型只返回文本，未调用工具完成提交。',
+  };
+  const parts = detail.split(': ');
+  const code = parts[parts.length - 1] ?? detail;
+  return explanations[code] ? `${explanations[code]} (${code})` : detail;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'single' | 'experiment'>('experiment');
   const [meta, setMeta] = useState<MetaResponse | null>(null);
@@ -159,6 +186,7 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState<string>('gemini-3.7-flash-free');
   const [selectedScenario, setSelectedScenario] = useState<string>('success');
   const [selectedSingleTask, setSelectedSingleTask] = useState<string>('order-status-001');
+  const [selectedSuite, setSelectedSuite] = useState<'tool_lab_core' | 'bfcl_adapted'>('tool_lab_core');
   const [maxSteps, setMaxSteps] = useState<number>(6);
   const [artifact, setArtifact] = useState<EpisodeArtifact | null>(null);
   const [recentEpisodeIds, setRecentEpisodeIds] = useState<string[]>([]);
@@ -175,6 +203,8 @@ export default function App() {
     'order-status-004',
   ]);
   const [expSeed, setExpSeed] = useState<number>(1);
+  const [expTokenBudget, setExpTokenBudget] = useState<number | null>(8000);
+  const [singleTokenBudget, setSingleTokenBudget] = useState<number | null>(8000);
   const [experiment, setExperiment] = useState<ExperimentArtifact | null>(null);
   const [recentExpIds, setRecentExpIds] = useState<string[]>([]);
   const [inputExpId, setInputExpId] = useState<string>('');
@@ -213,8 +243,42 @@ export default function App() {
     }
   };
 
+  // Helper to map saved experiment config to UI model option ID
+  const resolveModelOptionId = (cfg: Record<string, unknown> | undefined): string => {
+    if (!cfg) return 'fake';
+    const provider =
+      cfg.provider ||
+      (typeof cfg.model === 'object' && cfg.model !== null
+        ? (cfg.model as Record<string, unknown>).provider
+        : undefined);
+    if (provider === 'fake') return 'fake';
+
+    const reqModel = cfg.requested_model;
+    if (typeof reqModel === 'string') {
+      if (reqModel === 'fake' || reqModel === 'fake-model' || reqModel === 'fake-orders-v1') return 'fake';
+      return reqModel;
+    }
+
+    if (typeof cfg.model === 'string') {
+      if (cfg.model === 'fake' || cfg.model === 'fake-model' || cfg.model === 'fake-orders-v1') return 'fake';
+      return cfg.model;
+    }
+
+    if (typeof cfg.model === 'object' && cfg.model !== null) {
+      const mObj = cfg.model as Record<string, unknown>;
+      if (mObj.provider === 'fake') return 'fake';
+      if (typeof mObj.model === 'string') return mObj.model;
+    }
+
+    return 'fake';
+  };
+
   // 1. Fetch Metadata and parse initial query parameters
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const expId = params.get('experiment_id');
+    const epId = params.get('episode_id');
+
     fetch('/api/v1/meta')
       .then((res) => {
         if (!res.ok) throw new Error('无法连接后端配置元数据');
@@ -222,13 +286,16 @@ export default function App() {
       })
       .then((data: MetaResponse) => {
         setMeta(data);
-        if (data.default_model) {
-          setSelectedModel(data.default_model);
-          setExpModel(data.default_model);
-        }
-        if (data.tasks && data.tasks.length > 0) {
-          setSelectedSingleTask(data.tasks[0].id);
-          setExpTasks(data.tasks.map((t) => t.id));
+        // Do not overwrite URL-restored state if URL params are present
+        if (!expId && !epId) {
+          if (data.default_model) {
+            setSelectedModel(data.default_model);
+            setExpModel(data.default_model);
+          }
+          if (data.tasks && data.tasks.length > 0) {
+            setSelectedSingleTask(data.tasks[0].id);
+            setExpTasks(data.tasks.filter((t) => t.suite === 'tool_lab_core').map((t) => t.id));
+          }
         }
       })
       .catch((err) => {
@@ -246,11 +313,6 @@ export default function App() {
     } catch {
       // ignore storage error
     }
-
-    // Check URL params
-    const params = new URLSearchParams(window.location.search);
-    const expId = params.get('experiment_id');
-    const epId = params.get('episode_id');
 
     if (expId) {
       setActiveTab('experiment');
@@ -297,6 +359,22 @@ export default function App() {
         throw new Error(errData.message || `未能找到 Episode (${res.status})`);
       }
       const data = await res.json();
+      const epAgent = data.artifact?.agent;
+      if (epAgent?.model) {
+        const opId = resolveModelOptionId({ model: epAgent.model, provider: epAgent.model.provider });
+        setSelectedModel(opId);
+        if (opId !== 'fake') {
+          setCustomModels((prev) => (prev.includes(opId) ? prev : [...prev, opId]));
+        }
+      }
+      if (data.artifact?.task?.name) {
+        setSelectedSingleTask(data.artifact.task.name);
+        setMaxSteps(data.artifact.task.max_steps);
+        setSelectedSuite(data.artifact.task.evaluator_config?.suite === 'bfcl_adapted'
+          ? 'bfcl_adapted' : 'tool_lab_core');
+      }
+      setSingleTokenBudget(data.artifact?.task?.evaluator_config?.source_token_budget !== undefined
+        ? data.artifact.task.token_budget : null);
       setArtifact(data.artifact);
       addRecentEpisodeId(id.trim());
 
@@ -327,15 +405,17 @@ export default function App() {
       setExperiment(data.experiment);
       addRecentExpId(id.trim());
 
-      const expCfg = data.experiment?.config;
+      const expCfg = data.experiment?.config as Record<string, unknown> | undefined;
       if (expCfg) {
-        if (expCfg.model) {
-          const mVal = typeof expCfg.model === 'string' ? expCfg.model : (expCfg.model as Record<string, unknown>)?.model;
-          if (mVal && typeof mVal === 'string') setExpModel(mVal);
+        const optionId = resolveModelOptionId(expCfg);
+        setExpModel(optionId);
+        if (optionId !== 'fake') {
+          setCustomModels((prev) => (prev.includes(optionId) ? prev : [...prev, optionId]));
         }
         if (typeof expCfg.scenario === 'string') setExpScenario(expCfg.scenario);
         if (typeof expCfg.seed === 'number') setExpSeed(expCfg.seed);
-        if (Array.isArray(expCfg.task_ids)) setExpTasks(expCfg.task_ids);
+        setExpTokenBudget(typeof expCfg.token_budget === 'number' ? expCfg.token_budget : null);
+        if (Array.isArray(expCfg.task_ids)) setExpTasks(expCfg.task_ids as string[]);
       }
 
       const url = new URL(window.location.href);
@@ -363,7 +443,9 @@ export default function App() {
         model: isFake ? 'fake-model' : selectedModel,
         scenario: isFake ? selectedScenario : null,
         task_id: selectedSingleTask,
+        suite: selectedSuite,
         max_steps: maxSteps,
+        token_budget: isFake ? null : singleTokenBudget,
       };
 
       const res = await fetch('/api/v1/episodes', {
@@ -412,6 +494,7 @@ export default function App() {
         scenario: isFake ? expScenario : null,
         task_ids: expTasks,
         seed: expSeed,
+        token_budget: isFake ? null : expTokenBudget,
       };
 
       const res = await fetch('/api/v1/experiments', {
@@ -454,6 +537,9 @@ export default function App() {
 
   const currentSingleModelMeta = meta?.models.find((m) => m.id === selectedModel);
   const currentExpModelMeta = meta?.models.find((m) => m.id === expModel);
+  const experimentTasks = meta?.tasks.filter((task) => task.suite === 'tool_lab_core') ?? [];
+  const singleTasks = meta?.tasks.filter((task) => task.suite === selectedSuite) ?? [];
+  const bfclTaskCount = meta?.tasks.filter((task) => task.suite === 'bfcl_adapted').length ?? 0;
 
   return (
     <div>
@@ -464,7 +550,7 @@ export default function App() {
             <span className="brand-icon">🧭</span>
             <div>
               <div className="brand-title">AgentLabyrinth</div>
-              <div className="brand-subtitle">M1 ToolLab 对照实验闭环 (切片 C)</div>
+              <div className="brand-subtitle">M1 Agent 评测实验平台</div>
             </div>
           </div>
 
@@ -658,7 +744,7 @@ export default function App() {
                         type="button"
                         className="btn-secondary"
                         style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
-                        onClick={() => setExpTasks(meta?.tasks.map((t) => t.id) || [])}
+                        onClick={() => setExpTasks(experimentTasks.map((t) => t.id))}
                       >
                         全选
                       </button>
@@ -674,7 +760,7 @@ export default function App() {
                   </div>
 
                   <div className="checkbox-list" id="task-checkbox-list">
-                    {meta?.tasks.map((task) => (
+                    {experimentTasks.map((task) => (
                       <label key={task.id} className="checkbox-item">
                         <input
                           type="checkbox"
@@ -705,6 +791,17 @@ export default function App() {
                     disabled={isLoading}
                   />
                 </div>
+
+                {expModel !== 'fake' && (
+                  <div className="form-group">
+                    <label htmlFor="exp-token-budget">总 Token 预算（输入 + 输出）</label>
+                    <input id="exp-token-budget" type="number" min={100} max={20000}
+                      value={expTokenBudget ?? ''} placeholder="留空使用任务原预算"
+                      onChange={(e) => setExpTokenBudget(e.target.value === '' ? null : Number(e.target.value))}
+                      disabled={isLoading} />
+                    <p className="metric-sub">真实多轮建议 8000；两种策略使用相同预算。免费通道按约 13 秒间隔发起请求，仍可能遇到账户限额。</p>
+                  </div>
+                )}
 
                 <button
                   id="run-exp-button"
@@ -894,7 +991,9 @@ export default function App() {
                             {experiment.metrics.retry_recovery_count} 例
                           </div>
                           <div className="metric-sub">
-                            转化率: {(experiment.metrics.retry_recovery_rate * 100).toFixed(1)}% ({experiment.metrics.retry_recovery_count} / {experiment.metrics.retry_eligible_count ?? experiment.metrics.total_pairs} 可恢复样本)
+                            {experiment.metrics.retry_eligible_count !== null && experiment.metrics.retry_eligible_count !== undefined
+                              ? `转化率: ${((experiment.metrics.retry_recovery_rate ?? 0) * 100).toFixed(1)}% (${experiment.metrics.retry_recovery_count} / ${experiment.metrics.retry_eligible_count} 可恢复样本)`
+                              : `转化率: ${((experiment.metrics.retry_recovery_rate ?? 0) * 100).toFixed(1)}% (${experiment.metrics.retry_recovery_count} 例，历史版本未统计可恢复基数)`}
                           </div>
                         </div>
 
@@ -952,10 +1051,18 @@ export default function App() {
                         <div className="metric-box">
                           <div className="metric-label">平均模型 / 工具调用 (Base / Rec)</div>
                           <div className="metric-value" style={{ fontSize: '1.05rem' }}>
-                            {experiment.metrics.baseline_avg_model_calls ?? '-'} / {experiment.metrics.recovery_avg_model_calls ?? '-'}
+                            {experiment.metrics.baseline_avg_model_calls !== null && experiment.metrics.baseline_avg_model_calls !== undefined
+                              ? experiment.metrics.baseline_avg_model_calls
+                              : '-'} / {experiment.metrics.recovery_avg_model_calls !== null && experiment.metrics.recovery_avg_model_calls !== undefined
+                              ? experiment.metrics.recovery_avg_model_calls
+                              : '-'}
                           </div>
                           <div className="metric-sub">
-                            工具调用: {experiment.metrics.baseline_avg_tool_calls ?? '-'} / {experiment.metrics.recovery_avg_tool_calls ?? '-'}
+                            工具调用: {experiment.metrics.baseline_avg_tool_calls !== null && experiment.metrics.baseline_avg_tool_calls !== undefined
+                              ? experiment.metrics.baseline_avg_tool_calls
+                              : '-'} / {experiment.metrics.recovery_avg_tool_calls !== null && experiment.metrics.recovery_avg_tool_calls !== undefined
+                              ? experiment.metrics.recovery_avg_tool_calls
+                              : '-'}
                           </div>
                         </div>
                       </div>
@@ -1004,10 +1111,17 @@ export default function App() {
                                   ) : (
                                     <span className="badge">未挽救 / 相同状态</span>
                                   )}
-                                  {pair.retry_eligible && (
+                                  {pair.retry_eligible === true && (
                                     <div style={{ marginTop: '0.25rem' }}>
                                       <span className="badge badge-purple" style={{ fontSize: '0.65rem' }}>
                                         可恢复样本
+                                      </span>
+                                    </div>
+                                  )}
+                                  {pair.retry_eligible === null && (
+                                    <div style={{ marginTop: '0.25rem' }}>
+                                      <span className="badge" style={{ fontSize: '0.65rem', opacity: 0.7 }}>
+                                        基数未统计
                                       </span>
                                     </div>
                                   )}
@@ -1016,7 +1130,7 @@ export default function App() {
                                   <div>步数: {pair.baseline_steps} → {pair.recovery_steps}</div>
                                   <div>Tokens: {pair.baseline_tokens} → {pair.recovery_tokens}</div>
                                   <div style={{ color: 'var(--text-muted)' }}>
-                                    模型调用: {pair.baseline_model_calls ?? '-'} → {pair.recovery_model_calls ?? '-'}
+                                    模型调用: {pair.baseline_model_calls !== null && pair.baseline_model_calls !== undefined ? pair.baseline_model_calls : '-'} → {pair.recovery_model_calls !== null && pair.recovery_model_calls !== undefined ? pair.recovery_model_calls : '-'}
                                   </div>
                                 </td>
                                 <td>
@@ -1200,6 +1314,32 @@ export default function App() {
 
                 {/* Task Selection */}
                 <div className="form-group">
+                  <label htmlFor="suite-select" className="form-label">数据集</label>
+                  <select
+                    id="suite-select"
+                    className="form-select"
+                    value={selectedSuite}
+                    onChange={(e) => {
+                      const suite = e.target.value as 'tool_lab_core' | 'bfcl_adapted';
+                      setSelectedSuite(suite);
+                      const first = meta?.tasks.find((task) => task.suite === suite);
+                      if (first) setSelectedSingleTask(first.id);
+                      setMaxSteps(suite === 'bfcl_adapted' ? 1 : 6);
+                    }}
+                    disabled={isLoading}
+                  >
+                    <option value="tool_lab_core">原生 ToolLab</option>
+                    <option value="bfcl_adapted" disabled={bfclTaskCount === 0}>
+                      BFCL 改编子集（{bfclTaskCount === 0 ? '请先运行导入脚本' : `${bfclTaskCount} 道真实固定题`}）
+                    </option>
+                  </select>
+                  {selectedSuite === 'bfcl_adapted' && (
+                    <p className="metric-sub">
+                      来源：BFCL V4 固定上游提交；AgentLabyrinth-adapted subset；本地精确匹配，不是官方 BFCL 分数。
+                    </p>
+                  )}
+                </div>
+                <div className="form-group">
                   <label htmlFor="task-select" className="form-label">评测任务</label>
                   <select
                     id="task-select"
@@ -1208,9 +1348,9 @@ export default function App() {
                     onChange={(e) => setSelectedSingleTask(e.target.value)}
                     disabled={isLoading}
                   >
-                    {meta?.tasks.map((task) => (
+                    {singleTasks.map((task) => (
                       <option key={task.id} value={task.id}>
-                        {task.name} ({task.id})
+                        {task.name} · {task.split}
                       </option>
                     ))}
                   </select>
@@ -1230,6 +1370,17 @@ export default function App() {
                     disabled={isLoading}
                   />
                 </div>
+
+                {selectedModel !== 'fake' && (
+                  <div className="form-group">
+                    <label htmlFor="single-token-budget">总 Token 预算（输入 + 输出）</label>
+                    <input id="single-token-budget" type="number" min={100} max={20000}
+                      value={singleTokenBudget ?? ''} placeholder="留空使用任务原预算"
+                      onChange={(e) => setSingleTokenBudget(e.target.value === '' ? null : Number(e.target.value))}
+                      disabled={isLoading} />
+                    <p className="metric-sub">真实多轮建议 8000；两种策略使用相同预算。免费通道按约 13 秒间隔发起请求，仍可能遇到账户限额。</p>
+                  </div>
+                )}
 
                 <button
                   id="run-button"
@@ -1292,6 +1443,19 @@ export default function App() {
                   {artifact ? (
                     <div>
                       <div className="metrics-grid">
+                        <div className="metric-box">
+                          <div className="metric-label">数据集 / 评分协议</div>
+                          <div className="metric-value" style={{ fontSize: '0.95rem' }}>
+                            {artifact.task.evaluator_config.suite === 'bfcl_adapted'
+                              ? 'BFCL 改编子集'
+                              : '原生 ToolLab'}
+                          </div>
+                          <div className="metric-sub">
+                            {artifact.task.evaluator_config.suite === 'bfcl_adapted'
+                              ? `AgentLabyrinth-adapted subset · ${String(artifact.task.evaluator_config.source_case_id ?? artifact.task.name)}`
+                              : artifact.task.name}
+                          </div>
+                        </div>
                         {/* Model Info */}
                         <div className="metric-box">
                           <div className="metric-label">执行模型 / 策略</div>
@@ -1314,7 +1478,7 @@ export default function App() {
                             {artifact.episode.termination_reason}
                           </div>
                           <div className="metric-sub" style={{ color: 'var(--text-muted)' }}>
-                            {artifact.episode.detail || artifact.evaluation.reason}
+                            {explainFailure(artifact.episode.detail || artifact.evaluation.reason)}
                           </div>
                         </div>
 

@@ -21,6 +21,7 @@ from packages.domain.ports import (
     AgentRuntime,
     Environment,
     ModelProvider,
+    ModelProviderError,
     ToolValidator,
     TraceRecorder,
 )
@@ -130,7 +131,16 @@ class HandwrittenRuntime(AgentRuntime):
                 {"observation": obs.content, "initial_state": last_state},
             )
             messages: list[Message] = [
-                Message(role="system", content=task.description),
+                Message(
+                    role="system",
+                    content={
+                        "task": task.description,
+                        "constraints": list(task.constraints),
+                        "instruction": (
+                            "Use tools and follow their parameter descriptions exactly."
+                        ),
+                    },
+                ),
                 Message(role="user", content=obs.content),
             ]
             while True:
@@ -160,6 +170,10 @@ class HandwrittenRuntime(AgentRuntime):
                         tools=environment.available_tools(),
                         config=agent.model,
                     )
+                except ModelProviderError as exc:
+                    termination_reason = TerminationReason.RUNTIME_ERROR
+                    detail = f"provider_error: {exc.code}"
+                    break
                 except Exception:
                     termination_reason = TerminationReason.RUNTIME_ERROR
                     detail = "provider_error"
@@ -230,7 +244,19 @@ class HandwrittenRuntime(AgentRuntime):
                         break
                     seen_call_ids.add(action.call_id)
 
-                    # Check argument validity and permission
+                    # Check unknown or forbidden tool first - must terminate immediately
+                    # without retry
+                    if inspection.error_code == "UNKNOWN_TOOL":
+                        termination_reason = TerminationReason.FAILED
+                        detail = "unknown_tool"
+                        break
+
+                    if not inspection.permitted or inspection.error_code == "FORBIDDEN_TOOL":
+                        termination_reason = TerminationReason.FAILED
+                        detail = f"forbidden_tool: {action.name}"
+                        break
+
+                    # Check argument validity (only for permitted tools)
                     if not inspection.arguments_valid:
                         # Recovery strategy: allow at most one controlled retry
                         # for INVALID_ARGUMENTS
@@ -265,16 +291,7 @@ class HandwrittenRuntime(AgentRuntime):
                             continue
 
                         termination_reason = TerminationReason.FAILED
-                        detail = (
-                            "unknown_tool"
-                            if inspection.error_code == "UNKNOWN_TOOL"
-                            else f"invalid_arguments: {inspection.error_code}"
-                        )
-                        break
-
-                    if not inspection.permitted:
-                        termination_reason = TerminationReason.FAILED
-                        detail = f"forbidden_tool: {action.name}"
+                        detail = f"invalid_arguments: {inspection.error_code}"
                         break
 
                     # Check tool budget

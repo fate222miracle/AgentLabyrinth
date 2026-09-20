@@ -23,7 +23,7 @@ class QueryFilters(BaseModel):
     """The only supported query filter."""
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
-    order_id: str = Field(min_length=1)
+    order_id: str = Field(min_length=1, description="Exact order ID requested by the task.")
 
     @field_validator("order_id")
     @classmethod
@@ -39,8 +39,8 @@ class QueryRecordsArgs(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
-    table: Literal["orders"]
-    filters: QueryFilters
+    table: Literal["orders"] = Field(description="The orders table; use exactly 'orders'.")
+    filters: QueryFilters = Field(description="Structured query filters, never a JSON string.")
 
 
 class SubmitAnswerArgs(BaseModel):
@@ -48,8 +48,13 @@ class SubmitAnswerArgs(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
-    answer: str = Field(min_length=1)
-    evidence: list[str]
+    answer: str = Field(
+        min_length=1,
+        description="Exact status value copied from the queried record, such as shipped; no prose.",
+    )
+    evidence: list[str] = Field(
+        description="Exact evidence_id values returned by query_records; never invent IDs."
+    )
 
     @field_validator("answer")
     @classmethod
@@ -134,7 +139,7 @@ class ToolLabEnvironment(Environment):
         if not self._registry.has_tool("query_records"):
             self._registry.register(
                 name="query_records",
-                description="Query records from database table.",
+                description="Query an order before submitting its exact status and evidence ID.",
                 risk_level="READ_ONLY",
                 version="1.0.0",
                 param_model=QueryRecordsArgs,
@@ -144,7 +149,7 @@ class ToolLabEnvironment(Environment):
         if not self._registry.has_tool("submit_answer"):
             self._registry.register(
                 name="submit_answer",
-                description="Submit answer and evidence for task evaluation.",
+                description="Submit the exact status value and evidence IDs returned by the query.",
                 risk_level="LOW_RISK_WRITE",
                 version="1.0.0",
                 param_model=SubmitAnswerArgs,

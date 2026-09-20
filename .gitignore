@@ -6,7 +6,7 @@ pytest-cache-files-*/
 .mypy_cache/
 .ruff_cache/
 artifacts/
+.cache/
 .env
 node_modules/
 dist/
-

@@ -43,8 +43,8 @@ class PairComparison(BaseModel):
     baseline_steps: int
     baseline_tokens: int
     baseline_duration_ms: int
-    baseline_model_calls: int = 0
-    baseline_tool_calls: int = 0
+    baseline_model_calls: int | None = None
+    baseline_tool_calls: int | None = None
     baseline_tool_selection_accuracy: float | None = None
     baseline_tool_argument_validity_rate: float | None = None
     recovery_episode_id: UUID
@@ -53,11 +53,11 @@ class PairComparison(BaseModel):
     recovery_steps: int
     recovery_tokens: int
     recovery_duration_ms: int
-    recovery_model_calls: int = 0
-    recovery_tool_calls: int = 0
+    recovery_model_calls: int | None = None
+    recovery_tool_calls: int | None = None
     recovery_tool_selection_accuracy: float | None = None
     recovery_tool_argument_validity_rate: float | None = None
-    retry_eligible: bool = False
+    retry_eligible: bool | None = None
     recovered: bool = False
 
 
@@ -71,17 +71,17 @@ class ExperimentAggregateMetrics(BaseModel):
     recovery_success_count: int
     baseline_success_rate: float
     recovery_success_rate: float
-    retry_eligible_count: int = 0
+    retry_eligible_count: int | None = None
     retry_recovery_count: int
-    retry_recovery_rate: float
+    retry_recovery_rate: float | None = None
     baseline_total_tokens: int
     recovery_total_tokens: int
     baseline_avg_steps: float
     recovery_avg_steps: float
-    baseline_avg_model_calls: float = 0.0
-    recovery_avg_model_calls: float = 0.0
-    baseline_avg_tool_calls: float = 0.0
-    recovery_avg_tool_calls: float = 0.0
+    baseline_avg_model_calls: float | None = None
+    recovery_avg_model_calls: float | None = None
+    baseline_avg_tool_calls: float | None = None
+    recovery_avg_tool_calls: float | None = None
     baseline_tool_selection_accuracy: float | None = None
     recovery_tool_selection_accuracy: float | None = None
     baseline_tool_argument_validity_rate: float | None = None
@@ -268,10 +268,10 @@ async def run_experiment(
     base_avg_dur = sum(p.baseline_duration_ms for p in pairs) / total
     rec_avg_dur = sum(p.recovery_duration_ms for p in pairs) / total
 
-    base_avg_models = sum(p.baseline_model_calls for p in pairs) / total
-    rec_avg_models = sum(p.recovery_model_calls for p in pairs) / total
-    base_avg_tools = sum(p.baseline_tool_calls for p in pairs) / total
-    rec_avg_tools = sum(p.recovery_tool_calls for p in pairs) / total
+    base_avg_models = sum(p.baseline_model_calls or 0 for p in pairs) / total
+    rec_avg_models = sum(p.recovery_model_calls or 0 for p in pairs) / total
+    base_avg_tools = sum(p.baseline_tool_calls or 0 for p in pairs) / total
+    rec_avg_tools = sum(p.recovery_tool_calls or 0 for p in pairs) / total
 
     # Average tool selection accuracy across pairs where not None
     base_sel_list = [
@@ -374,7 +374,10 @@ async def run_experiment(
     }
 
     if config_metadata:
-        exp_config.update(config_metadata)
+        # Execution inputs remain authoritative, including for non-API callers.
+        for key, value in config_metadata.items():
+            if key not in exp_config:
+                exp_config[key] = value
 
     config_hash = compute_config_hash(exp_config)
 

@@ -21,11 +21,14 @@ from packages.application.experiment import (
 from packages.application.runner import run_episode
 from packages.application.trace import read_artifact, write_artifact
 from packages.domain.models import AgentSpec, EpisodeArtifact, RunConfig, TaskSpec
-from packages.domain.ports import ModelProvider
+from packages.domain.ports import Environment, Evaluator, ModelProvider
+from packages.environments.bfcl.adapter import BFCLAdapter
+from packages.environments.bfcl.environment import BFCLEnvironment
 from packages.environments.tool_lab.environment import (
     ToolLabEnvironment,
     create_tool_lab_registry,
 )
+from packages.evaluation.bfcl import BFCLEvaluator
 from packages.evaluation.order_status import OrderStatusEvaluator
 from packages.providers.aihubmix import AIHubMixModelProvider
 from packages.providers.fake import FakeModelProvider
@@ -54,17 +57,45 @@ class EpisodeService:
         self.artifacts_dir = artifacts_dir or DEFAULT_ARTIFACTS_DIR
         self.tasks_dir = tasks_dir or DEFAULT_TASKS_DIR
         self.models_path = models_path or DEFAULT_MODELS_PATH
+        self.bfcl = BFCLAdapter()
 
     def _get_task(self, task_id: str) -> TaskSpec:
-        """Load TaskSpec by ID from tasks directory."""
-        task_path = self.tasks_dir / f"{task_id}.json"
-        if not task_path.is_file():
-            for p in self.tasks_dir.glob("*.json"):
-                t = TaskSpec.model_validate_json(p.read_text(encoding="utf-8"))
-                if t.name == task_id or str(t.id) == task_id:
-                    return t
-            raise ValueError(f"Task '{task_id}' not found")
-        return TaskSpec.model_validate_json(task_path.read_text(encoding="utf-8"))
+        """Resolve only catalog entries; user input is never used as a path."""
+        for task in self._load_all_tasks():
+            if task_id in (task.name, str(task.id)):
+                return task
+        raise ValueError("Task not found in the selected suite")
+
+    @staticmethod
+    def _with_token_budget(task: TaskSpec, token_budget: int | None) -> TaskSpec:
+        """Record an explicit run override while keeping source tasks unchanged."""
+        if token_budget is None:
+            return task
+        return task.model_copy(
+            update={
+                "token_budget": token_budget,
+                "evaluator_config": {
+                    **task.evaluator_config,
+                    "source_token_budget": task.token_budget,
+                },
+            }
+        )
+
+    @staticmethod
+    def _agent_with_token_budget(agent: AgentSpec, token_budget: int | None) -> AgentSpec:
+        """Keep agent and task limits consistent for an explicit override."""
+        if token_budget is None:
+            return agent
+        return agent.model_copy(
+            update={
+                "budget": agent.budget.model_copy(
+                    update={
+                        "max_prompt_tokens": token_budget,
+                        "max_completion_tokens": token_budget,
+                    }
+                )
+            }
+        )
 
     def _load_all_tasks(self) -> list[TaskSpec]:
         """Load all TaskSpecs from tasks directory in sorted order."""
@@ -123,9 +154,27 @@ class EpisodeService:
                 description=t.description,
                 max_steps=t.max_steps,
                 token_budget=t.token_budget,
+                suite="tool_lab_core",
+                split=str(t.evaluator_config.get("split", "development")),
             )
             for t in task_specs
         ]
+        try:
+            tasks.extend(
+                TaskOption(
+                    id=t.name,
+                    name=t.name,
+                    category=t.category,
+                    description=t.description,
+                    max_steps=t.max_steps,
+                    token_budget=t.token_budget,
+                    suite="bfcl_adapted",
+                    split=str(t.evaluator_config.get("split", "evaluation")),
+                )
+                for t in self.bfcl.tasks()
+            )
+        except (FileNotFoundError, ValueError):
+            pass
 
         return MetaResponse(
             models=models,
@@ -140,7 +189,7 @@ class EpisodeService:
         if req.provider == "aihubmix":
             if not is_model_permitted(req.model):
                 raise ValueError(f"Model '{req.model}' is not in the allowed free model whitelist")
-            provider: ModelProvider = AIHubMixModelProvider()
+            provider: ModelProvider = AIHubMixModelProvider(min_request_interval=13.0)
             agent_text = DEFAULT_AIHUBMIX_AGENT.read_text(encoding="utf-8")
             agent = AgentSpec.model_validate_json(agent_text)
             agent = agent.model_copy(
@@ -167,16 +216,35 @@ class EpisodeService:
             )
 
         # 2. Load Task
-        task = self._get_task(req.task_id)
+        bfcl_case = None
+        if req.suite == "bfcl_adapted":
+            bfcl_case, loaded_task = self.bfcl.case_for_task(req.task_id)
+        else:
+            loaded_task = self._get_task(req.task_id)
+        task = self._with_token_budget(loaded_task, req.token_budget)
+        agent = self._agent_with_token_budget(agent, req.token_budget)
 
         # 3. Assemble components
-        registry = create_tool_lab_registry()
-        validator = DefaultToolValidator(registry)
-        executor = ToolExecutor(registry, validator)
-        environment = ToolLabEnvironment(registry=registry, executor=executor, validator=validator)
+        environment: Environment
+        evaluator: Evaluator
+        if bfcl_case is not None:
+            bfcl_environment = BFCLEnvironment(bfcl_case)
+            environment = bfcl_environment
+            validator = bfcl_environment.validator
+            evaluator = BFCLEvaluator()
+            environment_version = "bfcl-adapted-single-call-v1"
+            agent = agent.model_copy(update={"tool_set_version": "bfcl-v4-pinned"})
+        else:
+            registry = create_tool_lab_registry()
+            validator = DefaultToolValidator(registry)
+            executor = ToolExecutor(registry, validator)
+            environment = ToolLabEnvironment(
+                registry=registry, executor=executor, validator=validator
+            )
+            evaluator = OrderStatusEvaluator()
+            environment_version = "tool-lab-m0-v1"
         runtime = HandwrittenRuntime(provider=provider, validator=validator)
-        evaluator = OrderStatusEvaluator()
-        run_config = RunConfig(seed=1, environment_version="tool-lab-m0-v1")
+        run_config = RunConfig(seed=1, environment_version=environment_version)
 
         # 4. Execute episode
         artifact = await run_episode(
@@ -208,7 +276,9 @@ class EpisodeService:
             raise ValueError("Experiment requires at least one task ID")
 
         # 1. Load tasks
-        tasks = [self._get_task(tid) for tid in req.task_ids]
+        tasks = [
+            self._with_token_budget(self._get_task(tid), req.token_budget) for tid in req.task_ids
+        ]
 
         # 2. Validate requested model/scenario and configure agents & provider factory
         if req.provider == "aihubmix":
@@ -233,7 +303,9 @@ class EpisodeService:
             )
 
             def provider_factory() -> ModelProvider:
-                return AIHubMixModelProvider()
+                return AIHubMixModelProvider(min_request_interval=13.0)
+
+            resolved_scenario: str | None = None
 
         elif req.provider == "fake":
             scenario = req.scenario or "invalid-then-success"
@@ -246,17 +318,30 @@ class EpisodeService:
             rec_text = DEFAULT_RECOVERY_AGENT.read_text(encoding="utf-8")
             recovery_agent = AgentSpec.model_validate_json(rec_text)
 
+            if req.model:
+                baseline_agent = baseline_agent.model_copy(
+                    update={"model": baseline_agent.model.model_copy(update={"model": req.model})}
+                )
+                recovery_agent = recovery_agent.model_copy(
+                    update={"model": recovery_agent.model.model_copy(update={"model": req.model})}
+                )
+
             def provider_factory() -> ModelProvider:
                 return FakeModelProvider(scenario=scenario)
+
+            resolved_scenario = scenario
 
         else:
             raise ValueError(f"Unsupported provider: {req.provider}")
 
         # 3. Run paired experiment
+        baseline_agent = self._agent_with_token_budget(baseline_agent, req.token_budget)
+        recovery_agent = self._agent_with_token_budget(recovery_agent, req.token_budget)
         config_metadata = {
             "provider": req.provider,
-            "model": req.model,
-            "scenario": req.scenario,
+            "requested_model": req.model,
+            "scenario": resolved_scenario,
+            "token_budget": req.token_budget,
             "task_ids": req.task_ids,
             "seed": req.seed,
             "baseline_strategy": baseline_agent.runtime_strategy,

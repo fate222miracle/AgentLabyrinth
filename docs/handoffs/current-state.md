@@ -1,9 +1,19 @@
 # Current state
 
-更新：2026-09-19。需求唯一来源：`docs/product/requirements.md` **V0.5**。不依赖历史聊天。
+更新：2026-09-20。需求唯一来源：`docs/product/requirements.md` **V0.5**。不依赖历史聊天。
+
+## 最新复核结论（2026-09-20）
+
+新增四模型复测：**小米 MiMo V2.5 Pro 与 MiniMax M2.7 各自通过真实 BFCL 示例和两轮 ToolLab 订单任务**。DeepSeek 返回无可用通道，Qwen 返回限流。四个 ID 已放行后端并进入网页目录，小米设为默认。结果、预算、复现命令与四份成功 Trace ID 见 [新模型验收记录](../experiments/selected-models-20260920.md)。下文较早的“尚无 BFCL 成功样本”状态已由本记录补足；不将单题成功等同于完整子集通过。
+
+切片 C 的四项阻塞均已修复并通过回归，Codex 已签收。切片 D 已由 Codex 完成首版核心：固定 BFCL V4 `simple_python` 的 8 道非 Live 单轮真题、可复现导入与哈希校验、独立 Adapter/Environment/Evaluator、API 与 Web 单次运行入口。原始数据不入库，本机缓存由导入脚本生成。
+
+最终质量门禁：`85 passed`，Ruff、Mypy、前端生产构建通过。浏览器已验证 BFCL 选择、点击运行、独立数据集标签、Trace 和 URL 刷新回读。真实 `coding-glm-5.3-free` BFCL 运行 `6e1ea4db-568b-4db2-9646-75dd44c37d11` 如实记录 `RATE_LIMIT_EXCEEDED`；这证明真实请求与错误链路成立，不代表题目通过。
+
+免费模型实测结论：GLM 5.3 普通请求和工具调用曾成功，本次 BFCL 请求受账号限流；GLM 5.2 普通请求成功但 BFCL 工具请求返回 `MODEL_NOT_FOUND`；Gemini 3.8 已退役；Kimi K3 当前无可用上游通道。平台已修复 JSON Schema `$defs` 兼容、显式 Token 预算、固定错误码和本地请求节流，不自动换模型或伪造通过。详见 ADR-006。
 
 ## 当前阶段
-**M1 切片 A、B 已完成复核；切片 C（Baseline vs Recovery Agent 对照实验闭环）已完成开发，但 Codex 首轮复核未通过，切片 D 继续锁定。**
+**M1 切片 A、B、C 已签收；切片 D 的 BFCL 核心闭环已实现，等待一次上游可用时的真实成功样本后做最终签收。**
 - 严格落实 ADR-004 决策边界：BFCL 顺延为切片 D，切片 C 聚焦在相同模型、任务、工具、种子与预算下，对比 Baseline 与一次受控参数容错重试的 Recovery Agent 表现。
 - 完成 4 个原生 ToolLab 任务（ORD-001 shipped, ORD-002 delivered 多订单库, ORD-003 cancelled, ORD-004 pending 紧凑预算）。
 - 完成 Application 串行对照实验 Runner 与指标聚合（成功率、挽救率、Token 增量、平均步数与耗时）。
@@ -111,39 +121,36 @@ Task & Seed (RunConfig)
 
 ---
 
-## Antigravity 质量门禁（切片 C 整改后实测通过）
-- **pytest**：`71 passed in 1.27s`（涵盖 recovery runtime, experiment runner, API, fake provider, evaluator，包含本次整改新增的误判负例、重复 call ID、预算不足不重试测试）。
-- **ruff format --check .**：69 个文件格式完全合规。
+## Antigravity 质量门禁（2026-09-20 复核整改后实测通过）
+- **pytest**：`75 passed in 1.50s`（全量单测通过，新增 4 个针对禁止工具优先级、完整模型快照及历史产物兼容性的针对性回归测试）。
+- **ruff format --check .**：72 个源文件格式完全合规。
 - **ruff check .**：All checks passed（0 告警，0 错误）。
-- **mypy**：`Success: no issues found in 43 source files`（无类型告警）。
-- **git diff --check**：退出码 0，零空白字符错误（`README.md` 与 `apps/web/src/index.css` 尾部空行已清理）。
-- **web build**：`npm.cmd --prefix apps/web run build` 耗时 631ms，零错误打包。
+- **mypy**：`Success: no issues found in 27 source files`（无类型告警）。
+- **git diff --check**：退出码 0，零空白字符错误。
+- **web build**：`npm.cmd --prefix apps/web run build` 耗时 704ms，零错误打包。
 
 ---
 
-## 下一步移交说明 (To Codex)
-- 切片 C 整改已全部完成，交付物已由 Antigravity 自测并通过全部门禁，现提交 Codex 最终复核。
+## 2026-09-20 复核整改落实清单 (To Codex)
 
-### 切片 C 整改落实清单 (2026-09-19)
+根据 `docs/handoffs/M1-slice-C-review-20260920.md` 中提出的 4 项审查问题，完成以下代码修复与测试覆盖：
 
-1. **修正 `retry_eligible`、`recovered` 与挽救率分母**：
-   - 在 `packages/application/experiment.py` 中，`retry_eligible` 严格从 Baseline Trace 确认失败原因为 `INVALID_ARGUMENTS`（`detail == "invalid_arguments"` 且终止于 `FAILED`）。
-   - `recovered` 判定严格绑定 `retry_eligible and rec_success`。
-   - `retry_recovery_rate` 严格以 `retry_eligible_count`（可恢复样本数）为分母。
-   - 在 `tests/unit/test_experiment_runner.py` 中新增 `test_misattribution_non_invalid_arguments_not_recovered` 负例测试。
-2. **完整保存实验固定变量并计算配置哈希**：
-   - `exp_config` 保存全部固定变量：`baseline_agent`、`recovery_agent`、`model`、`prompt_version`、`tool_set_version`、`budget`、`tasks`（包含 id, name, version, max_steps, token_budget, evaluator_config）、`evaluator`、`seed`、`environment_version`。
-   - 据此计算 SHA-256 `config_hash`，证明 ADR-004 固定变量公平性。
-3. **补齐调用次数、工具选择和参数合法率指标**：
-   - `PairComparison` 与 `ExperimentAggregateMetrics` 均补齐 `model_calls`、`tool_calls`、`tool_selection_accuracy`、`tool_argument_validity_rate` 及其聚合平均值。
-4. **删除同步阻塞网络 I/O，恢复严格版本化模型白名单**：
-   - `apps/api/service.py` 彻底移除 `_fetch_upstream_models` 与 `urllib.request.urlopen`，元数据请求毫秒级返回，消除 1.5s 阻塞。
-   - `apps/api/schemas.py` 彻底移除 `"free" in model_id.lower()` 字符串推断，严格依据 `ALLOWED_AIHUBMIX_MODELS` 及显式白名单校验。
-5. **任务文档与历史展示修复**：
-   - `benchmarks/tool_lab_core/README.md` 详尽补全全部 4 条原生任务的设计意图、初始状态、预期工具轨迹、成功与失败条件、步数与预算限制。
-   - `apps/web/src/App.tsx` 在历史实验回读时恢复控件状态，并在指标区顶部提供专用的“已保存实验配置”固定变量面板。
-   - 文件尾空白清理完成（`git diff --check` 通过）。
-6. **边界回归测试与完整交付**：
-   - 补齐重复 call ID 立即以 `FAILED` 终止不重试测试（`test_recovery_does_not_retry_duplicate_call_id`）。
-   - 补齐预算不足不重试测试（`test_recovery_does_not_retry_when_budget_exceeded`）。
-   - 交付 `docs/handoffs/walkthrough.md` 与 Brain artifact walkthrough。
+1. **禁止工具与错误参数同时出现时立即终止（P1）**：
+   - `packages/tools/registry.py:112`：在 `DefaultToolValidator.inspect` 中，首先判定 `reg is None`（返回 `UNKNOWN_TOOL`），接着优先判定 `permitted`；若 `not permitted`，优先返回 `error_code="FORBIDDEN_TOOL"`，即使参数同样非法，确保权限判定优先于参数格式校验。
+   - `packages/runtime/handwritten/runtime.py:233`：在执行循环中，未知工具（`UNKNOWN_TOOL`）与禁止工具（`not inspection.permitted` / `FORBIDDEN_TOOL`）优先于参数校验和恢复分支立即终止（`detail = f"forbidden_tool: {action.name}"`），单次模型调用，零次工具执行，绝不进入重试分支。
+   - 新增单测：`tests/unit/test_recovery_runtime.py::test_forbidden_tool_with_invalid_arguments_terminates_immediately` 与 `tests/unit/test_experiment_runner.py::test_forbidden_tool_with_invalid_arguments_not_retry_eligible`。
+
+2. **API 路径覆盖完整模型配置与解析后场景（P1）**：
+   - `apps/api/service.py:256`：在 `execute_experiment` 中，解析实际运行的 `resolved_scenario`（如缺省请求默认解析为 `"invalid-then-success"`，`"clean"` 解析为 `"success"`），并保存到 `config_metadata` 中，不再保存为 `null`；同时确保 fake provider 下 `baseline_agent` 与 `recovery_agent` 的 `model.model` 反映请求模型。
+   - `packages/application/experiment.py:376`：`exp_config` 作为权威快照，`exp_config["model"]` 始终保持为包含 `provider`、`model`、`temperature`、`max_tokens` 与 `scenario` 的字典对象；更新 `config_metadata` 时不覆盖 `model` 字典。
+   - 新增单测：`tests/unit/test_api.py::test_execute_experiment_preserves_full_model_config_and_scenario`，验证保存后回读的模型字典完整性，并断言场景与参数变化必然引起 `config_hash` 变化。
+
+3. **历史实验产物兼容性与指标展示（P2）**：
+   - `packages/application/experiment.py:46,74`：将 `PairComparison` 与 `ExperimentAggregateMetrics` 中的 `retry_eligible_count`、`retry_recovery_rate`、`baseline_avg_model_calls` 等新增字段调整为可选（`int | None = None`），反序列化历史旧 JSON（如 `c1c9fe30-d820-4589-81ee-b4a86bcbe964.json`）时保留为 `None`，不赋默认 `0`，杜绝静默覆盖。
+   - `apps/web/src/App.tsx:897,955`：前端对 `retry_eligible_count` 为 `null` 的历史实验展示为“4 例，历史版本未统计可恢复基数”，不再出现“4 / 0 可恢复样本”；对未测量的调用量展示为 `- / -`，对表格中历史未统计的行展示“基数未统计”。
+   - 新增单测：`tests/unit/test_experiment_runner.py::test_read_legacy_experiment_artifact_preserves_none`。
+
+4. **历史 Fake 实验恢复后模型选项与 URL 状态保持（P2）**：
+   - `apps/web/src/App.tsx:210`：新增 `resolveModelOptionId` 辅助函数，对保存的 `provider: "fake"` 或 `model: "fake-orders-v1" / "fake-model"` 均统一解析为 UI 选项 `'fake'`，避免历史加载后模型下拉框失配成 AIHubMix。
+   - `apps/web/src/App.tsx:220`：在初始 `useEffect` 中，若 URL 中存在 `experiment_id` 或 `episode_id`，元数据 `meta` 返回时不再以默认模型覆盖已从 URL 恢复的配置。
+   - 修复生产打包构建（`npm run build` 耗时 704ms 通过）。

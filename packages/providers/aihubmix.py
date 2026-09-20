@@ -7,6 +7,8 @@ Ensures strict parameter validation, response mapping, and sanitized error repor
 import asyncio
 import json
 import os
+import threading
+import time
 import urllib.error
 import urllib.request
 from decimal import Decimal
@@ -23,10 +25,14 @@ from packages.domain.models import (
     ToolCall,
     ToolSchema,
 )
-from packages.domain.ports import ModelProvider
+from packages.domain.ports import ModelProvider, ModelProviderError
 
 DEFAULT_BASE_URL = "https://aihubmix.com/v1"
 DEFAULT_MODEL = "coding-glm-5.3-free"
+
+# ponytail: one local process/account; use an account-scoped limiter for multi-user deployment.
+_request_lock = threading.Lock()
+_next_request_at = 0.0
 
 
 def get_aihubmix_api_key() -> str:
@@ -62,6 +68,31 @@ def get_aihubmix_api_key() -> str:
     )
 
 
+def inline_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Expand local nonrecursive definitions without coercing model arguments."""
+
+    def expand(value: Any, seen: tuple[str, ...] = ()) -> Any:
+        if isinstance(value, list):
+            return [expand(item, seen) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if "$ref" in value:
+            ref = value["$ref"]
+            if not isinstance(ref, str) or not ref.startswith("#/$defs/") or ref in seen:
+                raise ModelProviderError("INVALID_MODEL_RESPONSE")
+            name = ref.removeprefix("#/$defs/")
+            target = schema.get("$defs", {}).get(name)
+            if not isinstance(target, dict):
+                raise ModelProviderError("INVALID_MODEL_RESPONSE")
+            return expand(
+                {**target, **{k: v for k, v in value.items() if k != "$ref"}}, (*seen, ref)
+            )
+        return {k: expand(v, seen) for k, v in value.items() if k != "$defs"}
+
+    result: dict[str, Any] = expand(schema)
+    return result
+
+
 class AIHubMixModelProvider(ModelProvider):
     """OpenAI-compatible Chat Completions provider for AIHubMix models."""
 
@@ -70,10 +101,12 @@ class AIHubMixModelProvider(ModelProvider):
         api_key: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = 30.0,
+        min_request_interval: float = 0.0,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._min_request_interval = min_request_interval
 
     def _resolve_key(self) -> str:
         """Resolve API key on demand without persisting in logs or public fields."""
@@ -138,7 +171,7 @@ class AIHubMixModelProvider(ModelProvider):
                 "function": {
                     "name": t.name,
                     "description": t.description,
-                    "parameters": t.parameters,
+                    "parameters": inline_schema_refs(t.parameters),
                 },
             }
             for t in tools
@@ -146,6 +179,12 @@ class AIHubMixModelProvider(ModelProvider):
 
     def _send_http_request(self, payload: dict[str, Any], api_key: str) -> dict[str, Any]:
         """Execute synchronous HTTP POST request with sanitized error handling."""
+        global _next_request_at
+        if self._min_request_interval > 0:
+            with _request_lock:
+                scheduled = max(time.monotonic(), _next_request_at)
+                _next_request_at = scheduled + self._min_request_interval
+            time.sleep(max(0.0, scheduled - time.monotonic()))
         url = f"{self._base_url}/chat/completions"
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -164,33 +203,45 @@ class AIHubMixModelProvider(ModelProvider):
                 resp_bytes = resp.read()
                 return json.loads(resp_bytes.decode("utf-8"))  # type: ignore[no-any-return]
         except urllib.error.HTTPError as err:
-            if err.code == 401:
-                raise RuntimeError("AIHubMix error: AUTHENTICATION_FAILED") from None
-            if err.code == 429:
-                raise RuntimeError("AIHubMix error: RATE_LIMIT_EXCEEDED") from None
-            if 500 <= err.code < 600:
-                raise RuntimeError(f"AIHubMix error: GATEWAY_ERROR_{err.code}") from None
-            err_body = ""
+            upstream_code = None
             try:
-                err_body = err.read().decode("utf-8")
-            except Exception:
+                body = json.loads(err.read(65536))
+                error = body.get("error", {})
+                if isinstance(error, dict):
+                    upstream_code = error.get("code")
+            except (ValueError, AttributeError, OSError):
                 pass
-            if "no_available_channel" in err_body:
-                raise RuntimeError(
-                    "AIHubMix error: UPSTREAM_CHANNEL_UNAVAILABLE "
-                    "(upstream model cannot be served at the moment)"
-                ) from None
-            raise RuntimeError(f"AIHubMix error: CLIENT_REQUEST_FAILED_{err.code}") from None
+            # Inspect only known codes, including when upstream wraps them in 5xx.
+            if err.code == 401:
+                code = "AUTHENTICATION_FAILED"
+            elif err.code == 429:
+                code = "RATE_LIMIT_EXCEEDED"
+            elif upstream_code == "no_available_channel":
+                code = "UPSTREAM_CHANNEL_UNAVAILABLE"
+            elif upstream_code == "model_retired":
+                code = "MODEL_RETIRED"
+            elif err.code == 404:
+                code = "MODEL_NOT_FOUND"
+            elif err.code >= 500:
+                code = "UPSTREAM_GATEWAY_ERROR"
+            else:
+                code = "CLIENT_REQUEST_FAILED"
+            raise ModelProviderError(code) from None
         except urllib.error.URLError:
-            raise RuntimeError("AIHubMix error: NETWORK_CONNECTION_FAILED") from None
+            raise ModelProviderError("NETWORK_CONNECTION_FAILED") from None
         except TimeoutError:
-            raise RuntimeError("AIHubMix error: REQUEST_TIMEOUT") from None
+            raise ModelProviderError("REQUEST_TIMEOUT") from None
+        except (ValueError, UnicodeError):
+            raise ModelProviderError("INVALID_MODEL_RESPONSE") from None
 
     async def generate(
         self, messages: list[Message], tools: list[ToolSchema], config: ModelConfig
     ) -> ModelResponse:
         """Request Chat Completions from AIHubMix and map response to ModelResponse."""
-        api_key = self._resolve_key()
+        try:
+            api_key = self._resolve_key()
+        except RuntimeError:
+            raise ModelProviderError("AUTHENTICATION_FAILED") from None
         model_id = (
             config.model if config.model and config.model != "fake-orders-v1" else DEFAULT_MODEL
         )
@@ -211,17 +262,17 @@ class AIHubMixModelProvider(ModelProvider):
 
         choices = response_data.get("choices")
         if not choices or not isinstance(choices, list):
-            raise ValueError("AIHubMix error: EMPTY_MODEL_CHOICES")
+            raise ModelProviderError("EMPTY_MODEL_CHOICES")
 
+        if choices[0].get("finish_reason") == "length":
+            raise ModelProviderError("OUTPUT_TRUNCATED")
         choice_msg = choices[0].get("message", {})
         tool_calls = choice_msg.get("tool_calls")
 
         action: ToolCall | FinalAnswer
         if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
             if len(tool_calls) > 1:
-                raise ValueError(
-                    "AIHubMix error: MULTIPLE_TOOL_CALLS (M1 supports exactly one tool call)"
-                )
+                raise ModelProviderError("MULTIPLE_TOOL_CALLS")
             tc = tool_calls[0]
             call_id = tc.get("id") or "call_unknown"
             func = tc.get("function", {})
@@ -232,14 +283,14 @@ class AIHubMixModelProvider(ModelProvider):
                 try:
                     parsed_args = json.loads(raw_args)
                 except json.JSONDecodeError:
-                    raise ValueError(
-                        "AIHubMix error: INVALID_TOOL_ARGUMENTS (unparseable JSON)"
-                    ) from None
+                    raise ModelProviderError("INVALID_TOOL_ARGUMENTS") from None
             elif isinstance(raw_args, dict):
                 parsed_args = raw_args
             else:
-                raise ValueError("AIHubMix error: MALFORMED_TOOL_ARGUMENTS (unexpected type)")
+                raise ModelProviderError("MALFORMED_TOOL_ARGUMENTS")
 
+            if not isinstance(parsed_args, dict) or not isinstance(name, str) or not name:
+                raise ModelProviderError("MALFORMED_TOOL_ARGUMENTS")
             action = ToolCall(call_id=call_id, name=name, arguments=parsed_args)
         else:
             content = choice_msg.get("content") or ""
@@ -247,12 +298,12 @@ class AIHubMixModelProvider(ModelProvider):
 
         usage_data = response_data.get("usage")
         if not isinstance(usage_data, dict):
-            raise ValueError("AIHubMix error: MISSING_TOKEN_USAGE (response missing usage report)")
+            raise ModelProviderError("MISSING_TOKEN_USAGE")
 
         prompt_tokens = usage_data.get("prompt_tokens")
         completion_tokens = usage_data.get("completion_tokens")
         if not isinstance(prompt_tokens, int) or not isinstance(completion_tokens, int):
-            raise ValueError("AIHubMix error: INVALID_TOKEN_USAGE (usage counters not integers)")
+            raise ModelProviderError("INVALID_TOKEN_USAGE")
 
         token_usage = TokenUsage(
             prompt_tokens=prompt_tokens,

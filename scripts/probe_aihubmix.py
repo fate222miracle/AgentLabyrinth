@@ -39,7 +39,7 @@ async def run_probe() -> int:
         return 1
 
     provider = AIHubMixModelProvider(timeout=20.0)
-    model_name = sys.argv[1] if len(sys.argv) > 1 else "gemini-3.7-flash-free"
+    model_name = sys.argv[1] if len(sys.argv) > 1 else "coding-glm-5.3-free"
     config = ModelConfig(
         provider="aihubmix",
         model=model_name,

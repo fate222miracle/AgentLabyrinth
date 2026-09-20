@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0",
+  "source_name": "Berkeley Function Calling Leaderboard (BFCL) V4 simple_python",
+  "source_url": "https://github.com/ShishirPatil/gorilla/tree/6ea57973c7a6097fd7c5915698c54c17c5b1b6c8/berkeley-function-call-leaderboard/bfcl_eval/data",
+  "source_version_or_commit": "6ea57973c7a6097fd7c5915698c54c17c5b1b6c8",
+  "code_license": "Apache-2.0",
+  "data_license": "No separate dataset license found at the pinned commit",
+  "upstream_dependencies": [],
+  "import_mode": "reference_adapter_local_cache",
+  "transformation_script": "scripts/import_bfcl_subset.py@1.0.0",
+  "attribution": "BFCL by the Gorilla / UC Berkeley authors; cite the upstream dataset README and papers.",
+  "redistribution_allowed": false,
+  "official_protocol_compatible": false,
+  "result_label": "AgentLabyrinth-adapted subset",
+  "adapter_version": "bfcl-adapter-1.0.0",
+  "evaluator_version": "bfcl-local-exact-v1",
+  "source_files": [
+    {
+      "path": "berkeley-function-call-leaderboard/bfcl_eval/data/BFCL_v4_simple_python.json",
+      "cache_name": "BFCL_v4_simple_python.json",
+      "sha256": "82dd63ba502eb2520c6b5d1d9a5c4b590e03ff261565175561f6228a367d1991"
+    },
+    {
+      "path": "berkeley-function-call-leaderboard/bfcl_eval/data/possible_answer/BFCL_v4_simple_python.json",
+      "cache_name": "BFCL_v4_simple_python_answer.json",
+      "sha256": "90cd5bc653690ee8e459b5b3f3fc9458606f7f3fcbf795bb51b7dc581f8c86dc"
+    }
+  ],
+  "checksum": "c86068faaf6c6ac69ea3924da3b1c903cc42887cc973555e0382aebf53b4f81a",
+  "selected_cases": {
+    "development": ["simple_python_0", "simple_python_1", "simple_python_2", "simple_python_3"],
+    "evaluation": ["simple_python_4", "simple_python_5", "simple_python_6", "simple_python_7"]
+  },
+  "selected_case_notes": {
+    "simple_python_0": "Development: one local arithmetic function, two required integers and one optional string.",
+    "simple_python_1": "Development: one namespaced function and one required integer.",
+    "simple_python_2": "Development: one namespaced function and two required numeric arguments.",
+    "simple_python_3": "Development: one function with a small strictly expressible schema.",
+    "simple_python_4": "Evaluation: held out from development; one function and one expected call.",
+    "simple_python_5": "Evaluation: held out from development; one function and one expected call.",
+    "simple_python_6": "Evaluation: held out from development; one function and one expected call.",
+    "simple_python_7": "Evaluation: held out from development; one function and one expected call."
+  },
+  "excluded_classes": {
+    "live": "Changes over time and may require external services.",
+    "parallel_or_multiple": "Current ModelResponse contract permits exactly one action.",
+    "executable": "This slice evaluates proposals and never executes upstream functions.",
+    "remaining_simple_python": "Fixed eight-case scope is sufficient for the M1 demonstration."
+  },
+  "selection_notes": "Eight fixed non-Live, single-turn cases with exactly one function and one expected call; development and evaluation IDs do not overlap."
+}

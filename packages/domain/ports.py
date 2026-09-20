@@ -26,6 +26,37 @@ from packages.domain.models import (
 )
 
 
+class ModelProviderError(RuntimeError):
+    """Safe provider failure codes; raw upstream messages never cross this boundary."""
+
+    CODES = frozenset(
+        {
+            "AUTHENTICATION_FAILED",
+            "RATE_LIMIT_EXCEEDED",
+            "MODEL_NOT_FOUND",
+            "MODEL_RETIRED",
+            "UPSTREAM_CHANNEL_UNAVAILABLE",
+            "UPSTREAM_GATEWAY_ERROR",
+            "CLIENT_REQUEST_FAILED",
+            "NETWORK_CONNECTION_FAILED",
+            "REQUEST_TIMEOUT",
+            "EMPTY_MODEL_CHOICES",
+            "MULTIPLE_TOOL_CALLS",
+            "INVALID_TOOL_ARGUMENTS",
+            "MALFORMED_TOOL_ARGUMENTS",
+            "MISSING_TOKEN_USAGE",
+            "INVALID_TOKEN_USAGE",
+            "INVALID_MODEL_RESPONSE",
+            "OUTPUT_TRUNCATED",
+            "PROVIDER_ERROR",
+        }
+    )
+
+    def __init__(self, code: str) -> None:
+        self.code = code if code in self.CODES else "PROVIDER_ERROR"
+        super().__init__(self.code)
+
+
 class ModelProvider(Protocol):
     """Translate public model context to one portable response."""
 

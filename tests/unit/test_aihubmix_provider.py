@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from packages.domain.models import FinalAnswer, Message, ModelConfig, ToolCall, ToolSchema
+from packages.domain.ports import ModelProviderError
 from packages.providers.aihubmix import AIHubMixModelProvider
 
 
@@ -121,7 +122,7 @@ def test_aihubmix_rejects_multiple_tool_calls(dummy_tool: ToolSchema) -> None:
     with patch.object(provider, "_send_http_request", return_value=fake_response):
         messages = [Message(role="user", content="hi")]
         config = ModelConfig(provider="aihubmix", model="coding-kimi-k3-free")
-        with pytest.raises(ValueError, match="MULTIPLE_TOOL_CALLS"):
+        with pytest.raises(ModelProviderError, match="MULTIPLE_TOOL_CALLS"):
             asyncio.run(provider.generate(messages, [dummy_tool], config))
 
 
@@ -154,7 +155,7 @@ def test_aihubmix_rejects_malformed_json_args_without_leak(dummy_tool: ToolSchem
     with patch.object(provider, "_send_http_request", return_value=fake_response):
         messages = [Message(role="user", content="hi")]
         config = ModelConfig(provider="aihubmix", model="coding-kimi-k3-free")
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ModelProviderError) as exc_info:
             asyncio.run(provider.generate(messages, [dummy_tool], config))
         assert "INVALID_TOOL_ARGUMENTS" in str(exc_info.value)
         assert secret_payload not in str(exc_info.value)
@@ -176,7 +177,7 @@ def test_aihubmix_rejects_missing_or_invalid_usage(dummy_tool: ToolSchema) -> No
     with patch.object(provider, "_send_http_request", return_value=fake_response_no_usage):
         messages = [Message(role="user", content="hi")]
         config = ModelConfig(provider="aihubmix", model="coding-kimi-k3-free")
-        with pytest.raises(ValueError, match="MISSING_TOKEN_USAGE"):
+        with pytest.raises(ModelProviderError, match="MISSING_TOKEN_USAGE"):
             asyncio.run(provider.generate(messages, [dummy_tool], config))
 
     fake_response_invalid_usage = {
@@ -193,7 +194,7 @@ def test_aihubmix_rejects_missing_or_invalid_usage(dummy_tool: ToolSchema) -> No
     with patch.object(provider, "_send_http_request", return_value=fake_response_invalid_usage):
         messages = [Message(role="user", content="hi")]
         config = ModelConfig(provider="aihubmix", model="coding-kimi-k3-free")
-        with pytest.raises(ValueError, match="INVALID_TOKEN_USAGE"):
+        with pytest.raises(ModelProviderError, match="INVALID_TOKEN_USAGE"):
             asyncio.run(provider.generate(messages, [dummy_tool], config))
 
 
@@ -256,7 +257,7 @@ def test_aihubmix_http_errors_are_sanitized() -> None:
         )
         with pytest.raises(RuntimeError) as exc_info:
             provider._send_http_request({}, "secret_test_key_12345")
-        assert "GATEWAY_ERROR_502" in str(exc_info.value)
+        assert "UPSTREAM_GATEWAY_ERROR" in str(exc_info.value)
         assert "sensitive" not in str(exc_info.value)
 
 
@@ -267,3 +268,57 @@ def test_missing_api_key_raises() -> None:
         with patch("pathlib.Path.exists", return_value=False):
             with pytest.raises(RuntimeError, match="AIHUBMIX_API_KEY is not configured"):
                 provider._resolve_key()
+
+
+def test_schema_refs_are_expanded_without_coercing_arguments() -> None:
+    """Expose object types directly while keeping strict local validation."""
+    from packages.environments.tool_lab.environment import QueryRecordsArgs
+    from packages.providers.aihubmix import inline_schema_refs
+
+    source = QueryRecordsArgs.model_json_schema()
+    expanded = inline_schema_refs(source)
+    assert expanded["properties"]["filters"]["type"] == "object"
+    assert "$defs" not in expanded
+    assert "$defs" in source
+    with pytest.raises(ValueError):
+        QueryRecordsArgs.model_validate({"table": "orders", "filters": '{"order_id":"x"}'})
+
+
+@pytest.mark.parametrize(
+    "status,code,expected",
+    [
+        (404, "model_retired", "MODEL_RETIRED"),
+        (503, "no_available_channel", "UPSTREAM_CHANNEL_UNAVAILABLE"),
+        (404, "anything", "MODEL_NOT_FOUND"),
+    ],
+)
+def test_upstream_code_classification(status: int, code: str, expected: str) -> None:
+    """Known codes survive HTTP wrapping without copying private messages."""
+    import json
+
+    body = json.dumps({"error": {"code": code, "message": "secret"}}).encode()
+    error = urllib.error.HTTPError(
+        "https://example.test", status, "error", MagicMock(), io.BytesIO(body)
+    )
+    with patch("urllib.request.urlopen", side_effect=error):
+        with pytest.raises(ModelProviderError) as caught:
+            AIHubMixModelProvider()._send_http_request({}, "test-key")
+    assert caught.value.code == expected
+    assert "secret" not in str(caught.value)
+
+
+def test_request_pacing_reserves_start_times() -> None:
+    """Local requests reserve separate slots, without retrying upstream failures."""
+    from packages.providers import aihubmix
+
+    provider = AIHubMixModelProvider(min_request_interval=13)
+    with (
+        patch.object(aihubmix, "_next_request_at", 0),
+        patch("packages.providers.aihubmix.time.monotonic", return_value=100),
+        patch("packages.providers.aihubmix.time.sleep") as sleep,
+        patch("urllib.request.urlopen", side_effect=urllib.error.URLError("private")),
+    ):
+        for _ in range(2):
+            with pytest.raises(ModelProviderError):
+                provider._send_http_request({}, "test-key")
+        assert [call.args[0] for call in sleep.call_args_list] == [0, 13]

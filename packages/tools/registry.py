@@ -40,16 +40,16 @@ class ToolRegistry:
         version: str,
         param_model: type[BaseModel],
         handler: Callable[[Any], JsonValue],
+        parameters: dict[str, JsonValue] | None = None,
     ) -> ToolSchema:
         """Register a tool with strict parameter validation and unique name constraint."""
         if name in self._tools:
             raise ValueError(f"Tool '{name}' is already registered")
 
-        parameters = param_model.model_json_schema()
         schema = ToolSchema(
             name=name,
             description=description,
-            parameters=parameters,
+            parameters=parameters or param_model.model_json_schema(),
             version=version,
             risk_level=risk_level,
         )
@@ -109,18 +109,18 @@ class DefaultToolValidator(ToolValidator):
         error_code: str | None = None
         err: ErrorInfo | None = None
 
-        if not arguments_valid:
-            error_code = "INVALID_ARGUMENTS"
-            err = ErrorInfo(
-                code="INVALID_ARGUMENTS",
-                message=f"Arguments for tool '{action.name}' failed schema validation.",
-                retryable=False,
-            )
-        elif not permitted:
+        if not permitted:
             error_code = "FORBIDDEN_TOOL"
             err = ErrorInfo(
                 code="FORBIDDEN_TOOL",
                 message=f"Tool '{action.name}' is forbidden for this task.",
+                retryable=False,
+            )
+        elif not arguments_valid:
+            error_code = "INVALID_ARGUMENTS"
+            err = ErrorInfo(
+                code="INVALID_ARGUMENTS",
+                message=f"Arguments for tool '{action.name}' failed schema validation.",
                 retryable=False,
             )
 

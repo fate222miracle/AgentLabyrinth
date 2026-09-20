@@ -1,22 +1,51 @@
 {
   "schema_version": "1.0",
-  "default_model": "coding-glm-5.3-free",
+  "default_model": "xiaomi-mimo-v2.5-pro-free",
   "models": [
+    {
+      "id": "deepseek-v4-flash-0731-free",
+      "name": "DeepSeek V4 Flash 0731 Free",
+      "provider": "aihubmix",
+      "is_experimental": true,
+      "notes": "2026-09-20：BFCL 与订单任务均返回 UPSTREAM_CHANNEL_UNAVAILABLE，当前上游无可用通道。"
+    },
+    {
+      "id": "qwen3.8-27b-free",
+      "name": "Qwen 3.8 27B Free",
+      "provider": "aihubmix",
+      "is_experimental": true,
+      "notes": "2026-09-20：BFCL 与订单任务均返回 RATE_LIMIT_EXCEEDED，请检查供应商配额。"
+    },
+    {
+      "id": "xiaomi-mimo-v2.5-pro-free",
+      "name": "Xiaomi MiMo V2.5 Pro Free",
+      "provider": "aihubmix",
+      "is_default": true,
+      "is_experimental": false,
+      "notes": "2026-09-20：真实 BFCL 示例与两轮订单任务均通过，推荐使用。"
+    },
+    {
+      "id": "coding-minimax-m2.7-free",
+      "name": "Coding MiniMax M2.7 Free",
+      "provider": "aihubmix",
+      "is_experimental": false,
+      "notes": "2026-09-20：真实 BFCL 示例与两轮订单任务均通过，可用备选。"
+    },
     {
       "id": "coding-glm-5.3-free",
       "name": "Coding GLM 5.3 Free",
       "provider": "aihubmix",
-      "is_default": true,
+      "is_default": false,
       "is_experimental": false,
-      "notes": "智谱 GLM 5.3 免费模型，原生工具调用与真实用量报告正常"
+      "notes": "2026-09-20：普通请求与真实工具调用均成功；官方限制 5 请求/分钟，平台已按约 13 秒间隔调度。"
     },
     {
       "id": "coding-glm-5.2-free",
       "name": "Coding GLM 5.2 Free",
       "provider": "aihubmix",
       "is_default": false,
-      "is_experimental": false,
-      "notes": "智谱 GLM 5.2 免费模型，原生工具调用与真实用量报告正常"
+      "is_experimental": true,
+      "notes": "2026-09-20：普通请求成功，但 BFCL 原生工具请求返回 MODEL_NOT_FOUND；仅保留供人工复测。"
     },
     {
       "id": "gemini-3.8-flash-free",
@@ -24,7 +53,7 @@
       "provider": "aihubmix",
       "is_default": false,
       "is_experimental": true,
-      "notes": "最新 Gemini 3.8 免费模型通道（视网关排队与通道可用性）"
+      "notes": "2026-09-20：供应商明确返回 model_retired，保留仅用于历史记录，不建议选择。"
     },
     {
       "id": "coding-kimi-k3-free",
@@ -32,7 +61,7 @@
       "provider": "aihubmix",
       "is_default": false,
       "is_experimental": true,
-      "notes": "月之暗面 Kimi K3 免费模型（视网关排队与通道可用性）"
+      "notes": "2026-09-20：上游 no_available_channel；需等待供应商通道恢复。"
     },
     {
       "id": "fake",
