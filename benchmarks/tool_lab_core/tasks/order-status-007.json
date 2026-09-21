@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "id": "d9e1f305-b7c9-4da1-9234-56789abcdef0",
+  "name": "order-status-007",
+  "version": "1.0.0",
+  "category": "multi_step_planning",
+  "description": "搜索订单政策文档，读取证据后提交政策状态。",
+  "initial_state": {
+    "task_kind": "document",
+    "document_query": "return",
+    "documents": [
+      {
+        "document_id": "DOC-007",
+        "title": "Return policy",
+        "content": "Status: approved. Returns are accepted within 30 days.",
+        "evidence_id": "document:DOC-007"
+      }
+    ]
+  },
+  "goal_conditions": {"answer": "approved", "evidence": ["document:DOC-007"]},
+  "constraints": ["必须按 search_documents → read_document → submit_answer 执行"],
+  "expected_tools": ["search_documents", "read_document", "submit_answer"],
+  "forbidden_tools": [],
+  "max_steps": 6,
+  "token_budget": 1200,
+  "evaluator_config": {"name": "order_status_v1", "split": "development", "origin": "native"}
+}

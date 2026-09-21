@@ -1,4 +1,4 @@
-"""ToolLab environment implementation for order query and submission tasks."""
+"""ToolLab environment implementation for record and document tasks."""
 
 from copy import deepcopy
 from typing import Literal, cast
@@ -43,6 +43,31 @@ class QueryRecordsArgs(BaseModel):
     filters: QueryFilters = Field(description="Structured query filters, never a JSON string.")
 
 
+class SearchDocumentsArgs(BaseModel):
+    """Strict schema for searching the task's document collection."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+    query: str = Field(min_length=1, description="Case-insensitive text to search for.")
+    top_k: int = Field(ge=1, le=10, description="Maximum number of matching documents.")
+
+    @field_validator("query")
+    @classmethod
+    def non_blank(cls, value: str) -> str:
+        """Reject whitespace-only queries."""
+        if not value.strip():
+            raise ValueError("query cannot be blank")
+        return value
+
+
+class ReadDocumentArgs(BaseModel):
+    """Strict schema for reading one document by ID."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+    document_id: str = Field(min_length=1, description="Exact ID returned by search_documents.")
+
+
 class SubmitAnswerArgs(BaseModel):
     """Strict schema for submitting task answer and evidence."""
 
@@ -83,6 +108,14 @@ class _Order(BaseModel):
     evidence_id: str
 
 
+class _Document(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    document_id: str
+    title: str
+    content: str
+    evidence_id: str
+
+
 class _Submission(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
     answer: str
@@ -95,11 +128,15 @@ class _Snapshot(BaseModel):
     task_id: str | None
     seed: int | None
     orders: list[_Order]
+    documents: list[_Document] = Field(default_factory=list)
     acquired_evidence: list[str]
     submission: _Submission | None
     done: bool
     description: str
     target_order_id: str
+    task_kind: str = "order"
+    document_query: str | None = None
+    timeout_tool: str | None = None
 
 
 def create_tool_lab_registry() -> ToolRegistry:
@@ -125,12 +162,16 @@ class ToolLabEnvironment(Environment):
         self._task_id: UUID | None = None
         self._seed: int | None = None
         self._orders: list[dict[str, JsonValue]] = []
+        self._documents: list[dict[str, JsonValue]] = []
         self._acquired_evidence: set[str] = set()
         self._submission: dict[str, JsonValue] | None = None
         self._done: bool = False
         self._allowed_tools: tuple[str, ...] = ()
         self._description: str = ""
         self._target_order_id: str = ""
+        self._task_kind: str = "order"
+        self._document_query: str | None = None
+        self._timeout_tool: str | None = None
 
         self._register_handlers()
 
@@ -156,6 +197,26 @@ class ToolLabEnvironment(Environment):
                 handler=self._handle_submit_answer,
             )
 
+        if not self._registry.has_tool("search_documents"):
+            self._registry.register(
+                name="search_documents",
+                description="Search task documents by text and return matching document IDs.",
+                risk_level="READ_ONLY",
+                version="1.0.0",
+                param_model=SearchDocumentsArgs,
+                handler=self._handle_search_documents,
+            )
+
+        if not self._registry.has_tool("read_document"):
+            self._registry.register(
+                name="read_document",
+                description="Read one task document and acquire its evidence ID.",
+                risk_level="READ_ONLY",
+                version="1.0.0",
+                param_model=ReadDocumentArgs,
+                handler=self._handle_read_document,
+            )
+
     def _handle_query_records(self, args: QueryRecordsArgs) -> JsonValue:
         """Execute query against isolated orders state and record acquired evidence."""
         order_id = args.filters.order_id
@@ -167,6 +228,33 @@ class ToolLabEnvironment(Environment):
         return {
             "records": cast(JsonValue, matched),
             "acquired_evidence": cast(JsonValue, sorted(list(self._acquired_evidence))),
+        }
+
+    def _handle_search_documents(self, args: SearchDocumentsArgs) -> JsonValue:
+        """Return compact matches without exposing document contents."""
+        query = args.query.casefold()
+        matches = [
+            {"document_id": doc["document_id"], "title": doc["title"]}
+            for doc in self._documents
+            if query in str(doc["title"]).casefold() or query in str(doc["content"]).casefold()
+        ][: args.top_k]
+        return {"documents": cast(JsonValue, deepcopy(matches))}
+
+    def _handle_read_document(self, args: ReadDocumentArgs) -> JsonValue:
+        """Return one document and mark its evidence as acquired."""
+        document = next(
+            (doc for doc in self._documents if doc["document_id"] == args.document_id), None
+        )
+        if document is None:
+            return {
+                "document": None,
+                "acquired_evidence": cast(JsonValue, sorted(self._acquired_evidence)),
+            }
+        evidence_id = cast(str, document["evidence_id"])
+        self._acquired_evidence.add(evidence_id)
+        return {
+            "document": cast(JsonValue, deepcopy(document)),
+            "acquired_evidence": cast(JsonValue, sorted(self._acquired_evidence)),
         }
 
     def _handle_submit_answer(self, args: SubmitAnswerArgs) -> JsonValue:
@@ -183,19 +271,25 @@ class ToolLabEnvironment(Environment):
 
     def reset(self, task: TaskSpec, seed: int) -> Observation:
         """Rebuild deterministic state and return its public projection."""
-        raw_orders = task.initial_state.get("orders")
-        if not isinstance(raw_orders, list):
-            raise ValueError("Task initial_state missing 'orders' list")
+        raw_orders = task.initial_state.get("orders", [])
+        raw_documents = task.initial_state.get("documents", [])
+        if not isinstance(raw_orders, list) or not isinstance(raw_documents, list):
+            raise ValueError("Task initial_state orders and documents must be lists")
 
         orders = cast(
             list[dict[str, JsonValue]],
             [_Order.model_validate(item).model_dump() for item in raw_orders],
         )
-        if not orders:
-            raise ValueError("Task requires at least one order")
+        documents = cast(
+            list[dict[str, JsonValue]],
+            [_Document.model_validate(item).model_dump() for item in raw_documents],
+        )
+        if not orders and not documents:
+            raise ValueError("Task requires at least one order or document")
         self._task_id = task.id
         self._seed = seed
         self._orders = orders
+        self._documents = documents
         self._allowed_tools = tuple(
             name for name in task.expected_tools if name not in task.forbidden_tools
         )
@@ -203,19 +297,28 @@ class ToolLabEnvironment(Environment):
         self._submission = None
         self._done = False
         self._description = task.description
+        task_kind = task.initial_state.get("task_kind")
+        self._task_kind = task_kind if isinstance(task_kind, str) else "order"
+        document_query = task.initial_state.get("document_query")
+        self._document_query = document_query if isinstance(document_query, str) else None
+        timeout_tool = task.initial_state.get("timeout_tool")
+        self._timeout_tool = timeout_tool if isinstance(timeout_tool, str) else None
 
         target_id_override = task.initial_state.get("target_order_id")
         if isinstance(target_id_override, str) and target_id_override:
             self._target_order_id = target_id_override
-        else:
+        elif self._orders:
             self._target_order_id = cast(str, self._orders[0]["order_id"])
+        else:
+            self._target_order_id = ""
 
-        return Observation(
-            content={
-                "description": self._description,
-                "target_order_id": self._target_order_id,
-            }
-        )
+        content: dict[str, JsonValue] = {"description": self._description}
+        content["task_kind"] = self._task_kind
+        if self._document_query is not None:
+            content["document_query"] = self._document_query
+        if self._target_order_id:
+            content["target_order_id"] = self._target_order_id
+        return Observation(content=content)
 
     def available_tools(self) -> list[ToolSchema]:
         """Describe registered tools without exposing handlers."""
@@ -225,6 +328,16 @@ class ToolLabEnvironment(Environment):
         """Execute action defensively through the shared Executor."""
         if self._task_id is None:
             raise RuntimeError("Environment must be reset before step")
+        if action.name == self._timeout_tool:
+            return StepResult(
+                observation=Observation(content={}),
+                done=False,
+                error=ErrorInfo(
+                    code="TOOL_TIMEOUT",
+                    message="Tool execution timed out.",
+                    retryable=False,
+                ),
+            )
         try:
             result = self._executor.execute(action, self._allowed_tools)
             return StepResult(
@@ -251,11 +364,15 @@ class ToolLabEnvironment(Environment):
             "task_id": str(self._task_id) if self._task_id else None,
             "seed": self._seed,
             "orders": cast(JsonValue, deepcopy(self._orders)),
+            "documents": cast(JsonValue, deepcopy(self._documents)),
             "acquired_evidence": cast(JsonValue, sorted(list(self._acquired_evidence))),
             "submission": cast(JsonValue, deepcopy(self._submission)),
             "done": self._done,
             "description": self._description,
             "target_order_id": self._target_order_id,
+            "task_kind": self._task_kind,
+            "document_query": self._document_query,
+            "timeout_tool": self._timeout_tool,
         }
 
     def restore(self, snapshot: dict[str, JsonValue]) -> None:
@@ -267,6 +384,9 @@ class ToolLabEnvironment(Environment):
         self._task_id = task_id
         self._seed = state.seed
         self._orders = cast(list[dict[str, JsonValue]], [o.model_dump() for o in state.orders])
+        self._documents = cast(
+            list[dict[str, JsonValue]], [d.model_dump() for d in state.documents]
+        )
         self._acquired_evidence = set(state.acquired_evidence)
         self._submission = cast(
             dict[str, JsonValue] | None,
@@ -275,3 +395,6 @@ class ToolLabEnvironment(Environment):
         self._done = state.done
         self._description = state.description
         self._target_order_id = state.target_order_id
+        self._task_kind = state.task_kind
+        self._document_query = state.document_query
+        self._timeout_tool = state.timeout_tool

@@ -69,27 +69,37 @@ class OrderStatusEvaluator(Evaluator):
         else:
             expected_tool_coverage = None
 
-        # Only evidence inside records returned by successful query calls counts.
+        # Evidence is only valid when returned by a successful read/query call.
         acquired_evidence: set[str] = set()
         query_call_ids = {
             e.payload.get("call_id")
             for e in events
             if e.event_type == EventType.TOOL_STARTED and e.payload.get("name") == "query_records"
         }
+        document_read_call_ids = {
+            e.payload.get("call_id")
+            for e in events
+            if e.event_type == EventType.TOOL_STARTED and e.payload.get("name") == "read_document"
+        }
         for e in succeeded_events:
-            if e.payload.get("call_id") not in query_call_ids:
-                continue
             obs = e.payload.get("observation")
             if isinstance(obs, dict):
                 res = obs.get("result")
                 if isinstance(res, dict):
-                    records = res.get("records")
-                    if isinstance(records, list):
-                        for record in records:
-                            if isinstance(record, dict):
-                                evidence_id = record.get("evidence_id")
-                                if isinstance(evidence_id, str):
-                                    acquired_evidence.add(evidence_id)
+                    if e.payload.get("call_id") in query_call_ids:
+                        records = res.get("records")
+                        if isinstance(records, list):
+                            for record in records:
+                                if isinstance(record, dict):
+                                    evidence_id = record.get("evidence_id")
+                                    if isinstance(evidence_id, str):
+                                        acquired_evidence.add(evidence_id)
+                    if e.payload.get("call_id") in document_read_call_ids:
+                        document = res.get("document")
+                        if isinstance(document, dict):
+                            evidence_id = document.get("evidence_id")
+                            if isinstance(evidence_id, str):
+                                acquired_evidence.add(evidence_id)
 
         # 2. Judge correctness
         success = True

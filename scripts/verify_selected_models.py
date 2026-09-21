@@ -3,12 +3,12 @@
 import argparse
 import asyncio
 import json
-import os
 from collections.abc import Sequence
 from pathlib import Path
 
 from apps.api.schemas import CreateEpisodeRequest
 from apps.api.service import EpisodeService
+from packages.providers.aihubmix import get_aihubmix_api_key
 
 MODELS = (
     "deepseek-v4-flash-0731-free",
@@ -29,11 +29,13 @@ def catalog_model_ids(path: Path = MODEL_CATALOG) -> tuple[str, ...]:
 
 async def verify_models(models: Sequence[str], output: Path = DEFAULT_OUTPUT) -> None:
     """Test two fixed tasks serially without automatic retries or model substitution."""
-    if not os.environ.get("AIHUBMIX_API_KEY", "").strip():
+    try:
+        get_aihubmix_api_key()
+    except RuntimeError as exc:
         raise SystemExit(
             "AIHUBMIX_API_KEY is not configured. Set it in the local backend environment; "
             "never put the key in source, frontend code, or chat."
-        )
+        ) from exc
     service = EpisodeService()
     results: list[dict[str, object]] = []
     output.parent.mkdir(parents=True, exist_ok=True)

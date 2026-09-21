@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0",
+  "id": "e0f2a416-c8da-4eb2-a345-6789abcdef01",
+  "name": "order-status-008",
+  "version": "1.0.0",
+  "category": "multi_step_planning",
+  "description": "先定位配送政策文档，再读取完整内容并提交其状态。",
+  "initial_state": {
+    "task_kind": "document",
+    "document_query": "delivery",
+    "documents": [
+      {
+        "document_id": "DOC-008",
+        "title": "Delivery policy",
+        "content": "Status: active. Delivery estimates are shown at checkout.",
+        "evidence_id": "document:DOC-008"
+      },
+      {
+        "document_id": "DOC-008-NOISE",
+        "title": "Archived delivery policy",
+        "content": "Status: archived.",
+        "evidence_id": "document:DOC-008-NOISE"
+      }
+    ]
+  },
+  "goal_conditions": {"answer": "active", "evidence": ["document:DOC-008"]},
+  "constraints": ["搜索结果只提供摘要；答案必须来自读取的目标文档"],
+  "expected_tools": ["search_documents", "read_document", "submit_answer"],
+  "forbidden_tools": [],
+  "max_steps": 6,
+  "token_budget": 1200,
+  "evaluator_config": {"name": "order_status_v1", "split": "development", "origin": "native"}
+}

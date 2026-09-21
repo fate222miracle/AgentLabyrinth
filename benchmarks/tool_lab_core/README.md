@@ -1,6 +1,6 @@
 # ToolLab 原生开发与评测任务集 (Native Tasks Suite)
 
-本目录包含 4 条原创设计的原生任务（`order-status-001` 至 `order-status-004`），用于 M1 切片 C 的 Agent 对照实验（Baseline vs Recovery）。这 4 条任务是 M1 的最小开发与演示集，使用确定性本地环境和订单工具，不依赖外部 Benchmark。
+本目录包含 12 条原创设计的原生任务（`order-status-001` 至 `order-status-012`），用于 V0.1 Slice F 的 Agent 评测与对照实验。任务按 `tool_selection`、`parameter_generation`、`multi_step_planning`、`error_recovery` 四类各 3 条组织，使用确定性本地环境和四个 ToolLab 工具，不依赖外部 Benchmark。
 
 ---
 
@@ -36,8 +36,8 @@
 - **失败条件与负例**：提交非取消状态（如误报 completed/pending）、伪造证据、未查询即提交。
 - **约束与预算**：最多 6 步，Token 预算 1000。
 
-### 1.4 `order-status-004`：紧凑步数与严格预算约束
-- **设计意图**：检验模型在严苛预算约束（4 步、800 Tokens）下的执行效率与无冗余调用能力，容错机制必须在紧凑资源内完成一次性纠错。
+### 1.4 `order-status-004`：紧凑预算下的参数生成
+- **设计意图**：检验模型在严苛预算约束（4 步、800 Tokens）下，能否一次生成正确表名与嵌套过滤参数并完成提交。
 - **初始状态**：单订单环境，`ORD-004` 状态为 `pending`，证据 `order:ORD-004`。
 - **预期工具轨迹**：
   1. `query_records(table="orders", filters={"order_id": "ORD-004"})`
@@ -46,9 +46,21 @@
 - **失败条件与负例**：超出 4 步上限（`MAX_STEPS`）、超出 800 Tokens（`TOKEN_BUDGET_EXCEEDED`）、虚假证据。
 - **约束与预算**：最多 4 步，Token 预算 800。
 
+### 1.5 `order-status-005` 至 `order-status-006`：参数生成
+- **设计意图**：验证表名、嵌套 filters 和目标 ID 的结构化参数生成。
+- **成功条件**：只执行正确的 `query_records` 参数并提交真实证据。
+
+### 1.6 `order-status-007` 至 `order-status-009`：多步文档规划
+- **设计意图**：验证 Agent 是否真正执行 `search_documents → read_document → submit_answer`，而不是只在文本中声称完成。
+- **成功条件**：搜索摘要、读取完整文档、提交从文档内容解析的答案和实际 `evidence_id`。
+
+### 1.7 `order-status-010` 至 `order-status-012`：错误恢复
+- **设计意图**：验证一次 `INVALID_ARGUMENTS` 反馈后的受控恢复。
+- **成功条件**：错误调用不执行，恢复调用完成目标；第二次参数错误仍必须终止。
+
 ---
 
 ## 2. 评测契约与执行规范
 - 评分器：`OrderStatusEvaluator`（只读，独立于环境与 Runtime）。
 - 工具注册：通过 `ToolRegistry` 强类型校验；非法调用被严格拦截并在 Trace 中产生 `TOOL_CALL_VALIDATED` 事件。
-- 幂等性：Seed 保存在环境快照；各任务在相同 Seed 下具备严格确定性。
+- 幂等性：Seed 保存在环境快照；各任务在相同 Seed 下具备严格确定性。环境还提供了仅用于测试的确定性 `TOOL_TIMEOUT` 路径，Trace 会记录 `TOOL_FAILED` 和终止结果。

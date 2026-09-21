@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "id": "c4d6e850-a2bc-41f6-e789-abcdef012345",
+  "name": "order-status-012",
+  "version": "1.0.0",
+  "category": "error_recovery",
+  "description": "在严格恢复边界内修正一次错误参数，查询 ORD-012 并提交状态。",
+  "initial_state": {
+    "target_order_id": "ORD-012",
+    "orders": [
+      {"order_id": "ORD-012", "status": "pending", "evidence_id": "order:ORD-012"}
+    ]
+  },
+  "goal_conditions": {"answer": "pending", "evidence": ["order:ORD-012"]},
+  "constraints": ["第二次参数错误必须终止，不能无限重试"],
+  "expected_tools": ["query_records", "submit_answer"],
+  "forbidden_tools": [],
+  "max_steps": 6,
+  "token_budget": 1200,
+  "evaluator_config": {"name": "order_status_v1", "split": "development", "origin": "native"}
+}

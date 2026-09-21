@@ -137,3 +137,40 @@ def test_evaluator_rejects_unqueried_or_forged_evidence() -> None:
     eval_res = evaluator.evaluate(task, ep_forged, events)
     assert not eval_res.success
     assert "unqueried_or_forged_evidence" in eval_res.reason
+
+
+def test_evaluator_rejects_forged_document_evidence() -> None:
+    """A final submission cannot forge evidence absent from a successful document read."""
+    task = TaskSpec.model_validate_json(
+        (ROOT / "benchmarks/tool_lab_core/tasks/order-status-007.json").read_text(encoding="utf-8")
+    )
+    recorder = JsonTraceRecorder(RunConfig())
+    episode = asyncio.run(
+        HandwrittenRuntime(FakeModelProvider(scenario="success")).run(
+            make_agent(), task, ToolLabEnvironment(), recorder
+        )
+    )
+    forged = episode.model_copy(
+        update={
+            "final_state": {
+                **episode.final_state,
+                "submission": {
+                    "answer": "approved",
+                    "evidence": ["document:FORGED"],
+                },
+            }
+        }
+    )
+    forged_task = task.model_copy(
+        update={
+            "goal_conditions": {
+                "answer": "approved",
+                "evidence": ["document:FORGED"],
+            }
+        }
+    )
+
+    result = OrderStatusEvaluator().evaluate(forged_task, forged, recorder.events)
+
+    assert not result.success
+    assert result.reason == "unqueried_or_forged_evidence: 'document:FORGED'"

@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "id": "b3c5d749-f1ab-40e5-d678-9abcdef01234",
+  "name": "order-status-011",
+  "version": "1.0.0",
+  "category": "error_recovery",
+  "description": "在嵌套过滤参数第一次无效时接收结构化反馈并恢复查询 ORD-011。",
+  "initial_state": {
+    "target_order_id": "ORD-011",
+    "orders": [
+      {"order_id": "ORD-011", "status": "cancelled", "evidence_id": "order:ORD-011"}
+    ]
+  },
+  "goal_conditions": {"answer": "cancelled", "evidence": ["order:ORD-011"]},
+  "constraints": ["错误调用不得执行；只允许一次恢复"],
+  "expected_tools": ["query_records", "submit_answer"],
+  "forbidden_tools": [],
+  "max_steps": 6,
+  "token_budget": 1200,
+  "evaluator_config": {"name": "order_status_v1", "split": "development", "origin": "native"}
+}

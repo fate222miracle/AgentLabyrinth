@@ -22,6 +22,19 @@
 
 结论仅覆盖各模型本次两道示例，不能解释为全量 BFCL 成绩或长期可用性保证。BFCL 使用平台本地改编评分协议。
 
+## 2026-09-21 复测
+
+同一验证脚本再次执行四模型 × 两任务，结果与前一日一致。脚本已统一使用 Provider 的安全 Key 读取逻辑，因此支持进程环境变量或被 Git 忽略的项目 `.env`，不输出 Key。
+
+| 模型 | BFCL | ToolLab | 本轮结论 |
+| --- | --- | --- | --- |
+| deepseek-v4-flash-0731-free | 失败：`UPSTREAM_CHANNEL_UNAVAILABLE` | 失败：`UPSTREAM_CHANNEL_UNAVAILABLE` | 上游无可用通道 |
+| qwen3.8-27b-free | 失败：`RATE_LIMIT_EXCEEDED` | 失败：`RATE_LIMIT_EXCEEDED` | 上游限流 |
+| xiaomi-mimo-v2.5-pro-free | 通过，512 Tokens，`05a121da-711d-4c07-a270-af1b9c331010` | 通过，2915 Tokens，`d95ba328-17f9-4950-9acd-99f3eb740839` | 两个真实闭环均通过 |
+| coding-minimax-m2.7-free | 通过，388 Tokens，`2677fcce-7cae-451a-bb81-abcbcccb3f97` | 通过，2294 Tokens，`30a98b83-8787-4c89-b8eb-9d6887a5ee88` | 两个真实闭环均通过 |
+
+本轮可用率按“两个示例均通过”统计为 **2/4**。这是网关当时状态与两个固定样例的结果，不是模型排行榜。
+
 ## 绕过平台的故障定位复验
 
 四个模型均已通过 `is_model_permitted`。再对 DeepSeek 与 Qwen 各发送一次直接 HTTP 普通聊天请求（无工具、无 Runtime、无平台预算与节流，输出上限 128），仍收到：

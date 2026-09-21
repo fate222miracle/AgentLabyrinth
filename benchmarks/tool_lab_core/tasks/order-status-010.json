@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "id": "a2b4c638-e0fa-4fd4-c567-89abcdef0123",
+  "name": "order-status-010",
+  "version": "1.0.0",
+  "category": "error_recovery",
+  "description": "面对一次参数错误后恢复，查询 ORD-010 并提交状态。",
+  "initial_state": {
+    "target_order_id": "ORD-010",
+    "orders": [
+      {"order_id": "ORD-010", "status": "shipped", "evidence_id": "order:ORD-010"}
+    ]
+  },
+  "goal_conditions": {"answer": "shipped", "evidence": ["order:ORD-010"]},
+  "constraints": ["INVALID_ARGUMENTS 最多恢复一次"],
+  "expected_tools": ["query_records", "submit_answer"],
+  "forbidden_tools": [],
+  "max_steps": 6,
+  "token_budget": 1200,
+  "evaluator_config": {"name": "order_status_v1", "split": "development", "origin": "native"}
+}

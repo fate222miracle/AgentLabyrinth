@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "id": "c8d0e2f4-a6b8-4c90-8123-456789abcdef",
+  "name": "order-status-006",
+  "version": "1.0.0",
+  "category": "parameter_generation",
+  "description": "为 ORD-006 生成正确的表名和嵌套过滤参数，并提交其已送达状态。",
+  "initial_state": {
+    "target_order_id": "ORD-006",
+    "orders": [
+      {"order_id": "ORD-006", "status": "delivered", "evidence_id": "order:ORD-006"}
+    ]
+  },
+  "goal_conditions": {"answer": "delivered", "evidence": ["order:ORD-006"]},
+  "constraints": ["query_records 必须使用 orders 与 filters.order_id"],
+  "expected_tools": ["query_records", "submit_answer"],
+  "forbidden_tools": [],
+  "max_steps": 6,
+  "token_budget": 1000,
+  "evaluator_config": {"name": "order_status_v1", "split": "development", "origin": "native"}
+}

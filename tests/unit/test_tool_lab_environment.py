@@ -105,3 +105,61 @@ def test_snapshot_and_restore_deep_copy_isolation() -> None:
     restored_snap = env.snapshot()
     assert restored_snap["done"] is False
     assert restored_snap["acquired_evidence"] == ["order:ORD-001"]
+
+
+def test_restore_accepts_snapshot_from_before_document_tools() -> None:
+    """Snapshots written before Slice F keep their schema_version 1.0 compatibility."""
+    task = load_task()
+    env = ToolLabEnvironment()
+    env.reset(task, seed=1)
+    legacy = env.snapshot()
+    for field in ("documents", "task_kind", "document_query", "timeout_tool"):
+        legacy.pop(field)
+
+    env.restore(legacy)
+
+    assert env.snapshot()["task_id"] == str(task.id)
+    assert env.snapshot()["documents"] == []
+
+
+def test_search_then_read_document_acquires_evidence() -> None:
+    """Document tools expose compact search results and evidence only after reading."""
+    task = load_task().model_copy(
+        update={
+            "initial_state": {
+                "documents": [
+                    {
+                        "document_id": "DOC-001",
+                        "title": "Refund policy",
+                        "content": "Refunds are available within 30 days.",
+                        "evidence_id": "document:DOC-001",
+                    }
+                ]
+            },
+            "expected_tools": ("search_documents", "read_document", "submit_answer"),
+        }
+    )
+    env = ToolLabEnvironment()
+    env.reset(task, seed=7)
+
+    search = env.step(
+        ToolCall(
+            call_id="search-1",
+            name="search_documents",
+            arguments={"query": "refund", "top_k": 3},
+        )
+    )
+    assert search.observation.content["result"] == {
+        "documents": [{"document_id": "DOC-001", "title": "Refund policy"}]
+    }
+    assert env.snapshot()["acquired_evidence"] == []
+
+    read = env.step(
+        ToolCall(
+            call_id="read-1",
+            name="read_document",
+            arguments={"document_id": "DOC-001"},
+        )
+    )
+    assert read.error is None
+    assert env.snapshot()["acquired_evidence"] == ["document:DOC-001"]

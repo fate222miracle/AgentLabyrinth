@@ -182,18 +182,19 @@ def test_no_secret_or_absolute_path_leaks(client: TestClient) -> None:
     assert "c:/users/" not in resp_text.lower()
 
 
-def test_get_meta_returns_all_four_tasks(client: TestClient) -> None:
-    """Verify get_meta includes all 4 native evaluation tasks."""
+def test_get_meta_returns_all_native_tasks(client: TestClient) -> None:
+    """Verify discovery reflects every native task without a hard-coded count."""
     resp = client.get("/api/v1/meta")
     assert resp.status_code == 200
-    task_ids = {t["id"] for t in resp.json()["tasks"]}
+    native_tasks = [task for task in resp.json()["tasks"] if task["suite"] == "tool_lab_core"]
     expected = {
-        "order-status-001",
-        "order-status-002",
-        "order-status-003",
-        "order-status-004",
+        path.stem
+        for path in (Path(__file__).resolve().parents[2] / "benchmarks/tool_lab_core/tasks").glob(
+            "*.json"
+        )
     }
-    assert expected.issubset(task_ids)
+    assert {task["id"] for task in native_tasks} == expected
+    assert len(native_tasks) == 12
 
 
 def test_create_and_get_experiment(client: TestClient, temp_artifacts_dir: Path) -> None:

@@ -1,5 +1,6 @@
 """Fake ModelProvider implementation for deterministic testing and M0 execution."""
 
+import re
 from decimal import Decimal
 from typing import Any
 
@@ -31,7 +32,7 @@ class FakeModelProvider(ModelProvider):
     async def generate(
         self, messages: list[Message], tools: list[ToolSchema], config: ModelConfig
     ) -> ModelResponse:
-        """Return a validated action based on conversation history and scenario."""
+        """Return a validated action based on public messages and scenario."""
         self._call_count += 1
 
         if self.custom_responses:
@@ -48,36 +49,12 @@ class FakeModelProvider(ModelProvider):
 
         if self.scenario == "unparseable":
             raise ValueError("FakeModelProvider simulated unparseable model response")
-
         if self.scenario == "final_answer_only":
             return ModelResponse(
                 action=FinalAnswer(text="Task solved without tool submission."),
                 token_usage=token_usage,
                 estimated_cost=estimated_cost,
             )
-
-        if self.scenario == "invalid_arguments":
-            return ModelResponse(
-                action=ToolCall(
-                    call_id=f"call_inv_{self._call_count}",
-                    name="query_records",
-                    arguments={"table": "invalid_table", "filters": {}},
-                ),
-                token_usage=token_usage,
-                estimated_cost=estimated_cost,
-            )
-
-        if self.scenario == "invalid_then_success" and self._call_count == 1:
-            return ModelResponse(
-                action=ToolCall(
-                    call_id=f"call_inv_{self._call_count}",
-                    name="query_records",
-                    arguments={"table": "invalid_table", "filters": {}},
-                ),
-                token_usage=token_usage,
-                estimated_cost=estimated_cost,
-            )
-
         if self.scenario == "forbidden_tool":
             return ModelResponse(
                 action=ToolCall(
@@ -88,7 +65,6 @@ class FakeModelProvider(ModelProvider):
                 token_usage=token_usage,
                 estimated_cost=estimated_cost,
             )
-
         if self.scenario == "duplicate_call_id":
             return ModelResponse(
                 action=ToolCall(
@@ -100,82 +76,179 @@ class FakeModelProvider(ModelProvider):
                 estimated_cost=estimated_cost,
             )
 
-        # Inspect messages for observation & tool results
+        if self._extract_task_kind(messages) == "document":
+            return self._document_response(messages, token_usage, estimated_cost)
+
+        if self.scenario == "invalid_arguments":
+            return self._invalid_order_response(token_usage, estimated_cost)
+        if self.scenario == "invalid_then_success" and self._call_count == 1:
+            return self._invalid_order_response(token_usage, estimated_cost)
+
         query_result = self._extract_query_result(messages)
-
-        if self.scenario == "max_steps" or self.scenario == "looping":
-            call_id = f"call_loop_{self._call_count}"
+        if self.scenario in {"max_steps", "looping"}:
             target_order_id = self._extract_target_order_id(messages)
             return ModelResponse(
                 action=ToolCall(
-                    call_id=call_id,
+                    call_id=f"call_loop_{self._call_count}",
                     name="query_records",
-                    arguments={"table": "orders", "filters": {"order_id": target_order_id}},
-                ),
-                token_usage=token_usage,
-                estimated_cost=estimated_cost,
-            )
-
-        if query_result is None:
-            # Turn 1: Propose query_records for target order ID
-            target_order_id = self._extract_target_order_id(messages)
-            return ModelResponse(
-                action=ToolCall(
-                    call_id=f"call_query_{self._call_count}",
-                    name="query_records",
-                    arguments={"table": "orders", "filters": {"order_id": target_order_id}},
-                ),
-                token_usage=token_usage,
-                estimated_cost=estimated_cost,
-            )
-        else:
-            # Turn 2: Extract status and evidence, propose submit_answer
-            if self.scenario == "wrong-answer" or self.scenario == "wrong_answer":
-                answer = "processing"
-                evidence = query_result["evidence"]
-            else:
-                answer = query_result["status"]
-                evidence = query_result["evidence"]
-
-            return ModelResponse(
-                action=ToolCall(
-                    call_id=f"call_submit_{self._call_count}",
-                    name="submit_answer",
                     arguments={
-                        "answer": answer,
-                        "evidence": evidence,
+                        "table": "orders",
+                        "filters": {"order_id": target_order_id},
                     },
                 ),
                 token_usage=token_usage,
                 estimated_cost=estimated_cost,
             )
 
+        if query_result is None:
+            target_order_id = self._extract_target_order_id(messages)
+            action = ToolCall(
+                call_id=f"call_query_{self._call_count}",
+                name="query_records",
+                arguments={
+                    "table": "orders",
+                    "filters": {"order_id": target_order_id},
+                },
+            )
+        else:
+            answer = (
+                "processing"
+                if self.scenario in {"wrong-answer", "wrong_answer"}
+                else query_result["status"]
+            )
+            action = ToolCall(
+                call_id=f"call_submit_{self._call_count}",
+                name="submit_answer",
+                arguments={"answer": answer, "evidence": query_result["evidence"]},
+            )
+        return ModelResponse(
+            action=action,
+            token_usage=token_usage,
+            estimated_cost=estimated_cost,
+        )
+
+    def _invalid_order_response(
+        self, token_usage: TokenUsage, estimated_cost: EstimatedCost
+    ) -> ModelResponse:
+        """Return the deterministic malformed order query used by recovery tests."""
+        return ModelResponse(
+            action=ToolCall(
+                call_id=f"call_inv_{self._call_count}",
+                name="query_records",
+                arguments={"table": "invalid_table", "filters": {}},
+            ),
+            token_usage=token_usage,
+            estimated_cost=estimated_cost,
+        )
+
+    def _extract_task_kind(self, messages: list[Message]) -> str:
+        """Read public task mode without inspecting private goal conditions."""
+        for msg in messages:
+            if isinstance(msg.content, dict) and msg.content.get("task_kind") == "document":
+                return "document"
+        return "order"
+
+    def _document_response(
+        self,
+        messages: list[Message],
+        token_usage: TokenUsage,
+        estimated_cost: EstimatedCost,
+    ) -> ModelResponse:
+        """Complete a document search, read, and evidence submission chain."""
+        search_result = self._extract_document_search_result(messages)
+        document_result = self._extract_document_result(messages)
+        if search_result is None:
+            query = self._extract_document_query(messages)
+            action = ToolCall(
+                call_id=f"call_search_{self._call_count}",
+                name="search_documents",
+                arguments={"query": query, "top_k": 3},
+            )
+        elif document_result is None:
+            action = ToolCall(
+                call_id=f"call_read_{self._call_count}",
+                name="read_document",
+                arguments={"document_id": search_result},
+            )
+        else:
+            content = document_result["content"]
+            answer_match = re.search(
+                r"(?:status|answer)\s*:\s*([a-zA-Z0-9_-]+)", content, flags=re.IGNORECASE
+            )
+            answer = answer_match.group(1) if answer_match else content.strip()
+            action = ToolCall(
+                call_id=f"call_submit_{self._call_count}",
+                name="submit_answer",
+                arguments={
+                    "answer": answer,
+                    "evidence": [document_result["evidence_id"]],
+                },
+            )
+        return ModelResponse(
+            action=action,
+            token_usage=token_usage,
+            estimated_cost=estimated_cost,
+        )
+
     def _extract_target_order_id(self, messages: list[Message]) -> str:
         """Parse target order ID from public messages."""
         for msg in messages:
             if isinstance(msg.content, dict):
-                if "target_order_id" in msg.content and isinstance(
-                    msg.content["target_order_id"], str
-                ):
-                    return msg.content["target_order_id"]
+                target = msg.content.get("target_order_id")
+                if isinstance(target, str):
+                    return target
         raise ValueError("Public observation has no target order ID")
+
+    def _extract_document_query(self, messages: list[Message]) -> str:
+        """Read the public document search hint."""
+        for msg in messages:
+            if isinstance(msg.content, dict):
+                query = msg.content.get("document_query")
+                if isinstance(query, str) and query.strip():
+                    return query
+        return "status"
 
     def _extract_query_result(self, messages: list[Message]) -> dict[str, Any] | None:
         """Extract order query result from tool response messages."""
         for msg in reversed(messages):
             if msg.role == "tool" and isinstance(msg.content, dict):
-                res = msg.content.get("result")
-                if isinstance(res, dict) and "records" in res:
-                    records = res.get("records")
-                    if (
-                        isinstance(records, list)
-                        and len(records) > 0
-                        and isinstance(records[0], dict)
-                    ):
-                        rec = records[0]
-                        status = rec.get("status")
-                        evidence_id = rec.get("evidence_id")
-                        if not isinstance(status, str) or not isinstance(evidence_id, str):
-                            raise ValueError("Query result has no status or evidence ID")
-                        return {"status": status, "evidence": [evidence_id]}
+                result = msg.content.get("result")
+                if isinstance(result, dict) and "records" in result:
+                    records = result.get("records")
+                    if isinstance(records, list) and records:
+                        record = records[0]
+                        if isinstance(record, dict):
+                            status = record.get("status")
+                            evidence_id = record.get("evidence_id")
+                            if isinstance(status, str) and isinstance(evidence_id, str):
+                                return {"status": status, "evidence": [evidence_id]}
+        return None
+
+    def _extract_document_search_result(self, messages: list[Message]) -> str | None:
+        """Return the first document ID from a successful search response."""
+        for msg in reversed(messages):
+            if msg.role == "tool" and isinstance(msg.content, dict):
+                result = msg.content.get("result")
+                if isinstance(result, dict):
+                    documents = result.get("documents")
+                    if isinstance(documents, list) and documents:
+                        first = documents[0]
+                        if isinstance(first, dict):
+                            document_id = first.get("document_id")
+                            if isinstance(document_id, str):
+                                return document_id
+        return None
+
+    def _extract_document_result(self, messages: list[Message]) -> dict[str, str] | None:
+        """Return document content and evidence from a successful read."""
+        for msg in reversed(messages):
+            if msg.role == "tool" and isinstance(msg.content, dict):
+                result = msg.content.get("result")
+                if isinstance(result, dict):
+                    document = result.get("document")
+                    if isinstance(document, dict):
+                        content = document.get("content")
+                        evidence_id = document.get("evidence_id")
+                        if isinstance(content, str) and isinstance(evidence_id, str):
+                            return {"content": content, "evidence_id": evidence_id}
         return None

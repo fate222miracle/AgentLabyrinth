@@ -31,6 +31,10 @@ def test_verification_stops_before_network_without_key(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.delenv("AIHUBMIX_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "scripts.verify_selected_models.get_aihubmix_api_key",
+        lambda: (_ for _ in ()).throw(RuntimeError("missing")),
+    )
 
     with pytest.raises(SystemExit, match="AIHUBMIX_API_KEY is not configured"):
         asyncio.run(verify_models(("free-a",), tmp_path / "results.json"))

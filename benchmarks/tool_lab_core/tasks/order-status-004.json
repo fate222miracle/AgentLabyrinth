@@ -3,7 +3,7 @@
   "id": "a7d4e5f6-b8c9-0d1e-2f3a-4b5c6d7e8f04",
   "name": "order-status-004",
   "version": "1.0.0",
-  "category": "tool_selection",
+  "category": "parameter_generation",
   "description": "紧凑预算下查询模拟订单 ORD-004 的待处理状态并提交证据。",
   "initial_state": {
     "target_order_id": "ORD-004",
