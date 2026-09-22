@@ -2,7 +2,7 @@
 
 面向 AI Agent 的可复现实验平台。唯一权威需求：`docs/product/requirements.md` **V0.6**。
 
-**V0.1 已完成 18 项验收，支持多 Seed × Repeat 串行实验；两个真实免费模型已通过 BFCL 与 ToolLab 示例。当前进入 V0.2，先建立 LangGraph Runtime Adapter 与跨 Runtime 对照框架。**
+**V0.1 已完成 18 项验收，支持多 Seed × Repeat 串行实验；两个真实免费模型已通过 BFCL 与 ToolLab 示例。V0.2 已建立可运行的 LangGraph Bootstrap Adapter，下一步实现独立节点控制循环。**
 
 课程演示 M1 推进：
 - 切片 A：完成 AIHubMix 真实 ToolLab 闭环。
@@ -23,7 +23,7 @@ Codex 负责 Domain 契约、预算与评测审查；Antigravity 负责内部实
 ./scripts/check.ps1
 ```
 
-脚本锁定同步依赖，依次运行 Ruff 格式、Lint、mypy、pytest（当前 98 项），失败立即停止。需要先安装 `uv` 并让终端能找到它。
+脚本锁定同步依赖，依次运行 Ruff 格式、Lint、mypy、pytest，失败立即停止。需要先安装 `uv` 并让终端能找到它。
 
 首次使用 BFCL 前，从固定官方来源构建本地缓存并校验原始文件及转换结果哈希：
 
@@ -80,9 +80,15 @@ scripts.run_slice_c_experiments / apps.api
       → ToolLabEnvironment (orders db state, query_records, submit_answer)
       → OrderStatusEvaluator (Read-only, deterministic scoring)
       → ExperimentAggregateMetrics & write_experiment
+
+V0.2 LangGraph Bootstrap
+  → application.run_episode
+      → LangGraphRuntimeAdapter (single-node bootstrap graph)
+          → HandwrittenRuntime (temporary delegate)
+      → canonical Episode / Trace / Evaluation contracts
 ```
 
-详见 `docs/learning/M0-implementation.md`、`docs/learning/M1-bfcl-adapter.md`、`docs/experiments/M0-execution.md` 与 `docs/handoffs/current-state.md`。
+Bootstrap 只验证接入边界，不作为独立 Runtime 或对照实验结果。详见 `docs/adr/ADR-009-langgraph-runtime-bootstrap.md`、`docs/tasks/V0.2-m1-langgraph-bootstrap.md` 与 `docs/handoffs/current-state.md`。
 
 ## 局限
 

@@ -4,7 +4,7 @@
 
 开始工作依次阅读：需求全文 → AGENTS.md → 相关 ADR → `docs/handoffs/current-state.md` → 当前任务卡 → 测试与源码。不得依赖旧聊天；需求版本不符时停止并同步。
 
-M1 切片 A–E、V0.1 切片 F 与 Slice G UI 收口已签收，V0.1 的 18 项验收已通过。当前进入 V0.2，首个里程碑是 LangGraph Runtime Adapter 框架与跨 Runtime 契约，见 `docs/tasks/V0.1-closeout-and-V0.2-entry.md`；框架可运行不等于对照实验完成。Slice G 的初次 Copilot 交付由 Codex 复核整改，问题与防错规则见 `docs/tasks/V0.1-slice-G-ui-refresh-copilot.md` 和 `.github/copilot-instructions.md`。真实模型结果见 current-state；Key 仅在本机环境/`.env` 配置，不入库、不入前端、不在聊天中传递。核心接口/Schema/评测口径变化先走 ADR，不得静默修改。
+M1 切片 A–E、V0.1 切片 F 与 Slice G UI 收口已签收，V0.1 的 18 项验收已通过。V0.2 的 LangGraph Bootstrap Adapter 已建立，下一步是独立节点控制循环，见 `docs/tasks/V0.2-m1-langgraph-bootstrap.md`；Bootstrap 可运行不等于跨 Runtime 对照完成。Slice G 的初次 Copilot 交付由 Codex 复核整改，问题与防错规则见 `docs/tasks/V0.1-slice-G-ui-refresh-copilot.md` 和 `.github/copilot-instructions.md`。真实模型结果见 current-state；Key 仅在本机环境/`.env` 配置，不入库、不入前端、不在聊天中传递。核心接口/Schema/评测口径变化先走 ADR，不得静默修改。
 
 - Domain 不依赖具体环境、Provider SDK、存储或外部 Agent 框架。
 - Application 通过 Domain Port 编排；Runtime 不包含订单业务；Evaluator 只读、不改状态。
