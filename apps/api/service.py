@@ -274,6 +274,9 @@ class EpisodeService:
         """Run paired Baseline vs Recovery experiment serially and persist aggregate artifact."""
         if not req.task_ids:
             raise ValueError("Experiment requires at least one task ID")
+        resolved_seeds = req.seeds if req.seeds is not None else [req.seed]
+        if len(set(resolved_seeds)) != len(resolved_seeds):
+            raise ValueError("Experiment seeds must be unique")
 
         # 1. Load tasks
         tasks = [
@@ -343,7 +346,9 @@ class EpisodeService:
             "scenario": resolved_scenario,
             "token_budget": req.token_budget,
             "task_ids": req.task_ids,
-            "seed": req.seed,
+            "seed": resolved_seeds[0],
+            "seeds": resolved_seeds,
+            "repeat_count": req.repeat_count,
             "baseline_strategy": baseline_agent.runtime_strategy,
             "recovery_strategy": recovery_agent.runtime_strategy,
         }
@@ -353,7 +358,9 @@ class EpisodeService:
             recovery_agent=recovery_agent,
             tasks=tasks,
             provider_factory=provider_factory,
-            seed=req.seed,
+            seed=resolved_seeds[0],
+            seeds=resolved_seeds,
+            repeat_count=req.repeat_count,
             artifacts_dir=self.artifacts_dir,
             config_metadata=config_metadata,
         )

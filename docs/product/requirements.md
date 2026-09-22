@@ -3,8 +3,8 @@
 **项目名称：** AgentLabyrinth  
 **项目定位：** 面向 AI Agent 的可复现评测、实验、对比与多智能体竞技平台  
 **文档性质：** 产品需求、架构契约与开发协作的单一事实来源（SSOT）  
-**文档版本：** V0.5  
-**当前产品阶段：** V0.1 MVP  
+**文档版本：** V0.6
+**当前产品阶段：** V0.2 Experiment & Reliability
 **项目形态：** 长期演进型个人开源项目  
 **目标读者：** 项目成员、协作开发者、AI Coding Agent、项目评审者  
 
@@ -961,9 +961,11 @@ Expected Tool Coverage、Forbidden Tool Call Count、Retry Recovery Rate 和 Evi
 - AgentSpec 集合
 - TaskSpec 集合
 - Seed 集合
-- 全局费用上限
+- 全局 Token 预算
 
 V0.1 支持创建、启动、查看状态与结果，并导出 JSON。暂停、取消、并发控制、失败 Episode 单独重跑和 CSV 导出放入 V0.2。
+
+跨 Episode 的全局美元费用上限放入 V0.2，并且只有 Provider 提供经过验证的价格表时才能启用。费用未知时必须显示未知，不得按零累计，也不得用 Token 预算冒充美元费用上限。
 
 ### FR-09 Dashboard
 
@@ -1315,6 +1317,7 @@ V0.1 完成必须同时满足：
 - 并发 Experiment、暂停 / 取消与失败任务重跑
 - Checkpoint / Resume
 - 幂等性
+- 基于已验证价格表的全局费用上限
 - 扩展故障注入
 - 外部 Benchmark Adapter
 - 自动回归评测

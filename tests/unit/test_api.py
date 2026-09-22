@@ -215,6 +215,8 @@ def test_create_and_get_experiment(client: TestClient, temp_artifacts_dir: Path)
     assert exp["metrics"]["baseline_success_count"] == 0
     assert exp["metrics"]["recovery_success_count"] == 2
     assert exp["metrics"]["retry_recovery_count"] == 2
+    assert exp["metrics"]["baseline_total_cost"] == "0.002"
+    assert exp["metrics"]["recovery_total_cost"] == "0.006"
 
     exp_id = exp["experiment_id"]
     saved_file = temp_artifacts_dir / "experiments" / f"{exp_id}.json"
@@ -227,6 +229,34 @@ def test_create_and_get_experiment(client: TestClient, temp_artifacts_dir: Path)
         get_data = get_resp.json()
         assert get_data["experiment"]["experiment_id"] == exp_id
         mock_fake.assert_not_called()
+
+
+def test_create_experiment_seed_repeat_matrix(client: TestClient) -> None:
+    """API expands seeds and repeats while preserving exact pair identity."""
+    response = client.post(
+        "/api/v1/experiments",
+        json={
+            "provider": "fake",
+            "model": "fake-model",
+            "scenario": "success",
+            "task_ids": ["order-status-001"],
+            "seeds": [3, 5],
+            "repeat_count": 2,
+        },
+    )
+
+    assert response.status_code == 201
+    experiment = response.json()["experiment"]
+    assert experiment["schema_version"] == "1.1"
+    assert experiment["config"]["seeds"] == [3, 5]
+    assert experiment["config"]["repeat_count"] == 2
+    assert len(experiment["episode_ids"]) == 8
+    assert {(pair["seed"], pair["repeat_index"]) for pair in experiment["pairs"]} == {
+        (3, 1),
+        (3, 2),
+        (5, 1),
+        (5, 2),
+    }
 
 
 def test_get_nonexistent_experiment_404(client: TestClient) -> None:

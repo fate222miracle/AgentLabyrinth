@@ -98,12 +98,14 @@ interface PairComparison {
   task_id: string;
   task_name: string;
   seed: number;
+  repeat_index?: number;
   baseline_episode_id: string;
   baseline_success: boolean;
   baseline_termination_reason: string;
   baseline_steps: number;
   baseline_tokens: number;
   baseline_duration_ms: number;
+  baseline_cost?: string | null;
   baseline_model_calls?: number | null;
   baseline_tool_calls?: number | null;
   baseline_tool_selection_accuracy?: number | null;
@@ -114,6 +116,7 @@ interface PairComparison {
   recovery_steps: number;
   recovery_tokens: number;
   recovery_duration_ms: number;
+  recovery_cost?: string | null;
   recovery_model_calls?: number | null;
   recovery_tool_calls?: number | null;
   recovery_tool_selection_accuracy?: number | null;
@@ -145,6 +148,8 @@ interface ExperimentAggregateMetrics {
   recovery_tool_argument_validity_rate?: number | null;
   baseline_avg_duration_ms: number;
   recovery_avg_duration_ms: number;
+  baseline_total_cost?: string | null;
+  recovery_total_cost?: string | null;
   is_cost_known: boolean;
 }
 
@@ -244,6 +249,14 @@ function formatSigned(value: number): string {
   return value > 0 ? `+${value}` : String(value);
 }
 
+function parseSeedList(value: string): number[] | null {
+  const parts = value.split(',').map((part) => part.trim());
+  if (parts.length === 0 || parts.length > 10 || parts.some((part) => part === '')) return null;
+  const seeds = parts.map(Number);
+  if (seeds.some((seed) => !Number.isSafeInteger(seed))) return null;
+  return new Set(seeds).size === seeds.length ? seeds : null;
+}
+
 function comparisonLabel(pair: PairComparison): string {
   if (pair.recovered) return '挽救成功 (RECOVERED)';
   if (pair.baseline_success && pair.recovery_success) return '两组均通过 (TIED)';
@@ -295,7 +308,8 @@ export default function App() {
   const [expModel, setExpModel] = useState<string>('');
   const [expScenario, setExpScenario] = useState<string>('invalid-then-success');
   const [expTasks, setExpTasks] = useState<string[]>([]);
-  const [expSeed, setExpSeed] = useState<number>(1);
+  const [expSeedsText, setExpSeedsText] = useState<string>('1');
+  const [expRepeatCount, setExpRepeatCount] = useState<number>(1);
   const [expTokenBudget, setExpTokenBudget] = useState<number | null>(8000);
   const [singleTokenBudget, setSingleTokenBudget] = useState<number | null>(8000);
   const [experiment, setExperiment] = useState<ExperimentArtifact | null>(null);
@@ -572,7 +586,13 @@ export default function App() {
       setErrorMsg('请至少选择一个评测任务');
       return;
     }
-    beginLoading(`正在执行对照实验，完成后展示详细轨迹。预计 ${expTasks.length * 2} 个 Episode。`);
+    const seeds = parseSeedList(expSeedsText);
+    if (!seeds) {
+      setErrorMsg('Seed 必须是 1–10 个不重复整数，用英文逗号分隔');
+      return;
+    }
+    const episodeCount = expTasks.length * seeds.length * expRepeatCount * 2;
+    beginLoading(`正在串行执行对照实验，完成后展示详细轨迹。预计 ${episodeCount} 个 Episode。`);
     setErrorMsg(null);
     try {
       const currentModelObj = meta?.models.find((m) => m.id === expModel);
@@ -583,7 +603,8 @@ export default function App() {
         model: isFake ? 'fake-model' : expModel,
         scenario: isFake ? expScenario : null,
         task_ids: expTasks,
-        seed: expSeed,
+        seeds,
+        repeat_count: expRepeatCount,
         token_budget: isFake ? null : expTokenBudget,
       };
 
@@ -641,7 +662,11 @@ export default function App() {
     ? snapshotAt(artifact, activeReplayEvent?.event_id)
     : { state: null, source: '尚无环境快照' };
   const replaySteps = Array.from(new Set(visibleEvents.map((event) => event.step_index)));
-  const isExperimentRunReady = Boolean(meta) && Boolean(expModel) && expTasks.length > 0 && !isLoading;
+  const parsedExpSeeds = parseSeedList(expSeedsText);
+  const expEpisodeCount =
+    expTasks.length * (parsedExpSeeds?.length ?? 0) * expRepeatCount * 2;
+  const isExperimentRunReady = Boolean(meta) && Boolean(expModel) && expTasks.length > 0 &&
+    parsedExpSeeds !== null && expRepeatCount >= 1 && expRepeatCount <= 10 && !isLoading;
   const isSingleRunReady = Boolean(meta) && Boolean(selectedModel) && Boolean(selectedSingleTask) && !isLoading;
 
   return (
@@ -912,17 +937,33 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Seed Input */}
                 <div className="form-group">
-                  <label htmlFor="exp-seed-input" className="form-label">随机种子 (Seed)</label>
+                  <label htmlFor="exp-seed-input" className="form-label">随机种子集合 (Seeds)</label>
                   <input
                     id="exp-seed-input"
-                    type="number"
+                    type="text"
                     className="form-input"
-                    value={expSeed}
-                    onChange={(e) => setExpSeed(parseInt(e.target.value) || 1)}
+                    value={expSeedsText}
+                    onChange={(e) => setExpSeedsText(e.target.value)}
+                    placeholder="例如：1, 7, 42"
                     disabled={isLoading}
                   />
+                  <p className="metric-sub">使用英文逗号分隔 1–10 个不重复整数。</p>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="exp-repeat-input" className="form-label">每个 Seed 重复次数</label>
+                  <input
+                    id="exp-repeat-input"
+                    type="number"
+                    min={1}
+                    max={10}
+                    className="form-input"
+                    value={expRepeatCount}
+                    onChange={(e) => setExpRepeatCount(Number(e.target.value))}
+                    disabled={isLoading}
+                  />
+                  <p className="metric-sub">Fake 通常无需重复；真实模型可用于观察非确定性。</p>
                 </div>
 
                 {expModel !== 'fake' && (
@@ -946,6 +987,8 @@ export default function App() {
                       ? '任务元数据尚未就绪'
                       : expTasks.length === 0
                         ? '至少选择 1 个评测任务后才能运行'
+                        : parsedExpSeeds === null
+                          ? 'Seed 必须是 1–10 个不重复整数'
                         : undefined
                   }
                 >
@@ -956,7 +999,7 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      <span>开始运行对照实验 ({expTasks.length * 2} 次执行)</span>
+                      <span>开始运行对照实验 ({expEpisodeCount} 次执行)</span>
                     </>
                   )}
                 </button>
@@ -1027,8 +1070,14 @@ export default function App() {
                             {(experiment.config.scenario as string) || 'N/A (真实模型)'}
                           </div>
                           <div>
-                            <strong>种子 (Seed)：</strong>{' '}
-                            {String(experiment.config.seed ?? 1)}
+                            <strong>种子 (Seeds)：</strong>{' '}
+                            {Array.isArray(experiment.config.seeds)
+                              ? experiment.config.seeds.join(', ')
+                              : String(experiment.config.seed ?? 1)}
+                          </div>
+                          <div>
+                            <strong>每个 Seed 重复：</strong>{' '}
+                            {String(experiment.config.repeat_count ?? 1)} 次
                           </div>
                           <div>
                             <strong>数据来源：</strong>{' '}
@@ -1150,7 +1199,12 @@ export default function App() {
                             {experiment.metrics.baseline_avg_duration_ms} / {experiment.metrics.recovery_avg_duration_ms} ms
                           </div>
                           <div className="metric-sub">
-                            费用状态: {experiment.metrics.is_cost_known ? '已确定' : '未知 (未验证)'}
+                            费用: {experiment.metrics.baseline_total_cost != null &&
+                              experiment.metrics.recovery_total_cost != null
+                              ? `$${experiment.metrics.baseline_total_cost} / $${experiment.metrics.recovery_total_cost}`
+                              : experiment.metrics.is_cost_known
+                                ? '历史产物未统计'
+                                : '未知 (未验证)'}
                           </div>
                         </div>
 
@@ -1211,8 +1265,13 @@ export default function App() {
                           </thead>
                           <tbody>
                             {experiment.pairs.map((pair) => (
-                              <tr key={pair.task_id}>
-                                        <td className="task-name">{pair.task_name}</td>
+                              <tr key={`${pair.task_id}-${pair.seed}-${pair.repeat_index ?? 1}`}>
+                                        <td className="task-name">
+                                          {pair.task_name}
+                                          <div className="task-meta inline-note">
+                                            Seed {pair.seed} · 第 {pair.repeat_index ?? 1} 次
+                                          </div>
+                                        </td>
                                         <td>
                                           <span className={`badge ${pair.baseline_success ? 'badge-green' : 'badge-red'}`}>
                                             {pair.baseline_success ? 'SUCCESS' : 'FAILED'}

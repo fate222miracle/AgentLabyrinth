@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -37,12 +38,14 @@ class PairComparison(BaseModel):
     task_id: str
     task_name: str
     seed: int
+    repeat_index: int = 1
     baseline_episode_id: UUID
     baseline_success: bool
     baseline_termination_reason: str
     baseline_steps: int
     baseline_tokens: int
     baseline_duration_ms: int
+    baseline_cost: Decimal | None = None
     baseline_model_calls: int | None = None
     baseline_tool_calls: int | None = None
     baseline_tool_selection_accuracy: float | None = None
@@ -53,6 +56,7 @@ class PairComparison(BaseModel):
     recovery_steps: int
     recovery_tokens: int
     recovery_duration_ms: int
+    recovery_cost: Decimal | None = None
     recovery_model_calls: int | None = None
     recovery_tool_calls: int | None = None
     recovery_tool_selection_accuracy: float | None = None
@@ -88,6 +92,8 @@ class ExperimentAggregateMetrics(BaseModel):
     recovery_tool_argument_validity_rate: float | None = None
     baseline_avg_duration_ms: float
     recovery_avg_duration_ms: float
+    baseline_total_cost: Decimal | None = None
+    recovery_total_cost: Decimal | None = None
     is_cost_known: bool
 
 
@@ -96,7 +102,7 @@ class ExperimentArtifact(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     experiment_id: UUID
     created_at: str
     config: dict[str, Any]
@@ -119,23 +125,37 @@ async def run_experiment(
     provider_factory: Callable[[], ModelProvider],
     *,
     seed: int = 1,
+    seeds: list[int] | None = None,
+    repeat_count: int = 1,
     artifacts_dir: Path,
     config_metadata: dict[str, Any] | None = None,
 ) -> ExperimentArtifact:
     """Run paired episodes serially, persist each episode, and aggregate comparative outcomes."""
     if not tasks:
         raise ValueError("Experiment requires at least one task")
+    resolved_seeds = list(seeds) if seeds is not None else [seed]
+    if not resolved_seeds:
+        raise ValueError("Experiment requires at least one seed")
+    if len(set(resolved_seeds)) != len(resolved_seeds):
+        raise ValueError("Experiment seeds must be unique")
+    if repeat_count < 1:
+        raise ValueError("Experiment repeat_count must be at least 1")
 
     experiment_id = uuid4()
     created_at = datetime.now(UTC).isoformat()
     episode_ids: list[UUID] = []
     pairs: list[PairComparison] = []
 
-    # Common RunConfig
-    run_config = RunConfig(seed=seed, environment_version="tool-lab-m0-v1")
+    runs = (
+        (task, current_seed, repeat_index)
+        for current_seed in resolved_seeds
+        for repeat_index in range(1, repeat_count + 1)
+        for task in tasks
+    )
 
-    # Run each task in serial: first Baseline, then Recovery under exact same conditions
-    for task in tasks:
+    # Run every matrix cell serially: Baseline then Recovery under exact same conditions.
+    for task, current_seed, repeat_index in runs:
+        run_config = RunConfig(seed=current_seed, environment_version="tool-lab-m0-v1")
         # 1. Execute Baseline Episode
         provider_base = provider_factory()
         registry_base = create_tool_lab_registry()
@@ -220,13 +240,19 @@ async def run_experiment(
             PairComparison(
                 task_id=task.name,
                 task_name=task.name,
-                seed=seed,
+                seed=current_seed,
+                repeat_index=repeat_index,
                 baseline_episode_id=base_id,
                 baseline_success=base_success,
                 baseline_termination_reason=base_term.value,
                 baseline_steps=art_base.episode.step_count,
                 baseline_tokens=base_tokens,
                 baseline_duration_ms=art_base.episode.duration_ms,
+                baseline_cost=(
+                    art_base.episode.estimated_cost.amount
+                    if art_base.episode.estimated_cost.is_known
+                    else None
+                ),
                 baseline_model_calls=art_base.episode.model_call_count,
                 baseline_tool_calls=art_base.episode.tool_call_count,
                 baseline_tool_selection_accuracy=(
@@ -241,6 +267,11 @@ async def run_experiment(
                 recovery_steps=art_rec.episode.step_count,
                 recovery_tokens=rec_tokens,
                 recovery_duration_ms=art_rec.episode.duration_ms,
+                recovery_cost=(
+                    art_rec.episode.estimated_cost.amount
+                    if art_rec.episode.estimated_cost.is_known
+                    else None
+                ),
                 recovery_model_calls=art_rec.episode.model_call_count,
                 recovery_tool_calls=art_rec.episode.tool_call_count,
                 recovery_tool_selection_accuracy=(
@@ -306,8 +337,19 @@ async def run_experiment(
         round(recovered_count / retry_eligible_count, 4) if retry_eligible_count > 0 else 0.0
     )
 
-    # Determine cost known status
-    is_known = baseline_agent.model.provider == "fake"
+    is_known = all(
+        pair.baseline_cost is not None and pair.recovery_cost is not None for pair in pairs
+    )
+    baseline_total_cost = (
+        sum((pair.baseline_cost for pair in pairs if pair.baseline_cost is not None), Decimal())
+        if is_known
+        else None
+    )
+    recovery_total_cost = (
+        sum((pair.recovery_cost for pair in pairs if pair.recovery_cost is not None), Decimal())
+        if is_known
+        else None
+    )
 
     metrics = ExperimentAggregateMetrics(
         total_pairs=total,
@@ -332,6 +374,8 @@ async def run_experiment(
         recovery_tool_argument_validity_rate=rec_avg_arg,
         baseline_avg_duration_ms=round(base_avg_dur, 2),
         recovery_avg_duration_ms=round(rec_avg_dur, 2),
+        baseline_total_cost=baseline_total_cost,
+        recovery_total_cost=recovery_total_cost,
         is_cost_known=is_known,
     )
 
@@ -370,7 +414,9 @@ async def run_experiment(
         ],
         "evaluator": "order_status_v1",
         "environment_version": "tool-lab-m0-v1",
-        "seed": seed,
+        "seed": resolved_seeds[0],
+        "seeds": resolved_seeds,
+        "repeat_count": repeat_count,
     }
 
     if config_metadata:
@@ -382,7 +428,7 @@ async def run_experiment(
     config_hash = compute_config_hash(exp_config)
 
     experiment_artifact = ExperimentArtifact(
-        schema_version="1.0",
+        schema_version="1.1",
         experiment_id=experiment_id,
         created_at=created_at,
         config=exp_config,

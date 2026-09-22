@@ -94,6 +94,9 @@ def test_experiment_runner_deterministic_recovery() -> None:
 
         # Cost known for fake provider
         assert artifact.metrics.is_cost_known is True
+        assert artifact.metrics.baseline_total_cost is not None
+        assert artifact.metrics.recovery_total_cost is not None
+        assert artifact.metrics.recovery_total_cost > artifact.metrics.baseline_total_cost > 0
 
         # Check each pair
         for pair in artifact.pairs:
@@ -158,6 +161,37 @@ def test_experiment_runner_clean_baseline() -> None:
             assert pair.recovered is False
 
 
+def test_experiment_runner_seed_repeat_matrix_is_paired_and_serializable() -> None:
+    """Every seed and repeat produces one identifiable Baseline/Recovery pair per task."""
+    base_agent, rec_agent = make_agents()
+
+    with TemporaryDirectory() as tmp_dir:
+        artifact = asyncio.run(
+            run_experiment(
+                baseline_agent=base_agent,
+                recovery_agent=rec_agent,
+                tasks=load_tasks()[:1],
+                provider_factory=lambda: FakeModelProvider(scenario="normal"),
+                seeds=[7, 9],
+                repeat_count=2,
+                artifacts_dir=Path(tmp_dir),
+            )
+        )
+
+        assert artifact.schema_version == "1.1"
+        assert artifact.metrics.total_pairs == 4
+        assert len(artifact.episode_ids) == 8
+        assert {(pair.seed, pair.repeat_index) for pair in artifact.pairs} == {
+            (7, 1),
+            (7, 2),
+            (9, 1),
+            (9, 2),
+        }
+        assert artifact.config["seed"] == 7
+        assert artifact.config["seeds"] == [7, 9]
+        assert artifact.config["repeat_count"] == 2
+
+
 def test_misattribution_non_invalid_arguments_not_recovered() -> None:
     """Baseline failures from forbidden_tool must NOT be marked retry_eligible or recovered."""
     tasks = load_tasks()[:2]
@@ -210,8 +244,11 @@ def test_read_legacy_experiment_artifact_preserves_none() -> None:
     assert loaded.metrics.baseline_avg_tool_calls is None
     assert loaded.metrics.recovery_avg_tool_calls is None
     assert loaded.metrics.retry_recovery_count == 4
+    assert loaded.metrics.baseline_total_cost is None
+    assert loaded.metrics.recovery_total_cost is None
 
     for pair in loaded.pairs:
+        assert pair.repeat_index == 1
         assert pair.retry_eligible is None
         assert pair.baseline_model_calls is None
         assert pair.recovery_model_calls is None

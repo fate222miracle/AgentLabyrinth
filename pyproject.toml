@@ -1,7 +1,7 @@
 [project]
 name = "agent-labyrinth"
-version = "0.0.1"
-description = "M0 contracts and handoff scaffold; not a complete V0.1"
+version = "0.1.0"
+description = "Reproducible evaluation and comparison platform for tool-using AI agents"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "pydantic>=2.10,<3",

@@ -140,6 +140,8 @@ class CreateExperimentRequest(BaseModel):
         ]
     )
     seed: int = 1
+    seeds: list[int] | None = Field(default=None, min_length=1, max_length=10)
+    repeat_count: int = Field(default=1, ge=1, le=10)
     token_budget: int | None = Field(default=None, ge=100, le=20000)
 
 

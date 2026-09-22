@@ -78,7 +78,9 @@ scripts.demo (main)
 
 ## 6. 刻意保留的边界
 
-M0 仅有一个订单任务，没有真实模型、超时重试、时间预算、批量实验或 Replay 产品。JSON Trace 可严格重读，但没有数据库查询与崩溃恢复。
+M0 最初只有一个订单任务；当前 V0.1 已在同一边界上扩展为 12 个 ToolLab 任务、真实 Provider、成对批量实验和只读 Replay。Experiment 以 Seed → Repeat → Task → Baseline → Recovery 的顺序串行执行，每个 Pair 保存 Seed 与重复序号。JSON Trace 可严格重读，但仍没有数据库查询、并发执行、Checkpoint 或崩溃恢复；这些属于 V0.2。
+
+运行最小矩阵实验：启动 API 与 Web 后，在“对照实验”中选择 Fake、一个任务，将 Seeds 填为 `11, 22`、重复次数填为 `2`。页面应在运行前显示 8 个 Episode，完成后显示 4 组成对结果。相同 Seed 与重复序号的两侧必须分别使用 Baseline 和 Recovery，不能跨组配对。
 
 ## 7. 阅读后检查问题
 

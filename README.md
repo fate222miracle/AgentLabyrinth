@@ -1,8 +1,8 @@
 # AgentLabyrinth
 
-面向 AI Agent 的可复现实验平台。唯一权威需求：`docs/product/requirements.md` **V0.5**。
+面向 AI Agent 的可复现实验平台。唯一权威需求：`docs/product/requirements.md` **V0.6**。
 
-**M0 与 M1 切片 A–E 已形成可演示闭环，两个真实免费模型已通过 BFCL 与 ToolLab 示例。当前进入 V0.1 切片 F，完整 V0.1 尚未验收。**
+**V0.1 已完成 18 项验收，支持多 Seed × Repeat 串行实验；两个真实免费模型已通过 BFCL 与 ToolLab 示例。当前进入 V0.2，先建立 LangGraph Runtime Adapter 与跨 Runtime 对照框架。**
 
 课程演示 M1 推进：
 - 切片 A：完成 AIHubMix 真实 ToolLab 闭环。
@@ -46,7 +46,7 @@ npm run dev
 ```
 
 浏览器打开 `http://127.0.0.1:5173/`。支持切换“对照实验 (Baseline vs Recovery)”与“单次运行 (Single Episode)”：
-- 对照实验模式：多选 12 个原生评测任务、选择模型或离线场景，运行后展示两造成功率、挽救率（Retry Recovery Rate）、Token 代价增量、成对比较表格，可一键跳转审查任意一边的详细 Trace。支持 `?experiment_id=...` 与 `?episode_id=...` 刷新回读。
+- 对照实验模式：多选 12 个原生评测任务，配置 1–10 个不重复 Seed 与每 Seed 重复次数；页面运行前显示 `2 × Task × Seed × Repeat` 的真实 Episode 数。完成后展示两造成功率、挽救率、Token 与已知 Decimal 费用、成对比较表格，并可穿透审查两侧 Trace。支持 `?experiment_id=...` 与 `?episode_id=...` 刷新回读。
 - 单次运行模式：可切换原生 ToolLab 与 8 道 BFCL 改编真题，展示数据来源、本地评分协议、结果与完整 Trace。
 - Trace Replay：按事件类型筛选，使用前后按钮或 Step 下拉定位，左侧查看截至当前事件最近的 Environment Snapshot；历史旧产物缺少中间快照时仍可浏览事件。
 
