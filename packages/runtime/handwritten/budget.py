@@ -1,8 +1,29 @@
 """Resource budget tracking and hard-limit enforcement."""
 
 from decimal import Decimal
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from packages.domain.models import Budget, EstimatedCost, TaskSpec, TerminationReason, TokenUsage
+
+
+class BudgetState(BaseModel):
+    """Versioned counters needed to continue the same resource budget."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+    schema_version: Literal["1.0"] = "1.0"
+    step_count: int = Field(ge=0)
+    model_call_count: int = Field(ge=0)
+    tool_call_count: int = Field(ge=0)
+    prompt_tokens: int = Field(ge=0)
+    completion_tokens: int = Field(ge=0)
+    estimated_cost: Decimal = Field(ge=0)
+    is_simulated: bool
+    any_simulated: bool
+    has_usage: bool
+    has_unknown_cost: bool
+    price_table_version: str
 
 
 class BudgetTracker:
@@ -34,6 +55,39 @@ class BudgetTracker:
         self._has_usage = False
         self._has_unknown_cost = not is_simulated
         self._price_table_version = price_table_version
+
+    def snapshot(self) -> BudgetState:
+        """Freeze consumption without persisting limits already bound to Agent/Task."""
+        return BudgetState(
+            step_count=self.step_count,
+            model_call_count=self.model_call_count,
+            tool_call_count=self.tool_call_count,
+            prompt_tokens=self.prompt_tokens,
+            completion_tokens=self.completion_tokens,
+            estimated_cost=self.estimated_cost,
+            is_simulated=self._is_simulated,
+            any_simulated=self._any_simulated,
+            has_usage=self._has_usage,
+            has_unknown_cost=self._has_unknown_cost,
+            price_table_version=self._price_table_version,
+        )
+
+    def restore(self, state: BudgetState) -> None:
+        """Restore counters only when their provenance matches this agent and task."""
+        if state.schema_version != "1.0" or state.is_simulated != self._is_simulated:
+            raise ValueError("Incompatible budget checkpoint")
+        if state.model_call_count > state.step_count or state.tool_call_count > self.max_tool_calls:
+            raise ValueError("Invalid budget counters in checkpoint")
+        self.step_count = state.step_count
+        self.model_call_count = state.model_call_count
+        self.tool_call_count = state.tool_call_count
+        self.prompt_tokens = state.prompt_tokens
+        self.completion_tokens = state.completion_tokens
+        self.estimated_cost = state.estimated_cost
+        self._any_simulated = state.any_simulated
+        self._has_usage = state.has_usage
+        self._has_unknown_cost = state.has_unknown_cost
+        self._price_table_version = state.price_table_version
 
     def can_call_model(self) -> tuple[bool, TerminationReason | None, str | None]:
         """Check pre-model-call limits for step and model call counts."""

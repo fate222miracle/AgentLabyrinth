@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.115,<1",
     "uvicorn>=0.34,<1",
     "langgraph>=1.2,<2",
+    "mcp==2.2.0",
 ]
 
 [dependency-groups]

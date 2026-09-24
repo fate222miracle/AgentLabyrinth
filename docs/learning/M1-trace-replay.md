@@ -14,6 +14,8 @@ Replay 用已经保存的 TraceEvent 和 Environment Snapshot 复盘一次 Episo
 6. `apps/web/src/index.css`：桌面双栏 Replay 与 390px 单栏布局。
 7. `tests/unit/test_handwritten_runtime.py`、`tests/unit/test_api.py`：快照顺序、最终状态和 GET 读取隔离。
 
+V0.2 的自动播放在 `App.tsx` 中只用浏览器定时器推进 `replayIndex`，速度为 0.5×、1×、2×；点击暂停、手动导航、切换筛选、Episode 或页面模式时清理定时器。末尾自动停止，重播时从第一个可见事件开始。定时器由 React effect 清理，不增加后端接口。
+
 ## 调用链
 
 ```text
@@ -53,4 +55,4 @@ JSON 导出直接把页面已经持有的 `EpisodeArtifact` 或 `ExperimentArtif
 - 390px Edge DevTools：`innerWidth=clientWidth=scrollWidth=390`，Replay、导出按钮和 17 个事件均已渲染；前后控件矩形全部位于 viewport 内。
 - 交互：从最后事件点击上一步得到 `16 / 17`、`ENVIRONMENT_UPDATED`、`Step 2 更新后`；筛选环境更新得到 `1 / 2`、`Step 1 更新后`。
 - 导出：生成 `agentlabyrinth-episode-9b81c7f9-4fce-48fb-8a52-80d730d39e12.json`，20682 bytes。
-- 真实模型不参与 Replay 自动化测试。当前环境没有 `AIHUBMIX_API_KEY`，免费模型复测必须在本机配置 Key 后单独执行并记录真实结果。
+- 2026-09-23 浏览器已在 Fake LangGraph Episode `92f1eeba-c76b-4307-a724-b26e6acf7b67` 上验证 V0.2 自动播放：2× 从 `1/17` 推进到 `17/17` 并自动停止；重播回首事件，手动暂停有效。播放仅使用已保存的事件；真实模型小样本与模型可用性记录见 `docs/handoffs/current-state.md`。

@@ -11,10 +11,8 @@ from apps.api.service import EpisodeService
 from packages.providers.aihubmix import get_aihubmix_api_key
 
 MODELS = (
-    "deepseek-v4-flash-0731-free",
-    "qwen3.8-27b-free",
-    "xiaomi-mimo-v2.5-pro-free",
     "coding-minimax-m2.7-free",
+    "xiaomi-mimo-v2.5-pro-free",
 )
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_CATALOG = ROOT / "benchmarks/tool_lab_core/models.json"

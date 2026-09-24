@@ -5,20 +5,12 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from packages.application.experiment import ExperimentArtifact
-from packages.domain.models import EpisodeArtifact
+from packages.application.experiment import ComparisonAxis, ExperimentArtifact
+from packages.domain.models import EpisodeArtifact, RuntimeBackend, RuntimeStrategy
 
 ALLOWED_AIHUBMIX_MODELS: set[str] = {
-    "coding-glm-5.3-free",
-    "coding-glm-5.2-free",
-    "gemini-3.8-flash-free",
-    "gemini-3.7-flash-free",
-    "coding-kimi-k3-free",
-    "coding-glm-5.3-flash-free",
-    "deepseek-v4-flash-0731-free",
-    "qwen3.8-27b-free",
-    "xiaomi-mimo-v2.5-pro-free",
     "coding-minimax-m2.7-free",
+    "xiaomi-mimo-v2.5-pro-free",
 }
 
 ALLOWED_FAKE_SCENARIOS: set[str] = {
@@ -67,6 +59,7 @@ class TaskOption(BaseModel):
     token_budget: int
     suite: Literal["tool_lab_core", "bfcl_adapted"] = "tool_lab_core"
     split: str = "development"
+    supports_mcp: bool = False
 
 
 class MetaResponse(BaseModel):
@@ -80,6 +73,7 @@ class MetaResponse(BaseModel):
     tasks: list[TaskOption]
     default_model: str
     default_task: str
+    model_catalog_status: Literal["live", "unavailable", "static"] = "static"
 
 
 class CreateEpisodeRequest(BaseModel):
@@ -87,7 +81,7 @@ class CreateEpisodeRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     request_id: UUID = Field(default_factory=uuid4)
     provider: Literal["fake", "aihubmix"]
     model: str
@@ -99,6 +93,9 @@ class CreateEpisodeRequest(BaseModel):
     suite: Literal["tool_lab_core", "bfcl_adapted"] = "tool_lab_core"
     max_steps: int | None = Field(default=None, ge=1, le=20)
     token_budget: int | None = Field(default=None, ge=100, le=20000)
+    runtime_backend: RuntimeBackend = "handwritten"
+    runtime_strategy: RuntimeStrategy = "handwritten"
+    tool_transport: Literal["local", "mcp"] = "local"
 
 
 class EpisodeResponse(BaseModel):
@@ -116,7 +113,7 @@ class CreateExperimentRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     request_id: UUID = Field(default_factory=uuid4)
     provider: Literal["fake", "aihubmix"]
     model: str
@@ -143,6 +140,9 @@ class CreateExperimentRequest(BaseModel):
     seeds: list[int] | None = Field(default=None, min_length=1, max_length=10)
     repeat_count: int = Field(default=1, ge=1, le=10)
     token_budget: int | None = Field(default=None, ge=100, le=20000)
+    comparison_axis: ComparisonAxis = "recovery_policy"
+    runtime_backend: RuntimeBackend = "handwritten"
+    runtime_strategy: RuntimeStrategy = "handwritten"
 
 
 class ExperimentResponse(BaseModel):

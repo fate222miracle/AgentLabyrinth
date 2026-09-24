@@ -540,7 +540,12 @@ body,
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.replay-buttons label {
+  min-width: 5rem;
 }
 
 .replay-position {
@@ -687,6 +692,11 @@ pre {
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+.persistence-export-actions {
+  display: inline-flex;
+  gap: 0.5rem;
 }
 
 .persistence-label {
@@ -1065,8 +1075,7 @@ button:focus-visible,
 
   .replay-buttons {
     width: 100%;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    justify-content: flex-start;
   }
 
   .replay-buttons .btn-secondary {

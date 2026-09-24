@@ -24,10 +24,13 @@ class FakeModelProvider(ModelProvider):
         self,
         scenario: str = "normal",
         custom_responses: list[ModelResponse] | None = None,
+        initial_call_count: int = 0,
     ) -> None:
         self.scenario = scenario.replace("-", "_")
         self.custom_responses = list(custom_responses) if custom_responses else []
-        self._call_count = 0
+        if initial_call_count < 0:
+            raise ValueError("initial_call_count must be non-negative")
+        self._call_count = initial_call_count
 
     async def generate(
         self, messages: list[Message], tools: list[ToolSchema], config: ModelConfig

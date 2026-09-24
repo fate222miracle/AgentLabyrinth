@@ -1,5 +1,6 @@
 """FastAPI entrypoint and routing for AgentLabyrinth M1 Slice B."""
 
+import asyncio
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -33,7 +34,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_default_service = EpisodeService()
+_default_service = EpisodeService(live_model_catalog=True)
 
 
 def get_episode_service() -> EpisodeService:
@@ -100,7 +101,7 @@ async def get_meta(
     service: Annotated[EpisodeService, Depends(get_episode_service)],
 ) -> MetaResponse:
     """Return available models, tasks, and system default choices."""
-    return service.get_meta()
+    return await asyncio.to_thread(service.get_meta)
 
 
 @app.post(
@@ -132,6 +133,40 @@ async def create_episode(
         request_id=req.request_id,
         artifact=artifact,
     )
+
+
+@app.get(
+    "/api/v1/episodes/resumable",
+    response_model=list[UUID],
+    summary="List unfinished ToolLab episodes from an earlier API instance",
+)
+async def list_resumable_episodes(
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> list[UUID]:
+    """Return IDs that can safely be resumed after an API restart."""
+    return service.resumable_episode_ids()
+
+
+@app.post(
+    "/api/v1/episodes/{episode_id}/resume",
+    response_model=EpisodeResponse,
+    summary="Resume an unfinished ToolLab episode from an earlier API instance",
+)
+async def resume_episode(
+    episode_id: UUID,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> EpisodeResponse:
+    """Continue an existing Episode ID using its saved provenance and Trace."""
+    try:
+        artifact = await service.resume_episode(episode_id)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Episode resume encountered an unexpected failure.",
+        ) from exc
+    return EpisodeResponse(request_id=uuid4(), artifact=artifact)
 
 
 @app.get(

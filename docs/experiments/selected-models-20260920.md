@@ -35,6 +35,16 @@
 
 本轮可用率按“两个示例均通过”统计为 **2/4**。这是网关当时状态与两个固定样例的结果，不是模型排行榜。
 
+## 2026-09-23 可用目录与网络故障复核
+
+失败 Episode `eaa48e6a-8f3a-4d48-8ebb-2f258aa2152a` 与 `f57c1847-feda-438b-90f8-f8e20fe2815e` 都在模型调用前返回 `NETWORK_CONNECTION_FAILED`，耗时约 200 ms，Token 为 0。根因为本机 API 进程继承了 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY=http://127.0.0.1:9`，该代理端口没有服务监听，请求没有到达 AIHubMix。重启 API 时使用不带该失效代理的本机环境后，模型调用恢复。
+
+向官方主域 `https://aihubmix.com/v1/models` 发起只读目录请求，HTTP 200；当前 API Key 可访问的模型只有 `coding-minimax-m2.7-free` 与 `xiaomi-mimo-v2.5-pro-free`。MiniMax BFCL 单题 Episode `032ac2bb-0ae7-4b30-b9d0-4db9ef3becdb` 与截图对应 MiMo BFCL 重跑 Episode `24b010eb-22f9-4f04-b2b6-c954d256239f` 均 SUCCESS、`exact_call_match`、各 1 次模型调用及 1 次工具调用。
+
+`benchmarks/tool_lab_core/models.json` 现在只保留这两个账号可见且此前通过真实工具任务的候选，默认改为 MiniMax M2.7。后台 `/api/v1/meta` 每 5 分钟刷新一次 Key 级 `/v1/models` 目录，只呈现其与这份已验证候选表的交集；目录无法访问时只提供 Fake 并报告状态。执行端也拒绝 Key 目录中已不可见的模型。新增候选需先在目录文件登记并跑真实工具任务后才能显示。
+
+AIHubMix 官方免费模型目录在 2026-09-22 显示 60 个免费模型；这不代表当前 Key 都有访问权限。官方退役列表显示 MiMo V2.5 Pro 将于 2026-10-21 退役，建议迁移到 MiMo V2.6 Pro；当前 Key 目录尚未开放该替代模型。因此 MiMo V2.5 Pro 标为临近退役备选，不再作为默认。目录和模型生命周期链接：[免费模型目录](https://aihubmix.com/models/free)、[模型退役列表](https://aihubmix.com/models/retirements)。
+
 ## 绕过平台的故障定位复验
 
 四个模型均已通过 `is_model_permitted`。再对 DeepSeek 与 Qwen 各发送一次直接 HTTP 普通聊天请求（无工具、无 Runtime、无平台预算与节流，输出上限 128），仍收到：

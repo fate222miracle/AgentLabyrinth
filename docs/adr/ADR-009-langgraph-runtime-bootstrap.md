@@ -2,7 +2,7 @@
 
 ## 状态
 
-Accepted（2026-09-22，V0.2 Milestone 1）
+Superseded（2026-09-23），实现方向由 [ADR-010](ADR-010-independent-runtime-comparison.md) 取代；本记录保留 Bootstrap 阶段的历史决策与验收依据。
 
 ## 背景
 

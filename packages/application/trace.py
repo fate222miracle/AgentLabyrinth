@@ -51,10 +51,28 @@ def content_hash(value: Contract) -> str:
 class JsonTraceRecorder:
     """Own one event stream; never return mutable references to stored events."""
 
-    def __init__(self, run_config: RunConfig, episode_id: UUID | None = None) -> None:
+    def __init__(
+        self,
+        run_config: RunConfig,
+        episode_id: UUID | None = None,
+        events: tuple[TraceEvent, ...] = (),
+    ) -> None:
         self._episode_id = episode_id or uuid4()
         self._run_config = run_config.model_copy(deep=True)
-        self._events: list[TraceEvent] = []
+        if any(event.episode_id != self._episode_id for event in events):
+            raise ValueError("Foreign episode event in checkpoint")
+        if any(
+            current.parent_event_id != previous.event_id or current.step_index < previous.step_index
+            for previous, current in zip(events, events[1:], strict=False)
+        ):
+            raise ValueError("Invalid checkpoint Trace chain")
+        if events and (
+            events[0].event_type != EventType.EPISODE_STARTED
+            or events[0].parent_event_id is not None
+            or any(event.event_type == EventType.EPISODE_FINISHED for event in events)
+        ):
+            raise ValueError("Checkpoint must contain an unfinished episode")
+        self._events: list[TraceEvent] = [event.model_copy(deep=True) for event in events]
 
     @property
     def episode_id(self) -> UUID:

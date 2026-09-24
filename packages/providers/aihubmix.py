@@ -68,6 +68,38 @@ def get_aihubmix_api_key() -> str:
     )
 
 
+def list_available_model_ids(timeout: float = 4.0) -> set[str]:
+    """Return model IDs visible to the configured API key from the official catalog."""
+    req = urllib.request.Request(
+        f"{DEFAULT_BASE_URL}/models",
+        headers={"Authorization": f"Bearer {get_aihubmix_api_key()}", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        if err.code == 401:
+            code = "AUTHENTICATION_FAILED"
+        elif err.code == 429:
+            code = "RATE_LIMIT_EXCEEDED"
+        elif err.code >= 500:
+            code = "UPSTREAM_GATEWAY_ERROR"
+        else:
+            code = "CLIENT_REQUEST_FAILED"
+        raise ModelProviderError(code) from None
+    except urllib.error.URLError:
+        raise ModelProviderError("NETWORK_CONNECTION_FAILED") from None
+    except (ValueError, UnicodeError):
+        raise ModelProviderError("INVALID_MODEL_RESPONSE") from None
+
+    entries = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        raise ModelProviderError("INVALID_MODEL_RESPONSE")
+    return {
+        item["id"] for item in entries if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+
+
 def inline_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
     """Expand local nonrecursive definitions without coercing model arguments."""
 

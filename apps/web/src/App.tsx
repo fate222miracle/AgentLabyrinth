@@ -19,6 +19,7 @@ interface TaskOption {
   token_budget: number;
   suite: 'tool_lab_core' | 'bfcl_adapted';
   split: string;
+  supports_mcp: boolean;
 }
 
 interface MetaResponse {
@@ -28,6 +29,7 @@ interface MetaResponse {
   tasks: TaskOption[];
   default_model: string;
   default_task: string;
+  model_catalog_status: 'live' | 'unavailable' | 'static';
 }
 
 interface TraceEvent {
@@ -83,9 +85,11 @@ interface EpisodeArtifact {
     reason: string;
     metrics: Record<string, unknown>;
   };
+  run_config: { runtime_version?: string | null; environment_version?: string };
   agent: {
     name?: string;
     runtime_strategy?: string;
+    runtime_backend?: string;
     model: {
       provider: string;
       model: string;
@@ -132,7 +136,7 @@ interface ExperimentAggregateMetrics {
   baseline_success_rate: number;
   recovery_success_rate: number;
   retry_eligible_count?: number | null;
-  retry_recovery_count: number;
+  retry_recovery_count: number | null;
   retry_recovery_rate?: number | null;
   baseline_total_tokens: number;
   recovery_total_tokens: number;
@@ -213,10 +217,8 @@ function snapshotAt(
   return { state, source };
 }
 
-function downloadJson(filename: string, value: unknown): void {
-  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], {
-    type: 'application/json;charset=utf-8',
-  });
+function downloadFile(filename: string, content: string, contentType: string): void {
+  const blob = new Blob([content], { type: contentType });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -224,7 +226,51 @@ function downloadJson(filename: string, value: unknown): void {
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadJson(filename: string, value: unknown): void {
+  downloadFile(filename, `${JSON.stringify(value, null, 2)}\n`, 'application/json;charset=utf-8');
+}
+
+function csvCell(value: string | number | boolean | null | undefined): string {
+  if (value === null || value === undefined) return '';
+  const raw = String(value);
+  // Task names and labels can eventually come from external suites; prevent spreadsheet formulas.
+  const safe = typeof value === 'string' && /^[\s\u0000-\u001f]*[=+\-@]/.test(raw) ? `'${raw}` : raw;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
+
+function experimentCsv(experiment: ExperimentArtifact): string {
+  const headers = [
+    'experiment_id', 'config_hash', 'comparison_axis', 'task_id', 'seed', 'repeat_index',
+    'arm', 'episode_id', 'success', 'termination_reason', 'steps', 'model_calls',
+    'tool_calls', 'tokens', 'duration_ms', 'cost_usd', 'tool_selection_accuracy',
+    'tool_argument_validity_rate', 'pair_retry_eligible', 'pair_recovered',
+  ];
+  const axis = typeof experiment.config.comparison_axis === 'string'
+    ? experiment.config.comparison_axis : 'recovery_policy';
+  const rows = experiment.pairs.flatMap((pair) => [
+    [experiment.experiment_id, experiment.config_hash, axis, pair.task_id, pair.seed,
+      pair.repeat_index ?? 1, axis === 'runtime_backend' ? 'reference' : 'baseline',
+      pair.baseline_episode_id, pair.baseline_success,
+      pair.baseline_termination_reason, pair.baseline_steps, pair.baseline_model_calls,
+      pair.baseline_tool_calls, pair.baseline_tokens, pair.baseline_duration_ms,
+      pair.baseline_cost, pair.baseline_tool_selection_accuracy,
+      pair.baseline_tool_argument_validity_rate,
+      axis === 'runtime_backend' ? null : pair.retry_eligible,
+      axis === 'runtime_backend' ? null : pair.recovered],
+    [experiment.experiment_id, experiment.config_hash, axis, pair.task_id, pair.seed,
+      pair.repeat_index ?? 1, axis === 'runtime_backend' ? 'langgraph' : 'recovery',
+      pair.recovery_episode_id, pair.recovery_success,
+      pair.recovery_termination_reason, pair.recovery_steps, pair.recovery_model_calls,
+      pair.recovery_tool_calls, pair.recovery_tokens, pair.recovery_duration_ms,
+      pair.recovery_cost, pair.recovery_tool_selection_accuracy,
+      pair.recovery_tool_argument_validity_rate,
+      axis === 'runtime_backend' ? null : pair.retry_eligible,
+      axis === 'runtime_backend' ? null : pair.recovered],
+  ]);
+  return `\uFEFF${[headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
 }
 
 const EVENT_TYPE_LABELS: Record<string, string> = {
@@ -238,6 +284,7 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   TOOL_SUCCEEDED: '工具执行成功',
   TOOL_FAILED: '工具执行失败',
   ENVIRONMENT_UPDATED: '环境状态更新',
+  EPISODE_RESUMED: '从存档恢复',
   EPISODE_FINISHED: '运行结束',
 };
 
@@ -257,7 +304,12 @@ function parseSeedList(value: string): number[] | null {
   return new Set(seeds).size === seeds.length ? seeds : null;
 }
 
-function comparisonLabel(pair: PairComparison): string {
+function comparisonLabel(pair: PairComparison, axis: 'recovery_policy' | 'runtime_backend'): string {
+  if (axis === 'runtime_backend') {
+    if (pair.baseline_success && pair.recovery_success) return '两种 Runtime 均通过';
+    if (!pair.baseline_success && !pair.recovery_success) return '两种 Runtime 均未通过';
+    return pair.baseline_success ? 'Reference 通过' : 'LangGraph 通过';
+  }
   if (pair.recovered) return '挽救成功 (RECOVERED)';
   if (pair.baseline_success && pair.recovery_success) return '两组均通过 (TIED)';
   if (!pair.baseline_success && !pair.recovery_success) return '两组均未通过';
@@ -299,14 +351,23 @@ export default function App() {
   const [maxSteps, setMaxSteps] = useState<number>(6);
   const [artifact, setArtifact] = useState<EpisodeArtifact | null>(null);
   const [recentEpisodeIds, setRecentEpisodeIds] = useState<string[]>([]);
+  const [resumableEpisodeIds, setResumableEpisodeIds] = useState<string[]>([]);
   const [inputEpisodeId, setInputEpisodeId] = useState<string>('');
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
   const [eventTypeFilter, setEventTypeFilter] = useState<string>('ALL');
   const [replayIndex, setReplayIndex] = useState<number>(0);
+  const [replayPlaying, setReplayPlaying] = useState<boolean>(false);
+  const [replaySpeedMs, setReplaySpeedMs] = useState<number>(1000);
 
   // Experiment states
   const [expModel, setExpModel] = useState<string>('');
   const [expScenario, setExpScenario] = useState<string>('invalid-then-success');
+  const [comparisonAxis, setComparisonAxis] = useState<'recovery_policy' | 'runtime_backend'>('recovery_policy');
+  const [expRuntimeBackend, setExpRuntimeBackend] = useState<'handwritten' | 'langgraph'>('handwritten');
+  const [expRuntimeStrategy, setExpRuntimeStrategy] = useState<'handwritten' | 'handwritten_recovery'>('handwritten_recovery');
+  const [singleRuntimeBackend, setSingleRuntimeBackend] = useState<'handwritten' | 'langgraph'>('handwritten');
+  const [singleToolTransport, setSingleToolTransport] = useState<'local' | 'mcp'>('local');
+  const [singleRuntimeStrategy, setSingleRuntimeStrategy] = useState<'handwritten' | 'handwritten_recovery'>('handwritten');
   const [expTasks, setExpTasks] = useState<string[]>([]);
   const [expSeedsText, setExpSeedsText] = useState<string>('1');
   const [expRepeatCount, setExpRepeatCount] = useState<number>(1);
@@ -405,6 +466,10 @@ export default function App() {
       .catch((err) => {
         setErrorMsg(`API 连通性错误: ${err.message}`);
       });
+    fetch('/api/v1/episodes/resumable')
+      .then((res) => res.ok ? res.json() : [])
+      .then((ids: string[]) => setResumableEpisodeIds(ids))
+      .catch(() => setResumableEpisodeIds([]));
 
     // Load recent history from localStorage
     try {
@@ -447,10 +512,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    setReplayPlaying(false);
     setEventTypeFilter('ALL');
     setReplayIndex(Math.max((artifact?.events.length ?? 1) - 1, 0));
     setExpandedEvents({});
   }, [artifact?.episode.episode_id]);
+
+  useEffect(() => {
+    setReplayPlaying(false);
+  }, [activeTab]);
 
   const addRecentEpisodeId = (id: string) => {
     setRecentEpisodeIds((prev) => {
@@ -550,6 +620,10 @@ export default function App() {
         suite: selectedSuite,
         max_steps: maxSteps,
         token_budget: isFake ? null : singleTokenBudget,
+        runtime_backend: singleRuntimeBackend,
+        runtime_strategy: singleRuntimeStrategy,
+        tool_transport: singleTasks.find((task) => task.id === selectedSingleTask)?.supports_mcp
+          ? singleToolTransport : 'local',
       };
 
       const res = await fetch('/api/v1/episodes', {
@@ -575,6 +649,36 @@ export default function App() {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : '运行失败';
       setErrorMsg(message);
+      fetch('/api/v1/episodes/resumable')
+        .then((res) => res.ok ? res.json() : [])
+        .then((ids: string[]) => setResumableEpisodeIds(ids))
+        .catch(() => {});
+    } finally {
+      finishLoading();
+    }
+  };
+
+  const handleResumeEpisode = async (id: string) => {
+    beginLoading('正在从最近存档恢复 Episode。');
+    setErrorMsg(null);
+    try {
+      const res = await fetch(`/api/v1/episodes/${encodeURIComponent(id)}/resume`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || `恢复失败 (${res.status})`);
+      }
+      const data = await res.json();
+      setArtifact(data.artifact as EpisodeArtifact);
+      setResumableEpisodeIds((previous) => previous.filter((item) => item !== id));
+      addRecentEpisodeId(id);
+      const url = new URL(window.location.href);
+      url.searchParams.set('episode_id', id);
+      url.searchParams.delete('experiment_id');
+      window.history.pushState({}, '', url.toString());
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : '恢复失败');
     } finally {
       finishLoading();
     }
@@ -592,7 +696,7 @@ export default function App() {
       return;
     }
     const episodeCount = expTasks.length * seeds.length * expRepeatCount * 2;
-    beginLoading(`正在串行执行对照实验，完成后展示详细轨迹。预计 ${episodeCount} 个 Episode。`);
+    beginLoading(`正在串行执行${comparisonAxis === 'runtime_backend' ? 'Runtime' : '恢复策略'}对照，预计 ${episodeCount} 个 Episode。`);
     setErrorMsg(null);
     try {
       const currentModelObj = meta?.models.find((m) => m.id === expModel);
@@ -606,6 +710,9 @@ export default function App() {
         seeds,
         repeat_count: expRepeatCount,
         token_budget: isFake ? null : expTokenBudget,
+        comparison_axis: comparisonAxis,
+        runtime_backend: expRuntimeBackend,
+        runtime_strategy: expRuntimeStrategy,
       };
 
       const res = await fetch('/api/v1/experiments', {
@@ -662,7 +769,28 @@ export default function App() {
     ? snapshotAt(artifact, activeReplayEvent?.event_id)
     : { state: null, source: '尚无环境快照' };
   const replaySteps = Array.from(new Set(visibleEvents.map((event) => event.step_index)));
+  useEffect(() => {
+    if (!replayPlaying || visibleEvents.length < 2) return;
+    const timer = window.setInterval(
+      () => setReplayIndex((index) => Math.min(index + 1, visibleEvents.length - 1)),
+      replaySpeedMs,
+    );
+    return () => window.clearInterval(timer);
+  }, [replayPlaying, replaySpeedMs, visibleEvents.length]);
+
+  useEffect(() => {
+    if (replayPlaying && safeReplayIndex >= visibleEvents.length - 1) {
+      setReplayPlaying(false);
+    }
+  }, [replayPlaying, safeReplayIndex, visibleEvents.length]);
   const parsedExpSeeds = parseSeedList(expSeedsText);
+  const activeComparisonAxis = experiment?.config.comparison_axis === 'runtime_backend'
+    ? 'runtime_backend'
+    : experiment?.config.comparison_axis === 'recovery_policy'
+      ? 'recovery_policy'
+      : comparisonAxis;
+  const armLeftLabel = activeComparisonAxis === 'runtime_backend' ? 'Reference Runtime' : 'Baseline Policy';
+  const armRightLabel = activeComparisonAxis === 'runtime_backend' ? 'LangGraph Runtime' : 'Recovery Policy';
   const expEpisodeCount =
     expTasks.length * (parsedExpSeeds?.length ?? 0) * expRepeatCount * 2;
   const isExperimentRunReady = Boolean(meta) && Boolean(expModel) && expTasks.length > 0 &&
@@ -689,7 +817,7 @@ export default function App() {
                 className={`nav-tab ${activeTab === 'experiment' ? 'active' : ''}`}
                 onClick={() => setActiveTab('experiment')}
               >
-                对照实验 <span className="nav-english">Baseline vs Recovery</span>
+                对照实验 <span className="nav-english">Agent Comparison</span>
               </button>
               <button
                 id="tab-single"
@@ -714,7 +842,7 @@ export default function App() {
             </h1>
             <p>
               {activeTab === 'experiment'
-                ? '在相同模型、任务、种子与预算下，对照 Baseline 与 Recovery。'
+                ? '固定任务、模型、种子与预算，分别比较恢复策略或 Runtime 执行框架。'
                 : '运行一个任务，核查评测结论、环境状态与完整 Trace。'}
             </p>
           </div>
@@ -728,6 +856,12 @@ export default function App() {
           <div id="error-alert" className="alert-box alert-error" role="alert">
             <span className="alert-label">错误</span>
             <div>{errorMsg}</div>
+          </div>
+        )}
+        {meta?.model_catalog_status === 'unavailable' && (
+          <div className="alert-box alert-error" role="status">
+            <span className="alert-label">模型目录暂不可用</span>
+            <div>无法确认 AIHubMix 当前 Key 可访问的模型，已暂时隐藏真实模型；可先用 Fake 离线场景。</div>
           </div>
         )}
 
@@ -750,18 +884,31 @@ export default function App() {
                     >
                       复制 ID
                     </button>
-                    <button
-                      id="btn-export-experiment"
-                      className="btn-secondary"
-                      onClick={() =>
-                        downloadJson(
-                          `agentlabyrinth-experiment-${experiment.experiment_id}.json`,
-                          experiment,
-                        )
-                      }
-                    >
-                      导出 JSON
-                    </button>
+                    <span className="persistence-export-actions">
+                      <button
+                        id="btn-export-experiment"
+                        className="btn-secondary"
+                        onClick={() =>
+                          downloadJson(
+                            `agentlabyrinth-experiment-${experiment.experiment_id}.json`,
+                            experiment,
+                          )
+                        }
+                      >
+                        导出 JSON
+                      </button>
+                      <button
+                        id="btn-export-experiment-csv"
+                        className="btn-secondary"
+                        onClick={() => downloadFile(
+                          `agentlabyrinth-experiment-${experiment.experiment_id}.csv`,
+                          experimentCsv(experiment),
+                          'text/csv;charset=utf-8',
+                        )}
+                      >
+                        导出 CSV
+                      </button>
+                    </span>
                   </>
                 )}
               </div>
@@ -794,16 +941,57 @@ export default function App() {
               <section className="card" id="exp-config-panel">
                 <div className="card-title">
                   <span>下次运行配置</span>
-                  <span className="badge badge-purple">Baseline vs Recovery</span>
+                  <span className="badge badge-purple">受控变量对照</span>
                 </div>
                 <div className="card-desc">
-                  严格在相同模型、任务、工具集、种子与预算下，对比单次容错恢复机制的有效性与开销。
+                  严格固定模型、任务、工具集、种子与预算，每次只比较一种策略变量。
                 </div>
 
-                <div className="strategy-summary" aria-label="Agent 策略">
-                  <div><strong>Baseline</strong><span>基础 Tool Calling 循环</span></div>
-                  <div><strong>Recovery</strong><span>仅对 INVALID_ARGUMENTS 增加一次受控纠错</span></div>
+                <div className="form-group">
+                  <label htmlFor="comparison-axis" className="form-label">对照变量</label>
+                  <select
+                    id="comparison-axis"
+                    className="form-select"
+                    value={comparisonAxis}
+                    onChange={(e) => setComparisonAxis(e.target.value as 'recovery_policy' | 'runtime_backend')}
+                    disabled={isLoading}
+                  >
+                    <option value="recovery_policy">恢复策略：关闭 vs 一次参数纠错</option>
+                    <option value="runtime_backend">执行框架：手写循环 vs LangGraph</option>
+                  </select>
                 </div>
+
+                {comparisonAxis === 'runtime_backend' ? (
+                  <>
+                    <div className="form-group">
+                      <label htmlFor="runtime-recovery-policy" className="form-label">两组相同的恢复策略</label>
+                      <select id="runtime-recovery-policy" className="form-select" value={expRuntimeStrategy}
+                        onChange={(e) => setExpRuntimeStrategy(e.target.value as 'handwritten' | 'handwritten_recovery')} disabled={isLoading}>
+                        <option value="handwritten">关闭参数纠错</option>
+                        <option value="handwritten_recovery">启用一次参数纠错</option>
+                      </select>
+                    </div>
+                    <div className="strategy-summary" aria-label="Runtime 对照">
+                      <div><strong>Reference</strong><span>Python 手写调度循环</span></div>
+                      <div><strong>LangGraph</strong><span>StateGraph 独立节点调度</span></div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="form-group">
+                      <label htmlFor="policy-runtime" className="form-label">两组共同使用的 Runtime</label>
+                      <select id="policy-runtime" className="form-select" value={expRuntimeBackend}
+                        onChange={(e) => setExpRuntimeBackend(e.target.value as 'handwritten' | 'langgraph')} disabled={isLoading}>
+                        <option value="handwritten">Reference：Python 手写循环</option>
+                        <option value="langgraph">LangGraph</option>
+                      </select>
+                    </div>
+                    <div className="strategy-summary" aria-label="恢复策略对照">
+                      <div><strong>Baseline</strong><span>参数错误后终止</span></div>
+                      <div><strong>Recovery</strong><span>INVALID_ARGUMENTS 最多纠错一次</span></div>
+                    </div>
+                  </>
+                )}
 
                 {/* Model Selector */}
                 <div className="form-group">
@@ -1043,7 +1231,9 @@ export default function App() {
                     )}
                   </div>
                   <div className="card-desc">
-                    衡量容错恢复策略相较基线的成功率提升、挽救转化率与代价比（Tokens / 耗时）。
+                    {activeComparisonAxis === 'runtime_backend'
+                      ? '比较两个 Runtime 在相同模型、任务、预算和恢复策略下的成功率、用量与耗时。'
+                      : '比较恢复策略的成功率、参数错误挽救转化率与额外用量。'}
                   </div>
 
                   {experiment ? (
@@ -1098,16 +1288,16 @@ export default function App() {
                             {(experiment.config.evaluator as string) || 'order_status_v1'}
                           </div>
                           <div>
-                            <strong>基准策略：</strong>{' '}
-                            {(experiment.config.baseline_strategy as string) ||
-                              ((experiment.config.baseline_agent as Record<string, unknown>)?.runtime_strategy as string) ||
-                              'handwritten'}
+                            <strong>{armLeftLabel}：</strong>{' '}
+                            {((experiment.config.baseline_agent as Record<string, unknown>)?.runtime_backend as string) || 'handwritten'}
+                            {' / '}
+                            {((experiment.config.baseline_agent as Record<string, unknown>)?.runtime_strategy as string) || 'handwritten'}
                           </div>
                           <div>
-                            <strong>容错策略：</strong>{' '}
-                            {(experiment.config.recovery_strategy as string) ||
-                              ((experiment.config.recovery_agent as Record<string, unknown>)?.runtime_strategy as string) ||
-                              'handwritten_recovery'}
+                            <strong>{armRightLabel}：</strong>{' '}
+                            {((experiment.config.recovery_agent as Record<string, unknown>)?.runtime_backend as string) || 'handwritten'}
+                            {' / '}
+                            {((experiment.config.recovery_agent as Record<string, unknown>)?.runtime_strategy as string) || 'handwritten_recovery'}
                           </div>
                         </div>
                       </div>
@@ -1115,7 +1305,7 @@ export default function App() {
                       <div className="metrics-grid">
                         {/* Baseline Success */}
                         <div className="metric-box">
-                          <div className="metric-label">Baseline 成功率</div>
+                          <div className="metric-label">{armLeftLabel} 成功率</div>
                           <div
                             className="metric-value"
                             style={{
@@ -1134,7 +1324,7 @@ export default function App() {
 
                         {/* Recovery Success */}
                         <div className="metric-box">
-                          <div className="metric-label">Recovery 成功率</div>
+                          <div className="metric-label">{armRightLabel} 成功率</div>
                           <div
                             className="metric-value"
                             style={{
@@ -1152,7 +1342,7 @@ export default function App() {
                         </div>
 
                         {/* Retry Recovery Count & Rate */}
-                        <div
+                        {activeComparisonAxis === 'recovery_policy' && <div
                           className="metric-box"
                           style={{
                             border: '1px solid var(--accent-primary)',
@@ -1170,11 +1360,11 @@ export default function App() {
                               ? `转化率: ${((experiment.metrics.retry_recovery_rate ?? 0) * 100).toFixed(1)}% (${experiment.metrics.retry_recovery_count} / ${experiment.metrics.retry_eligible_count} 可恢复样本)`
                               : `转化率: ${((experiment.metrics.retry_recovery_rate ?? 0) * 100).toFixed(1)}% (${experiment.metrics.retry_recovery_count} 例，历史版本未统计可恢复基数)`}
                           </div>
-                        </div>
+                        </div>}
 
                         {/* Total Tokens & Delta */}
                         <div className="metric-box">
-                          <div className="metric-label">Token 总消耗 (Base / Rec)</div>
+                          <div className="metric-label">Token 总消耗 ({armLeftLabel} / {armRightLabel})</div>
                           <div className="metric-value" style={{ fontSize: '1.05rem' }}>
                             {experiment.metrics.baseline_total_tokens} / {experiment.metrics.recovery_total_tokens}
                           </div>
@@ -1185,7 +1375,7 @@ export default function App() {
 
                         {/* Average Steps */}
                         <div className="metric-box">
-                          <div className="metric-label">平均步数 (Base / Rec)</div>
+                          <div className="metric-label">平均步数 ({armLeftLabel} / {armRightLabel})</div>
                           <div className="metric-value" style={{ fontSize: '1.1rem' }}>
                             {experiment.metrics.baseline_avg_steps} / {experiment.metrics.recovery_avg_steps}
                           </div>
@@ -1194,7 +1384,7 @@ export default function App() {
 
                         {/* Average Duration */}
                         <div className="metric-box">
-                          <div className="metric-label">平均耗时 (Base / Rec)</div>
+                          <div className="metric-label">平均耗时 ({armLeftLabel} / {armRightLabel})</div>
                           <div className="metric-value" style={{ fontSize: '1.05rem' }}>
                             {experiment.metrics.baseline_avg_duration_ms} / {experiment.metrics.recovery_avg_duration_ms} ms
                           </div>
@@ -1210,7 +1400,7 @@ export default function App() {
 
                         {/* Tool Selection & Argument Validity Rates */}
                         <div className="metric-box">
-                          <div className="metric-label">工具选择 / 参数合法率 (Base / Rec)</div>
+                          <div className="metric-label">工具选择 / 参数合法率 ({armLeftLabel} / {armRightLabel})</div>
                           <div className="metric-value" style={{ fontSize: '1.05rem' }}>
                             {experiment.metrics.baseline_tool_selection_accuracy !== null && experiment.metrics.baseline_tool_selection_accuracy !== undefined
                               ? (experiment.metrics.baseline_tool_selection_accuracy * 100).toFixed(0) + '%'
@@ -1229,7 +1419,7 @@ export default function App() {
 
                         {/* Model & Tool Call Counts */}
                         <div className="metric-box">
-                          <div className="metric-label">平均模型 / 工具调用 (Base / Rec)</div>
+                          <div className="metric-label">平均模型 / 工具调用 ({armLeftLabel} / {armRightLabel})</div>
                           <div className="metric-value" style={{ fontSize: '1.05rem' }}>
                             {experiment.metrics.baseline_avg_model_calls !== null && experiment.metrics.baseline_avg_model_calls !== undefined
                               ? experiment.metrics.baseline_avg_model_calls
@@ -1256,8 +1446,8 @@ export default function App() {
                           <thead>
                             <tr>
                               <th>评测任务</th>
-                              <th>Baseline (基准)</th>
-                              <th>Recovery (容错)</th>
+                              <th>{armLeftLabel}</th>
+                              <th>{armRightLabel}</th>
                               <th>判定效果</th>
                               <th>步数、调用与 Tokens</th>
                               <th>Trace 审查</th>
@@ -1290,16 +1480,16 @@ export default function App() {
                                         </td>
                                         <td>
                                           <span className={`badge ${pair.recovered ? 'badge-cyan' : ''}`}>
-                                            {comparisonLabel(pair)}
+                                            {comparisonLabel(pair, activeComparisonAxis)}
                                           </span>
-                                          {pair.retry_eligible === true && (
+                                          {activeComparisonAxis === 'recovery_policy' && pair.retry_eligible === true && (
                                             <div className="inline-note">
                                               <span className="badge badge-purple pill-small">
                                                 可恢复样本
                                               </span>
                                             </div>
                                           )}
-                                          {pair.retry_eligible === null && (
+                                          {activeComparisonAxis === 'recovery_policy' && pair.retry_eligible === null && (
                                             <div className="inline-note">
                                               <span className="badge pill-small" style={{ opacity: 0.7 }}>
                                                 基数未统计
@@ -1318,23 +1508,23 @@ export default function App() {
                                           <div className="trace-actions">
                                             <button
                                               className="btn-secondary trace-button"
-                                              aria-label={`查看 ${pair.task_name} 的基线 Trace`}
+                                              aria-label={`查看 ${pair.task_name} 的 ${armLeftLabel} Trace`}
                                               onClick={() => {
                                                 setActiveTab('single');
                                                 loadEpisodeById(pair.baseline_episode_id);
                                               }}
                                             >
-                                              基线 Trace
+                                              {armLeftLabel} Trace
                                             </button>
                                             <button
                                               className="btn-secondary trace-button"
-                                              aria-label={`查看 ${pair.task_name} 的恢复 Trace`}
+                                              aria-label={`查看 ${pair.task_name} 的 ${armRightLabel} Trace`}
                                               onClick={() => {
                                                 setActiveTab('single');
                                                 loadEpisodeById(pair.recovery_episode_id);
                                               }}
                                             >
-                                              恢复 Trace
+                                              {armRightLabel} Trace
                                             </button>
                                           </div>
                                         </td>
@@ -1488,6 +1678,35 @@ export default function App() {
                   </div>
                 </div>
 
+                <div className="form-group">
+                  <label htmlFor="single-runtime-backend" className="form-label">执行 Runtime</label>
+                  <select id="single-runtime-backend" className="form-select" value={singleRuntimeBackend}
+                    onChange={(e) => setSingleRuntimeBackend(e.target.value as 'handwritten' | 'langgraph')} disabled={isLoading}>
+                    <option value="handwritten">Reference：Python 手写循环</option>
+                    <option value="langgraph">LangGraph</option>
+                  </select>
+                </div>
+                {selectedSuite === 'tool_lab_core' && (
+                  <div className="form-group">
+                    <label htmlFor="single-tool-transport" className="form-label">文档工具传输</label>
+                    <select id="single-tool-transport" className="form-select" value={singleToolTransport}
+                      onChange={(e) => setSingleToolTransport(e.target.value as 'local' | 'mcp')} disabled={isLoading}>
+                      <option value="local">本地 ToolLab</option>
+                      <option value="mcp" disabled={!singleTasks.find((task) => task.id === selectedSingleTask)?.supports_mcp}>
+                        MCP HTTP（需启动独立服务）
+                      </option>
+                    </select>
+                  </div>
+                )}
+                <div className="form-group">
+                  <label htmlFor="single-runtime-policy" className="form-label">参数纠错策略</label>
+                  <select id="single-runtime-policy" className="form-select" value={singleRuntimeStrategy}
+                    onChange={(e) => setSingleRuntimeStrategy(e.target.value as 'handwritten' | 'handwritten_recovery')} disabled={isLoading}>
+                    <option value="handwritten">关闭：参数错误后终止</option>
+                    <option value="handwritten_recovery">开启：INVALID_ARGUMENTS 最多纠错一次</option>
+                  </select>
+                </div>
+
                 {/* Scenario selector if Fake model */}
                 {selectedModel === 'fake' && (
                   <div className="form-group">
@@ -1541,7 +1760,10 @@ export default function App() {
                     id="task-select"
                     className="form-select"
                     value={selectedSingleTask}
-                    onChange={(e) => setSelectedSingleTask(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedSingleTask(e.target.value);
+                      setSingleToolTransport('local');
+                    }}
                     disabled={isLoading}
                   >
                     {singleTasks.map((task) => (
@@ -1600,6 +1822,20 @@ export default function App() {
                   <p className="loading-note" role="status" aria-live="polite">
                     {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
                   </p>
+                )}
+
+                {resumableEpisodeIds.length > 0 && (
+                  <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
+                    <div className="form-label">待恢复的 ToolLab 运行</div>
+                    <p className="metric-sub">仅列出上次后端进程留下的运行。中断中的模型请求可能重新发送并产生额外用量。</p>
+                    {resumableEpisodeIds.map((id) => (
+                      <button key={id} className="btn-secondary" disabled={isLoading}
+                        style={{ display: 'block', width: '100%', marginTop: '0.4rem', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                        onClick={() => handleResumeEpisode(id)}>
+                        恢复 {id}
+                      </button>
+                    ))}
+                  </div>
                 )}
 
                 {/* Recent Runs */}
@@ -1664,11 +1900,12 @@ export default function App() {
                             {artifact.agent.model.model}
                           </div>
                           <div className="metric-sub">
-                            {artifact.agent.runtime_strategy === 'handwritten_recovery' ? (
-                              <span className="badge badge-purple">Recovery 容错策略</span>
-                            ) : (
-                              <span className="badge badge-blue">Baseline 策略</span>
-                            )}
+                            <span className="badge badge-blue">{artifact.agent.runtime_backend ?? 'handwritten'} Runtime</span>{' '}
+                            <span className={`badge ${artifact.agent.runtime_strategy === 'handwritten_recovery' ? 'badge-purple' : 'badge-blue'}`}>
+                              {artifact.agent.runtime_strategy === 'handwritten_recovery' ? '一次参数纠错' : '无参数纠错'}
+                            </span>
+                            <div>Runtime 版本：{artifact.run_config.runtime_version ?? '历史产物未记录'}</div>
+                            <div>工具传输：{artifact.run_config.environment_version === 'tool-lab-mcp-v1' ? 'MCP HTTP' : '本地'}</div>
                           </div>
                         </div>
 
@@ -1758,6 +1995,7 @@ export default function App() {
                             className="form-select"
                             value={eventTypeFilter}
                             onChange={(event) => {
+                              setReplayPlaying(false);
                               setEventTypeFilter(event.target.value);
                               setReplayIndex(0);
                             }}
@@ -1778,6 +2016,7 @@ export default function App() {
                             value={activeReplayEvent?.step_index ?? ''}
                             disabled={visibleEvents.length === 0}
                             onChange={(event) => {
+                              setReplayPlaying(false);
                               const step = Number(event.target.value);
                               const index = visibleEvents.findIndex(
                                 (candidate) => candidate.step_index === step,
@@ -1797,7 +2036,10 @@ export default function App() {
                             id="trace-previous"
                             className="btn-secondary"
                             disabled={safeReplayIndex <= 0 || visibleEvents.length === 0}
-                            onClick={() => setReplayIndex((index) => Math.max(index - 1, 0))}
+                            onClick={() => {
+                              setReplayPlaying(false);
+                              setReplayIndex((index) => Math.max(index - 1, 0));
+                            }}
                           >
                             ← 上一步
                           </button>
@@ -1813,14 +2055,42 @@ export default function App() {
                               visibleEvents.length === 0 ||
                               safeReplayIndex >= visibleEvents.length - 1
                             }
-                            onClick={() =>
+                            onClick={() => {
+                              setReplayPlaying(false);
                               setReplayIndex((index) =>
                                 Math.min(index + 1, visibleEvents.length - 1),
-                              )
-                            }
+                              );
+                            }}
                           >
                             下一步 →
                           </button>
+                          <button
+                            id="trace-play-pause"
+                            className="btn-secondary"
+                            disabled={visibleEvents.length < 2}
+                            aria-label={replayPlaying ? '暂停回放' : '自动播放回放'}
+                            onClick={() => {
+                              if (!replayPlaying && safeReplayIndex >= visibleEvents.length - 1) {
+                                setReplayIndex(0);
+                              }
+                              setReplayPlaying(!replayPlaying);
+                            }}
+                          >
+                            {replayPlaying ? '暂停' : '播放'}
+                          </button>
+                          <label htmlFor="trace-playback-speed">
+                            <span>速度</span>
+                            <select
+                              id="trace-playback-speed"
+                              className="form-select"
+                              value={replaySpeedMs}
+                              onChange={(event) => setReplaySpeedMs(Number(event.target.value))}
+                            >
+                              <option value={2000}>0.5×</option>
+                              <option value={1000}>1×</option>
+                              <option value={500}>2×</option>
+                            </select>
+                          </label>
                         </div>
                       </div>
 

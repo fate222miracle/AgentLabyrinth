@@ -1,10 +1,10 @@
 # AgentLabyrinth Copilot instructions
 
-Read in this order before editing: `docs/product/requirements.md` V0.5, `docs/product/ui-design-guidelines.md`, `AGENTS.md`, relevant ADRs, `docs/handoffs/current-state.md`, then `docs/tasks/V0.1-slice-G-ui-refresh-copilot.md`.
+Read in this order before editing: full `docs/product/requirements.md` V0.6, `AGENTS.md`, relevant ADRs (currently ADR-010), `docs/handoffs/current-state.md`, then `docs/tasks/V0.2-m1-runtime-comparison-copilot.md`. Read `docs/product/ui-design-guidelines.md` when changing Web presentation.
 
-The current task is only Slice G. Reuse the existing React/Vite Web flow and the CSS tokens already established in `apps/web/src/index.css`. Do not add a component framework, icon library, chart library, database, queue, authentication, multi-agent code, or dependency. Do not change API behavior, a public schema, model policy, or metric definition.
+Current task: complete and review the V0.2 independent Runtime comparison handoff. Preserve existing user changes. Reuse the current React/Vite Web flow and CSS tokens in `apps/web/src/index.css`. Do not add a component framework, icon library, chart library, database, queue, authentication, multi-agent code, or dependency. Do not silently change public schemas or metric definitions; use ADR-010 as the contract.
 
-Run `scripts/check.ps1` before reporting completion. Report changed files, the exact commands and results, remaining gaps, and update `docs/handoffs/current-state.md`. Never write API keys to source, tests, output, or frontend code.
+Run `scripts/check.ps1` and the frontend production build before reporting completion. Complete the Fake API and browser scenarios in the V0.2 task card, then try one small real-model comparison only if a local key and working model are available. Report changed files, exact commands and results, artifact IDs, remaining gaps, and update `docs/handoffs/current-state.md`. Never write API keys to source, tests, output, or frontend code.
 
 ## UI 验收防错规则
 

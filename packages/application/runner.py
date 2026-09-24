@@ -1,6 +1,8 @@
 """Environment-agnostic orchestration; business correctness belongs to Evaluator."""
 
+from collections.abc import Callable
 from time import perf_counter
+from typing import cast
 
 from packages.application.trace import JsonTraceRecorder, content_hash
 from packages.domain.models import (
@@ -14,6 +16,7 @@ from packages.domain.models import (
     TerminationReason,
 )
 from packages.domain.ports import AgentRuntime, Environment, Evaluator
+from packages.runtime.session import CheckpointFailure, ResumableRuntime, SessionState
 
 
 async def run_episode(
@@ -23,6 +26,10 @@ async def run_episode(
     runtime: AgentRuntime,
     environment: Environment,
     evaluator: Evaluator,
+    *,
+    recorder: JsonTraceRecorder | None = None,
+    resume_state: SessionState | None = None,
+    save_checkpoint: Callable[[SessionState], None] | None = None,
 ) -> EpisodeArtifact:
     """Run once, evaluate isolated copies, then append the sole final event."""
     # Freeze provenance before passing copies to extension implementations.
@@ -31,13 +38,39 @@ async def run_episode(
         task.model_copy(deep=True),
         config.model_copy(deep=True),
     )
-    recorder = JsonTraceRecorder(config)
+    if resume_state is not None and recorder is None:
+        raise ValueError("Resume requires the original Trace recorder")
+    recorder = recorder or JsonTraceRecorder(config)
+    if recorder.run_config != config:
+        raise ValueError("Checkpoint RunConfig mismatch")
     started = perf_counter()
-    recorder.record(EventType.EPISODE_STARTED, 0, {"seed": config.seed})
-    try:
-        episode = await runtime.run(
-            agent.model_copy(deep=True), task.model_copy(deep=True), environment, recorder
+    if resume_state is None:
+        if recorder.events:
+            raise ValueError("New episode must have an empty Trace")
+        recorder.record(EventType.EPISODE_STARTED, 0, {"seed": config.seed})
+    else:
+        if not recorder.events:
+            raise ValueError("Resume requires an unfinished Trace")
+        recorder.record(
+            EventType.EPISODE_RESUMED,
+            resume_state.budget.step_count,
+            {"next_node": resume_state.next_node},
+            parent_event_id=recorder.events[-1].event_id,
         )
+    try:
+        if resume_state is not None or save_checkpoint is not None:
+            episode = await cast(ResumableRuntime, runtime).run_resumable(
+                agent.model_copy(deep=True),
+                task.model_copy(deep=True),
+                environment,
+                recorder,
+                resume_state=resume_state,
+                save_checkpoint=save_checkpoint,
+            )
+        else:
+            episode = await runtime.run(
+                agent.model_copy(deep=True), task.model_copy(deep=True), environment, recorder
+            )
         if episode.episode_id != recorder.episode_id:
             raise ValueError("Runtime returned a foreign episode")
         evaluation = evaluator.evaluate(
@@ -57,7 +90,11 @@ async def run_episode(
             evaluation = evaluation.model_copy(
                 update={"success": False, "reason": "runtime_failed"}
             )
+    except CheckpointFailure:
+        raise
     except Exception:
+        if resume_state is not None:
+            raise
         # Last-resort containment. Runtime must normalize expected failures itself,
         # preserving usage and state. Never copy an unknown exception into Trace.
         events = recorder.events

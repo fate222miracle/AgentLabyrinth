@@ -4,7 +4,9 @@
 
 开始工作依次阅读：需求全文 → AGENTS.md → 相关 ADR → `docs/handoffs/current-state.md` → 当前任务卡 → 测试与源码。不得依赖旧聊天；需求版本不符时停止并同步。
 
-M1 切片 A–E、V0.1 切片 F 与 Slice G UI 收口已签收，V0.1 的 18 项验收已通过。V0.2 的 LangGraph Bootstrap Adapter 已建立，下一步是独立节点控制循环，见 `docs/tasks/V0.2-m1-langgraph-bootstrap.md`；Bootstrap 可运行不等于跨 Runtime 对照完成。Slice G 的初次 Copilot 交付由 Codex 复核整改，问题与防错规则见 `docs/tasks/V0.1-slice-G-ui-refresh-copilot.md` 和 `.github/copilot-instructions.md`。真实模型结果见 current-state；Key 仅在本机环境/`.env` 配置，不入库、不入前端、不在聊天中传递。核心接口/Schema/评测口径变化先走 ADR，不得静默修改。
+M1 切片 A–E、V0.1 切片 F 与 Slice G UI 收口已签收，V0.1 的 18 项验收已通过。V0.2 独立 Handwritten/LangGraph Runtime、单变量对照 API/Web 已完成质量门禁、Fake 浏览器闭环与单模型真实小样本，证据见 `docs/handoffs/current-state.md`，决策见 ADR-010；V0.2 整版尚未验收。当前课程演示可靠性接续任务见 `docs/tasks/V0.2-m2-course-reliability.md`；ToolLab 单 Episode Checkpoint/Resume 已按 Accepted ADR-011 接入 API/Web，并通过 Fake 跨进程、接口与浏览器故障演练，真实模型中断恢复尚未实测。Slice G 的初次 Copilot 交付由 Codex 复核整改，问题与防错规则见 `docs/tasks/V0.1-slice-G-ui-refresh-copilot.md` 和 `.github/copilot-instructions.md`。真实模型结果见 current-state；Key 仅在本机环境/`.env` 配置，不入库、不入前端、不在聊天中传递。核心接口/Schema/评测口径变化先走 ADR，不得静默修改。
+
+课程 MCP 网络实验按 Accepted ADR-012 提前实施受控例外：固定文档任务的只读工具由独立 localhost Streamable HTTP 服务提供，API/Web 可选远程传输；Fake 双路径、断线 Trace 与单题真实模型探索均已实测。阅读 `docs/tasks/V0.2-mcp-network-pilot.md`、`docs/learning/V0.2-mcp-network-pilot.md` 和 current-state。MCP 路径尚无 Checkpoint/Resume，浏览器交互仍待验收。
 
 - Domain 不依赖具体环境、Provider SDK、存储或外部 Agent 框架。
 - Application 通过 Domain Port 编排；Runtime 不包含订单业务；Evaluator 只读、不改状态。

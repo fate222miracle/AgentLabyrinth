@@ -57,6 +57,34 @@ def make_agents() -> tuple[AgentSpec, AgentSpec]:
     return base, rec
 
 
+def test_runtime_comparison_marks_recovery_metrics_not_applicable() -> None:
+    """Runtime backend comparisons cannot claim parameter-error recovery."""
+    base_agent, _ = make_agents()
+    graph_agent = base_agent.model_copy(update={"runtime_backend": "langgraph"})
+    with TemporaryDirectory() as tmp_dir:
+        artifact = asyncio.run(
+            run_experiment(
+                baseline_agent=base_agent,
+                recovery_agent=graph_agent,
+                tasks=load_tasks()[:1],
+                provider_factory=lambda: FakeModelProvider(scenario="success"),
+                artifacts_dir=Path(tmp_dir),
+                comparison_axis="runtime_backend",
+            )
+        )
+        assert artifact.metrics.baseline_success_count == 1
+        assert artifact.metrics.recovery_success_count == 1
+        assert artifact.metrics.retry_eligible_count is None
+        assert artifact.metrics.retry_recovery_count is None
+        assert artifact.metrics.retry_recovery_rate is None
+        assert (
+            read_experiment(
+                Path(tmp_dir) / "experiments" / f"{artifact.experiment_id}.json"
+            ).metrics.retry_recovery_count
+            is None
+        )
+
+
 def test_experiment_runner_deterministic_recovery() -> None:
     """Paired experiment under invalid_then_success demonstrates 100% recovery."""
     tasks = load_tasks()
@@ -178,7 +206,7 @@ def test_experiment_runner_seed_repeat_matrix_is_paired_and_serializable() -> No
             )
         )
 
-        assert artifact.schema_version == "1.1"
+        assert artifact.schema_version == "1.2"
         assert artifact.metrics.total_pairs == 4
         assert len(artifact.episode_ids) == 8
         assert {(pair.seed, pair.repeat_index) for pair in artifact.pairs} == {

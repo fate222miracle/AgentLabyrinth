@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 NonNegativeInt = Annotated[int, Field(ge=0)]
 PositiveInt = Annotated[int, Field(gt=0)]
+RuntimeBackend = Literal["handwritten", "langgraph"]
+RuntimeStrategy = Literal["handwritten", "handwritten_recovery"]
 
 
 class Contract(BaseModel):
@@ -42,6 +44,8 @@ class ModelConfig(Contract):
 class AgentSpec(Contract):
     """Versioned, validated agent configuration."""
 
+    # This contract alone accepts the additive v1.1 revision; other contracts stay v1.0.
+    schema_version: Literal["1.0", "1.1"] = "1.1"  # type: ignore[assignment]
     id: UUID
     name: str
     version: str
@@ -49,8 +53,16 @@ class AgentSpec(Contract):
     model: ModelConfig = Field(default_factory=ModelConfig)
     prompt_version: str
     tool_set_version: str
-    runtime_strategy: Literal["handwritten", "handwritten_recovery"] = "handwritten"
+    runtime_backend: RuntimeBackend = "handwritten"
+    runtime_strategy: RuntimeStrategy = "handwritten"
     budget: Budget = Field(default_factory=Budget)
+
+    @property
+    def recovery_policy(self) -> Literal["none", "invalid_arguments_once"]:
+        """Interpret the legacy strategy field independently of the runtime backend."""
+        return (
+            "invalid_arguments_once" if self.runtime_strategy == "handwritten_recovery" else "none"
+        )
 
 
 class TaskSpec(Contract):
@@ -74,8 +86,10 @@ class TaskSpec(Contract):
 class RunConfig(Contract):
     """Configuration shared with Runtime via TraceRecorder."""
 
+    schema_version: Literal["1.0", "1.1"] = "1.1"  # type: ignore[assignment]
     seed: int = 1
     environment_version: str = "tool-lab-m0-v1"
+    runtime_version: str | None = None
 
 
 class TokenUsage(Contract):
@@ -172,6 +186,7 @@ class TerminationReason(StrEnum):
 
 class EventType(StrEnum):
     EPISODE_STARTED = "EPISODE_STARTED"
+    EPISODE_RESUMED = "EPISODE_RESUMED"
     OBSERVATION_CREATED = "OBSERVATION_CREATED"
     MODEL_REQUESTED = "MODEL_REQUESTED"
     MODEL_RESPONDED = "MODEL_RESPONDED"

@@ -19,14 +19,14 @@ from packages.environments.bfcl.adapter import BFCLAdapter
 
 
 def test_user_selected_models_are_permitted() -> None:
-    """The four explicitly authorized model IDs pass the shared API gate."""
+    """The baseline whitelist remains limited to known free model IDs."""
     for model in (
-        "deepseek-v4-flash-0731-free",
-        "qwen3.8-27b-free",
-        "xiaomi-mimo-v2.5-pro-free",
         "coding-minimax-m2.7-free",
+        "xiaomi-mimo-v2.5-pro-free",
     ):
         assert is_model_permitted(model)
+    assert not is_model_permitted("deepseek-v4-flash-0731-free")
+    assert not is_model_permitted("qwen3.8-27b-free")
     assert not is_model_permitted("unapproved-paid-model")
 
 
@@ -54,10 +54,12 @@ def test_get_meta(client: TestClient) -> None:
     assert resp.status_code == 200
     data = resp.json()
     meta = MetaResponse.model_validate(data)
-    assert meta.default_model == "xiaomi-mimo-v2.5-pro-free"
-    assert any(m.id == "xiaomi-mimo-v2.5-pro-free" and m.is_default for m in meta.models)
+    assert meta.default_model == "coding-minimax-m2.7-free"
+    assert any(m.id == meta.default_model and m.is_default for m in meta.models)
     assert any(m.id == "fake" for m in meta.models)
-    assert any(m.id == "coding-kimi-k3-free" and m.is_experimental for m in meta.models)
+    assert any(m.id == "xiaomi-mimo-v2.6-pro-free" for m in meta.models)
+    assert any(m.id == "coding-glm-5.3-free" for m in meta.models)
+    assert any(m.id == "xiaomi-mimo-v2.5-pro-free" and m.is_experimental for m in meta.models)
     assert any(t.id == "order-status-001" for t in meta.tasks)
 
 
@@ -247,7 +249,7 @@ def test_create_experiment_seed_repeat_matrix(client: TestClient) -> None:
 
     assert response.status_code == 201
     experiment = response.json()["experiment"]
-    assert experiment["schema_version"] == "1.1"
+    assert experiment["schema_version"] == "1.2"
     assert experiment["config"]["seeds"] == [3, 5]
     assert experiment["config"]["repeat_count"] == 2
     assert len(experiment["episode_ids"]) == 8

@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from time import monotonic, time_ns
 from uuid import UUID, uuid4
 
 from apps.api.schemas import (
@@ -12,6 +13,11 @@ from apps.api.schemas import (
     ModelOption,
     TaskOption,
     is_model_permitted,
+)
+from packages.application.checkpoint import (
+    CheckpointStore,
+    resume_checkpointed_episode,
+    run_checkpointed_episode,
 )
 from packages.application.experiment import (
     ExperimentArtifact,
@@ -28,11 +34,12 @@ from packages.environments.tool_lab.environment import (
     ToolLabEnvironment,
     create_tool_lab_registry,
 )
+from packages.environments.tool_lab.mcp import MCPToolLabEnvironment
 from packages.evaluation.bfcl import BFCLEvaluator
 from packages.evaluation.order_status import OrderStatusEvaluator
-from packages.providers.aihubmix import AIHubMixModelProvider
+from packages.providers.aihubmix import AIHubMixModelProvider, list_available_model_ids
 from packages.providers.fake import FakeModelProvider
-from packages.runtime.handwritten.runtime import HandwrittenRuntime
+from packages.runtime.factory import create_runtime, runtime_version
 from packages.tools.executor import ToolExecutor
 from packages.tools.registry import DefaultToolValidator
 
@@ -53,11 +60,47 @@ class EpisodeService:
         artifacts_dir: Path | None = None,
         tasks_dir: Path | None = None,
         models_path: Path | None = None,
+        live_model_catalog: bool = False,
     ) -> None:
         self.artifacts_dir = artifacts_dir or DEFAULT_ARTIFACTS_DIR
         self.tasks_dir = tasks_dir or DEFAULT_TASKS_DIR
         self.models_path = models_path or DEFAULT_MODELS_PATH
+        self.live_model_catalog = live_model_catalog
+        self._live_model_ids: set[str] = set()
+        self._model_catalog_expires_at = 0.0
+        self._model_catalog_status = "static"
         self.bfcl = BFCLAdapter()
+        self._started_ns = time_ns()
+        self._resuming: set[UUID] = set()
+
+    def _get_live_model_ids(self) -> set[str]:
+        """Cache the API-key-scoped model catalog briefly to keep metadata responsive."""
+        if not self.live_model_catalog:
+            return set()
+        now = monotonic()
+        if now < self._model_catalog_expires_at:
+            return self._live_model_ids
+        try:
+            self._live_model_ids = list_available_model_ids()
+            self._model_catalog_status = "live"
+            self._model_catalog_expires_at = now + 300
+        except Exception:
+            self._live_model_ids = set()
+            self._model_catalog_status = "unavailable"
+            self._model_catalog_expires_at = now + 30
+        return self._live_model_ids
+
+    def _configured_model_ids(self) -> set[str]:
+        """Read the curated free-model shortlist from the single catalog file."""
+        try:
+            data = json.loads(self.models_path.read_text(encoding="utf-8"))
+            return {
+                item["id"]
+                for item in data.get("models", [])
+                if item.get("provider") == "aihubmix" and isinstance(item.get("id"), str)
+            }
+        except (OSError, ValueError, TypeError):
+            return set()
 
     def _get_task(self, task_id: str) -> TaskSpec:
         """Resolve only catalog entries; user input is never used as a path."""
@@ -107,7 +150,7 @@ class EpisodeService:
 
     def _load_configured_models(self) -> tuple[list[ModelOption], str]:
         """Load models from catalog JSON with fallback and dynamic upstream discovery."""
-        default_model = "coding-glm-5.3-free"
+        default_model = "coding-minimax-m2.7-free"
         models: list[ModelOption] = []
         if self.models_path.is_file():
             try:
@@ -121,12 +164,12 @@ class EpisodeService:
         if not models:
             models = [
                 ModelOption(
-                    id="coding-glm-5.3-free",
-                    name="Coding GLM 5.3 Free",
+                    id="coding-minimax-m2.7-free",
+                    name="Coding MiniMax M2.7 Free",
                     provider="aihubmix",
                     is_default=True,
                     is_experimental=False,
-                    notes="智谱 GLM 5.3 免费模型，原生工具调用与真实用量报告正常",
+                    notes="当前默认免费模型；可用性以 AIHubMix 当前目录与账号配额为准",
                 ),
                 ModelOption(
                     id="fake",
@@ -138,6 +181,14 @@ class EpisodeService:
                     scenarios=sorted(ALLOWED_FAKE_SCENARIOS),
                 ),
             ]
+
+        if self.live_model_catalog:
+            live_ids = self._get_live_model_ids()
+            models = [model for model in models if model.provider == "fake" or model.id in live_ids]
+            if default_model not in {model.id for model in models}:
+                default_model = next(
+                    (model.id for model in models if model.provider == "aihubmix"), "fake"
+                )
 
         return models, default_model
 
@@ -156,6 +207,8 @@ class EpisodeService:
                 token_budget=t.token_budget,
                 suite="tool_lab_core",
                 split=str(t.evaluator_config.get("split", "development")),
+                supports_mcp=bool(t.initial_state.get("documents"))
+                and {"search_documents", "read_document"}.issubset(t.expected_tools),
             )
             for t in task_specs
         ]
@@ -181,14 +234,21 @@ class EpisodeService:
             tasks=tasks,
             default_model=default_model,
             default_task="order-status-001",
+            model_catalog_status=self._model_catalog_status,
         )
 
+    def _require_live_model(self, model_id: str) -> None:
+        """Reject real model IDs absent from the current user's live catalog."""
+        if self.live_model_catalog and model_id not in self._get_live_model_ids():
+            raise ValueError("Model is not currently available in this AIHubMix API key catalog")
+
     async def execute_episode(self, req: CreateEpisodeRequest) -> EpisodeArtifact:
-        """Assemble dependencies, run episode via HandwrittenRuntime, and persist artifact."""
+        """Assemble the selected runtime and suite, execute, and persist the episode."""
         # 1. Validate requested model/scenario against permissive free model catalog
         if req.provider == "aihubmix":
-            if not is_model_permitted(req.model):
+            if not is_model_permitted(req.model, self._configured_model_ids()):
                 raise ValueError(f"Model '{req.model}' is not in the allowed free model whitelist")
+            self._require_live_model(req.model)
             provider: ModelProvider = AIHubMixModelProvider(min_request_interval=13.0)
             agent_text = DEFAULT_AIHUBMIX_AGENT.read_text(encoding="utf-8")
             agent = AgentSpec.model_validate_json(agent_text)
@@ -222,7 +282,20 @@ class EpisodeService:
         else:
             loaded_task = self._get_task(req.task_id)
         task = self._with_token_budget(loaded_task, req.token_budget)
+        if req.tool_transport == "mcp" and (
+            req.suite != "tool_lab_core"
+            or not task.initial_state.get("documents")
+            or not {"search_documents", "read_document"}.issubset(task.expected_tools)
+        ):
+            raise ValueError("MCP transport supports only ToolLab document tasks")
         agent = self._agent_with_token_budget(agent, req.token_budget)
+        agent = agent.model_copy(
+            update={
+                "schema_version": "1.1",
+                "runtime_backend": req.runtime_backend,
+                "runtime_strategy": req.runtime_strategy,
+            }
+        )
 
         # 3. Assemble components
         environment: Environment
@@ -235,31 +308,49 @@ class EpisodeService:
             environment_version = "bfcl-adapted-single-call-v1"
             agent = agent.model_copy(update={"tool_set_version": "bfcl-v4-pinned"})
         else:
-            registry = create_tool_lab_registry()
-            validator = DefaultToolValidator(registry)
-            executor = ToolExecutor(registry, validator)
-            environment = ToolLabEnvironment(
-                registry=registry, executor=executor, validator=validator
-            )
+            if req.tool_transport == "mcp":
+                environment = MCPToolLabEnvironment()
+                validator = environment._validator
+            else:
+                registry = create_tool_lab_registry()
+                validator = DefaultToolValidator(registry)
+                executor = ToolExecutor(registry, validator)
+                environment = ToolLabEnvironment(
+                    registry=registry, executor=executor, validator=validator
+                )
             evaluator = OrderStatusEvaluator()
-            environment_version = "tool-lab-m0-v1"
-        runtime = HandwrittenRuntime(provider=provider, validator=validator)
-        run_config = RunConfig(seed=1, environment_version=environment_version)
-
-        # 4. Execute episode
-        artifact = await run_episode(
-            agent=agent,
-            task=task,
-            config=run_config,
-            runtime=runtime,
-            environment=environment,
-            evaluator=evaluator,
+            environment_version = (
+                "tool-lab-mcp-v1" if req.tool_transport == "mcp" else "tool-lab-m0-v1"
+            )
+        runtime = create_runtime(agent, provider, validator)
+        run_config = RunConfig(
+            seed=1,
+            environment_version=environment_version,
+            runtime_version=runtime_version(agent.runtime_backend),
         )
 
-        # 5. Persist independent JSON artifact
+        # 4. Execute episode
+        if bfcl_case is None and req.tool_transport == "local":
+            return await run_checkpointed_episode(
+                agent,
+                task,
+                run_config,
+                runtime,
+                environment,
+                evaluator,
+                self.artifacts_dir,
+                fake_scenario=(req.scenario or "success") if req.provider == "fake" else None,
+            )
+        artifact = await run_episode(
+            agent,
+            task,
+            run_config,
+            runtime,
+            environment,
+            evaluator,
+        )
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
-        artifact_path = self.artifacts_dir / f"{artifact.episode.episode_id}.json"
-        write_artifact(artifact, artifact_path)
+        write_artifact(artifact, self.artifacts_dir / f"{artifact.episode.episode_id}.json")
 
         return artifact
 
@@ -270,8 +361,65 @@ class EpisodeService:
             return None
         return read_artifact(target_file)
 
+    def resumable_episode_ids(self) -> list[UUID]:
+        """Show only unfinished checkpoints saved before this API instance started."""
+        store = CheckpointStore(self.artifacts_dir / "checkpoints")
+        result: list[UUID] = []
+        for path in store.directory.glob("*.json"):
+            try:
+                episode_id = UUID(path.stem)
+                if (
+                    path.stat().st_mtime_ns < self._started_ns
+                    and not (self.artifacts_dir / f"{episode_id}.json").is_file()
+                    and episode_id not in self._resuming
+                ):
+                    result.append(episode_id)
+            except (ValueError, OSError):
+                continue
+        return sorted(result)
+
+    async def resume_episode(self, episode_id: UUID) -> EpisodeArtifact:
+        """Restore a prior API instance's unfinished ToolLab episode."""
+        if episode_id not in self.resumable_episode_ids():
+            raise ValueError("No resumable episode exists for this API instance")
+        self._resuming.add(episode_id)
+        try:
+            return await self._resume_episode_once(episode_id)
+        finally:
+            self._resuming.discard(episode_id)
+
+    async def _resume_episode_once(self, episode_id: UUID) -> EpisodeArtifact:
+        """Assemble the saved provider and continue one claimed Episode."""
+        checkpoint = CheckpointStore(self.artifacts_dir / "checkpoints").load(episode_id)
+        if checkpoint.agent.model.provider == "fake":
+            scenario = checkpoint.fake_scenario or "success"
+            if scenario not in ALLOWED_FAKE_SCENARIOS:
+                raise ValueError("Unsupported saved Fake scenario")
+            provider: ModelProvider = FakeModelProvider(
+                scenario=scenario,
+                initial_call_count=checkpoint.session.budget.model_call_count,
+            )
+        else:
+            model_id = checkpoint.agent.model.model
+            if not is_model_permitted(model_id, self._configured_model_ids()):
+                raise ValueError("Saved model is no longer permitted")
+            self._require_live_model(model_id)
+            provider = AIHubMixModelProvider(min_request_interval=13.0)
+        registry = create_tool_lab_registry()
+        validator = DefaultToolValidator(registry)
+        environment = ToolLabEnvironment(
+            registry=registry, executor=ToolExecutor(registry, validator), validator=validator
+        )
+        return await resume_checkpointed_episode(
+            episode_id,
+            create_runtime(checkpoint.agent, provider, validator),
+            environment,
+            OrderStatusEvaluator(),
+            self.artifacts_dir,
+        )
+
     async def execute_experiment(self, req: CreateExperimentRequest) -> ExperimentArtifact:
-        """Run paired Baseline vs Recovery experiment serially and persist aggregate artifact."""
+        """Run a paired policy or runtime comparison and persist its artifact."""
         if not req.task_ids:
             raise ValueError("Experiment requires at least one task ID")
         resolved_seeds = req.seeds if req.seeds is not None else [req.seed]
@@ -285,8 +433,9 @@ class EpisodeService:
 
         # 2. Validate requested model/scenario and configure agents & provider factory
         if req.provider == "aihubmix":
-            if not is_model_permitted(req.model):
+            if not is_model_permitted(req.model, self._configured_model_ids()):
                 raise ValueError(f"Model '{req.model}' is not in the allowed free model whitelist")
+            self._require_live_model(req.model)
             base_text = DEFAULT_AIHUBMIX_AGENT.read_text(encoding="utf-8")
             baseline_agent = AgentSpec.model_validate_json(base_text)
             baseline_agent = baseline_agent.model_copy(
@@ -340,6 +489,34 @@ class EpisodeService:
         # 3. Run paired experiment
         baseline_agent = self._agent_with_token_budget(baseline_agent, req.token_budget)
         recovery_agent = self._agent_with_token_budget(recovery_agent, req.token_budget)
+        if req.comparison_axis == "runtime_backend":
+            baseline_agent = baseline_agent.model_copy(
+                update={
+                    "schema_version": "1.1",
+                    "runtime_backend": "handwritten",
+                    "runtime_strategy": req.runtime_strategy,
+                }
+            )
+            recovery_agent = baseline_agent.model_copy(
+                update={
+                    "id": uuid4(),
+                    "name": f"{baseline_agent.name}-langgraph",
+                    "runtime_backend": "langgraph",
+                }
+            )
+        else:
+            baseline_agent = baseline_agent.model_copy(
+                update={
+                    "schema_version": "1.1",
+                    "runtime_backend": req.runtime_backend,
+                }
+            )
+            recovery_agent = recovery_agent.model_copy(
+                update={
+                    "schema_version": "1.1",
+                    "runtime_backend": req.runtime_backend,
+                }
+            )
         config_metadata = {
             "provider": req.provider,
             "requested_model": req.model,
@@ -351,6 +528,9 @@ class EpisodeService:
             "repeat_count": req.repeat_count,
             "baseline_strategy": baseline_agent.runtime_strategy,
             "recovery_strategy": recovery_agent.runtime_strategy,
+            "baseline_backend": baseline_agent.runtime_backend,
+            "recovery_backend": recovery_agent.runtime_backend,
+            "comparison_axis": req.comparison_axis,
         }
 
         return await run_experiment(
@@ -363,6 +543,7 @@ class EpisodeService:
             repeat_count=req.repeat_count,
             artifacts_dir=self.artifacts_dir,
             config_metadata=config_metadata,
+            comparison_axis=req.comparison_axis,
         )
 
     def get_experiment(self, experiment_id: UUID) -> ExperimentArtifact | None:

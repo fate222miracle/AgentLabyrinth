@@ -25,13 +25,15 @@ from packages.environments.tool_lab.environment import (
     create_tool_lab_registry,
 )
 from packages.evaluation.order_status import OrderStatusEvaluator
-from packages.runtime.handwritten.runtime import HandwrittenRuntime
+from packages.runtime.factory import create_runtime, runtime_version
 from packages.tools.executor import ToolExecutor
 from packages.tools.registry import DefaultToolValidator
 
+ComparisonAxis = Literal["recovery_policy", "runtime_backend"]
+
 
 class PairComparison(BaseModel):
-    """Comparison item for a single task evaluated with Baseline vs Recovery."""
+    """Paired outcomes; legacy baseline/recovery keys identify left/right arms."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -76,7 +78,7 @@ class ExperimentAggregateMetrics(BaseModel):
     baseline_success_rate: float
     recovery_success_rate: float
     retry_eligible_count: int | None = None
-    retry_recovery_count: int
+    retry_recovery_count: int | None = None
     retry_recovery_rate: float | None = None
     baseline_total_tokens: int
     recovery_total_tokens: int
@@ -102,7 +104,7 @@ class ExperimentArtifact(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal["1.0", "1.1"] = "1.1"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
     experiment_id: UUID
     created_at: str
     config: dict[str, Any]
@@ -129,6 +131,7 @@ async def run_experiment(
     repeat_count: int = 1,
     artifacts_dir: Path,
     config_metadata: dict[str, Any] | None = None,
+    comparison_axis: ComparisonAxis = "recovery_policy",
 ) -> ExperimentArtifact:
     """Run paired episodes serially, persist each episode, and aggregate comparative outcomes."""
     if not tasks:
@@ -140,6 +143,25 @@ async def run_experiment(
         raise ValueError("Experiment seeds must be unique")
     if repeat_count < 1:
         raise ValueError("Experiment repeat_count must be at least 1")
+    for field in ("model", "prompt_version", "tool_set_version", "budget"):
+        if getattr(baseline_agent, field) != getattr(recovery_agent, field):
+            raise ValueError(f"Paired agents must share {field}")
+    if comparison_axis == "runtime_backend":
+        if (
+            baseline_agent.runtime_backend != "handwritten"
+            or recovery_agent.runtime_backend != "langgraph"
+            or baseline_agent.runtime_strategy != recovery_agent.runtime_strategy
+        ):
+            raise ValueError("Runtime comparison requires Reference/LangGraph with the same policy")
+    elif comparison_axis == "recovery_policy":
+        if (
+            baseline_agent.runtime_backend != recovery_agent.runtime_backend
+            or baseline_agent.recovery_policy != "none"
+            or recovery_agent.recovery_policy != "invalid_arguments_once"
+        ):
+            raise ValueError("Recovery comparison requires the same backend and baseline/recovery")
+    else:
+        raise ValueError("Unknown comparison axis")
 
     experiment_id = uuid4()
     created_at = datetime.now(UTC).isoformat()
@@ -155,7 +177,6 @@ async def run_experiment(
 
     # Run every matrix cell serially: Baseline then Recovery under exact same conditions.
     for task, current_seed, repeat_index in runs:
-        run_config = RunConfig(seed=current_seed, environment_version="tool-lab-m0-v1")
         # 1. Execute Baseline Episode
         provider_base = provider_factory()
         registry_base = create_tool_lab_registry()
@@ -164,13 +185,15 @@ async def run_experiment(
         env_base = ToolLabEnvironment(
             registry=registry_base, executor=executor_base, validator=validator_base
         )
-        runtime_base = HandwrittenRuntime(provider=provider_base, validator=validator_base)
+        runtime_base = create_runtime(baseline_agent, provider_base, validator_base)
         eval_base = OrderStatusEvaluator()
 
         art_base = await run_episode(
             agent=baseline_agent,
             task=task,
-            config=run_config,
+            config=RunConfig(
+                seed=current_seed, runtime_version=runtime_version(baseline_agent.runtime_backend)
+            ),
             runtime=runtime_base,
             environment=env_base,
             evaluator=eval_base,
@@ -187,13 +210,15 @@ async def run_experiment(
         env_rec = ToolLabEnvironment(
             registry=registry_rec, executor=executor_rec, validator=validator_rec
         )
-        runtime_rec = HandwrittenRuntime(provider=provider_rec, validator=validator_rec)
+        runtime_rec = create_runtime(recovery_agent, provider_rec, validator_rec)
         eval_rec = OrderStatusEvaluator()
 
         art_rec = await run_episode(
             agent=recovery_agent,
             task=task,
-            config=run_config,
+            config=RunConfig(
+                seed=current_seed, runtime_version=runtime_version(recovery_agent.runtime_backend)
+            ),
             runtime=runtime_rec,
             environment=env_rec,
             evaluator=eval_rec,
@@ -210,7 +235,7 @@ async def run_experiment(
 
         # retry_eligible is True iff baseline failed specifically due to INVALID_ARGUMENTS
         base_detail = art_base.episode.detail or ""
-        is_retry_eligible = (
+        is_retry_eligible = comparison_axis == "recovery_policy" and (
             (not base_success)
             and (base_term == TerminationReason.FAILED)
             and ("invalid_arguments" in base_detail)
@@ -280,7 +305,7 @@ async def run_experiment(
                 recovery_tool_argument_validity_rate=(
                     float(rec_arg_val) if isinstance(rec_arg_val, (int, float)) else None
                 ),
-                retry_eligible=is_retry_eligible,
+                retry_eligible=is_retry_eligible if comparison_axis == "recovery_policy" else None,
                 recovered=is_recovered,
             )
         )
@@ -357,9 +382,9 @@ async def run_experiment(
         recovery_success_count=rec_succ_count,
         baseline_success_rate=round(base_succ_count / total, 4),
         recovery_success_rate=round(rec_succ_count / total, 4),
-        retry_eligible_count=retry_eligible_count,
-        retry_recovery_count=recovered_count,
-        retry_recovery_rate=retry_recovery_rate,
+        retry_eligible_count=retry_eligible_count if comparison_axis == "recovery_policy" else None,
+        retry_recovery_count=recovered_count if comparison_axis == "recovery_policy" else None,
+        retry_recovery_rate=retry_recovery_rate if comparison_axis == "recovery_policy" else None,
         baseline_total_tokens=base_tot_tokens,
         recovery_total_tokens=rec_tot_tokens,
         baseline_avg_steps=round(base_avg_steps, 2),
@@ -380,17 +405,29 @@ async def run_experiment(
     )
 
     exp_config: dict[str, Any] = {
+        "comparison_axis": comparison_axis,
+        "arm_labels": (
+            {"baseline": "Reference Runtime", "recovery": "LangGraph Runtime"}
+            if comparison_axis == "runtime_backend"
+            else {"baseline": "Baseline Policy", "recovery": "Recovery Policy"}
+        ),
         "baseline_agent": {
             "id": str(baseline_agent.id),
             "name": baseline_agent.name,
             "version": baseline_agent.version,
             "runtime_strategy": baseline_agent.runtime_strategy,
+            "runtime_backend": baseline_agent.runtime_backend,
+            "runtime_version": runtime_version(baseline_agent.runtime_backend),
+            "recovery_policy": baseline_agent.recovery_policy,
         },
         "recovery_agent": {
             "id": str(recovery_agent.id),
             "name": recovery_agent.name,
             "version": recovery_agent.version,
             "runtime_strategy": recovery_agent.runtime_strategy,
+            "runtime_backend": recovery_agent.runtime_backend,
+            "runtime_version": runtime_version(recovery_agent.runtime_backend),
+            "recovery_policy": recovery_agent.recovery_policy,
         },
         "model": {
             "provider": baseline_agent.model.provider,
@@ -428,7 +465,7 @@ async def run_experiment(
     config_hash = compute_config_hash(exp_config)
 
     experiment_artifact = ExperimentArtifact(
-        schema_version="1.1",
+        schema_version="1.2",
         experiment_id=experiment_id,
         created_at=created_at,
         config=exp_config,
