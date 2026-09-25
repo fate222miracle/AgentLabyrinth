@@ -11,7 +11,7 @@
 | 适用范围 | AgentLabyrinth Web 的视觉、信息结构与交互 |
 | 读者 | 项目负责人、Antigravity、Codex、前端开发者 |
 | 来源 | 项目负责人提供的《Agent Arena UI Design Guidelines》及本版交互风格调研 |
-| 状态 | 当前 UI 设计基线；新增过渡规则尚待页面实现与浏览器验收 |
+| 状态 | 当前 UI 设计基线；单次运行与 Replay 已实现首轮原型，其余页面按验收结果接续 |
 | 需求依据 | [requirements.md](requirements.md) V0.6、[ADR-004](../adr/ADR-004-agent-comparison-before-external-data.md)、[ADR-007](../adr/ADR-007-trace-replay-snapshots.md) |
 
 ## 1. 文档定位与实施边界

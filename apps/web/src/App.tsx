@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { changedStateFields, groupTraceByStep, keyFields, stepOutcome, stepTitle } from './traceSteps';
 
 interface ModelOption {
   id: string;
@@ -217,6 +218,40 @@ function snapshotAt(
   return { state, source };
 }
 
+const fieldLabels: Record<string, string> = {
+  answer: '答案', evidence: '引用证据', acquired_evidence: '已获取证据',
+  records: '查询记录', documents: '文档', document: '文档内容',
+  document_id: '文档 ID', order_id: '订单 ID', status: '状态',
+  evidence_id: '证据 ID', target_order_id: '目标订单', task_kind: '任务类型',
+  document_query: '文档检索目标', code: '错误码', message: '错误说明', retryable: '可重试',
+  title: '标题', content: '内容', feedback: '反馈',
+  submission: '提交内容', accepted: '已接受', proposed_call: '已提交调用',
+  table: '数据表', filters: '筛选条件', query: '检索词', top_k: '返回上限',
+  description: '任务说明', question: '任务问题', done: '任务结束',
+  termination_reason: '终止原因', detail: '详情', success: '成功',
+};
+
+function ReadableValue({ value }: { value: unknown }) {
+  if (value === null || value === undefined) return <span className="story-muted">无</span>;
+  if (typeof value === 'boolean') return <span>{value ? '是' : '否'}</span>;
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="story-muted">空</span>;
+    return <div className="story-value-list">{value.map((item, index) =>
+      <div className="story-value-item" key={index}><ReadableValue value={item} /></div>)}</div>;
+  }
+  if (isRecord(value)) return Object.keys(value).length > 0
+    ? <ReadableFields entries={Object.entries(value)} /> : <span className="story-muted">空</span>;
+  return <span className="story-value-text">{String(value)}</span>;
+}
+
+function ReadableFields({ entries }: { entries: [string, unknown][] }) {
+  return <dl className="story-fields">{entries.map(([key, value]) =>
+    <div className="story-field" key={key}>
+      <dt title={key}>{fieldLabels[key] ?? key.replace(/_/g, ' ')}</dt>
+      <dd><ReadableValue value={value} /></dd>
+    </div>)}</dl>;
+}
+
 function downloadFile(filename: string, content: string, contentType: string): void {
   const blob = new Blob([content], { type: contentType });
   const url = URL.createObjectURL(blob);
@@ -358,6 +393,9 @@ export default function App() {
   const [replayIndex, setReplayIndex] = useState<number>(0);
   const [replayPlaying, setReplayPlaying] = useState<boolean>(false);
   const [replaySpeedMs, setReplaySpeedMs] = useState<number>(1000);
+  const [replayView, setReplayView] = useState<'story' | 'events'>('story');
+  const storyStageRef = useRef<HTMLDivElement>(null);
+  const previousStoryIndex = useRef(0);
 
   // Experiment states
   const [expModel, setExpModel] = useState<string>('');
@@ -758,17 +796,74 @@ export default function App() {
   const experimentTasks = meta?.tasks.filter((task) => task.suite === 'tool_lab_core') ?? [];
   const singleTasks = meta?.tasks.filter((task) => task.suite === selectedSuite) ?? [];
   const bfclTaskCount = meta?.tasks.filter((task) => task.suite === 'bfcl_adapted').length ?? 0;
+  const selectedSingleTaskMeta = singleTasks.find((task) => task.id === selectedSingleTask);
   const eventTypes = Array.from(new Set(artifact?.events.map((event) => event.event_type) ?? []));
-  const visibleEvents =
-    artifact?.events.filter(
-      (event) => eventTypeFilter === 'ALL' || event.event_type === eventTypeFilter,
-    ) ?? [];
+  const traceSteps = groupTraceByStep(artifact?.events ?? []);
+  const visibleEvents = replayView === 'story'
+    ? traceSteps.map((group) => group.events[group.events.length - 1])
+    : artifact?.events.filter(
+        (event) => eventTypeFilter === 'ALL' || event.event_type === eventTypeFilter,
+      ) ?? [];
   const safeReplayIndex = Math.min(replayIndex, Math.max(visibleEvents.length - 1, 0));
   const activeReplayEvent = visibleEvents[safeReplayIndex];
+  const activeStep = replayView === 'story' ? traceSteps[safeReplayIndex] : undefined;
+  const proposedCall = activeStep?.events.find((event) => event.event_type === 'TOOL_CALL_PROPOSED');
+  const validation = activeStep?.events.find((event) => event.event_type === 'TOOL_CALL_VALIDATED');
+  const toolResult = activeStep?.events.find((event) =>
+    event.event_type === 'TOOL_SUCCEEDED' || event.event_type === 'TOOL_FAILED');
   const replaySnapshot = artifact
     ? snapshotAt(artifact, activeReplayEvent?.event_id)
     : { state: null, source: '尚无环境快照' };
+  const previousSnapshot = artifact && safeReplayIndex > 0 && replayView === 'story'
+    ? snapshotAt(artifact, traceSteps[safeReplayIndex - 1].events[traceSteps[safeReplayIndex - 1].events.length - 1]?.event_id).state
+    : null;
+  const hasStepSnapshot = activeStep?.events.some((event) =>
+    event.event_type === 'ENVIRONMENT_UPDATED' && isRecord(event.payload.state)) ?? false;
+  const stateChanges = hasStepSnapshot
+    ? changedStateFields(previousSnapshot, replaySnapshot.state)
+    : [];
+  const initialObservation = activeStep?.events.find((event) => event.event_type === 'OBSERVATION_CREATED');
+  const finishedEvent = activeStep?.events.find((event) => event.event_type === 'EPISODE_FINISHED');
+  const validationError = typeof validation?.payload.error_code === 'string'
+    ? validation.payload.error_code : null;
+  const validationRejected = Boolean(validationError || validation?.payload.arguments_valid === false
+    || validation?.payload.permitted === false);
+  const stepFailed = Boolean(toolResult?.event_type === 'TOOL_FAILED'
+    || validationRejected || finishedEvent?.payload.success === false);
+  const toolFeedback = toolResult && isRecord(toolResult.payload.observation)
+    ? toolResult.payload.observation : toolResult?.payload;
+  const feedbackFields = isRecord(toolFeedback?.result) ? toolFeedback.result : toolFeedback;
+  const feedbackDetail = isRecord(feedbackFields?.error) ? feedbackFields.error : feedbackFields;
+  const toolName = String(proposedCall?.payload.name ?? '');
+  const preferredFeedbackKeys = toolResult?.event_type === 'TOOL_FAILED'
+    ? ['code', 'message', 'retryable']
+    : toolName === 'search_documents' ? ['documents']
+      : toolName === 'read_document' ? ['document']
+        : toolName === 'query_records' ? ['records']
+          : toolName === 'submit_answer' ? ['feedback']
+            : ['accepted', 'feedback'];
+  const visibleFeedback = isRecord(feedbackDetail)
+    ? keyFields(feedbackDetail, preferredFeedbackKeys) : [];
+  const visibleStateChanges: [string, unknown][] = keyFields(Object.fromEntries(stateChanges),
+    ['acquired_evidence', 'submission', 'done', 'proposed_call']).map(([key, value]) => [key,
+      key === 'submission' && isRecord(value) ? value.answer
+        : key === 'proposed_call' && isRecord(value) ? value.name : value]);
+  const observationFields = isRecord(initialObservation?.payload.observation)
+    ? keyFields(initialObservation.payload.observation, ['description', 'question', 'target_order_id', 'document_query'])
+    : keyFields(finishedEvent?.payload ?? {}, ['termination_reason', 'detail']);
   const replaySteps = Array.from(new Set(visibleEvents.map((event) => event.step_index)));
+  useLayoutEffect(() => {
+    if (replayView !== 'story' || !activeStep) return;
+    const node = storyStageRef.current;
+    if (!node || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const direction = safeReplayIndex < previousStoryIndex.current ? -1 : 1;
+    previousStoryIndex.current = safeReplayIndex;
+    const animation = node.animate([
+      { opacity: 0.5, transform: `translateY(${direction * 8}px)` },
+      { opacity: 1, transform: 'translateY(0)' },
+    ], { duration: 240, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    return () => animation.cancel();
+  }, [replayView, activeReplayEvent?.event_id, artifact?.episode.episode_id]);
   useEffect(() => {
     if (!replayPlaying || visibleEvents.length < 2) return;
     const timer = window.setInterval(
@@ -811,7 +906,7 @@ export default function App() {
           </div>
 
           <div className="header-actions">
-            <div className="nav-tabs">
+            <div className="nav-tabs" data-active={activeTab}>
               <button
                 id="tab-experiment"
                 className={`nav-tab ${activeTab === 'experiment' ? 'active' : ''}`}
@@ -1611,7 +1706,47 @@ export default function App() {
                   <span>单次运行配置</span>
                   <span className="badge badge-blue">ToolLab</span>
                 </div>
-                <div className="card-desc">选择模型模式与限制，发起单次受控评测。</div>
+                <div className="card-desc">选择任务与执行方式，核对后启动一次受控评测。</div>
+
+                <div className="config-stage-label"><span>01</span> 选择任务</div>
+                <div className="form-group">
+                  <label htmlFor="suite-select" className="form-label">数据集</label>
+                  <select id="suite-select" className="form-select" value={selectedSuite}
+                    onChange={(e) => {
+                      const suite = e.target.value as 'tool_lab_core' | 'bfcl_adapted';
+                      setSelectedSuite(suite);
+                      const first = meta?.tasks.find((task) => task.suite === suite);
+                      if (first) setSelectedSingleTask(first.id);
+                      setMaxSteps(suite === 'bfcl_adapted' ? 1 : 6);
+                      setSingleToolTransport('local');
+                    }} disabled={isLoading}>
+                    <option value="tool_lab_core">原生 ToolLab</option>
+                    <option value="bfcl_adapted" disabled={bfclTaskCount === 0}>
+                      BFCL 改编子集（{bfclTaskCount === 0 ? '请先运行导入脚本' : `${bfclTaskCount} 道真实固定题`}）
+                    </option>
+                  </select>
+                  {selectedSuite === 'bfcl_adapted' && <p className="metric-sub">
+                    来源：BFCL V4 固定上游提交；AgentLabyrinth-adapted subset；本地精确匹配，非官方分数。
+                  </p>}
+                </div>
+                <div className="form-group">
+                  <label htmlFor="task-select" className="form-label">评测任务</label>
+                  <select id="task-select" className="form-select" value={selectedSingleTask}
+                    onChange={(e) => { setSelectedSingleTask(e.target.value); setSingleToolTransport('local'); }}
+                    disabled={isLoading}>
+                    {singleTasks.map((task) => <option key={task.id} value={task.id}>
+                      {task.name} · {task.split}
+                    </option>)}
+                  </select>
+                </div>
+                {selectedSingleTaskMeta && <div className="task-preview" aria-live="polite">
+                  <span className="task-preview-kicker">{selectedSingleTaskMeta.category} · {selectedSingleTaskMeta.split}</span>
+                  <strong>{selectedSingleTaskMeta.name}</strong>
+                  <p>{selectedSingleTaskMeta.description}</p>
+                  <span className="task-preview-foot">任务建议上限 {selectedSingleTaskMeta.max_steps} 步 · {selectedSingleTaskMeta.supports_mcp ? '支持本地 / MCP 工具' : '本地工具'}</span>
+                </div>}
+
+                <div className="config-stage-label"><span>02</span> 选择执行方式</div>
 
                 <div className="form-group">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1686,15 +1821,13 @@ export default function App() {
                     <option value="langgraph">LangGraph</option>
                   </select>
                 </div>
-                {selectedSuite === 'tool_lab_core' && (
+                {selectedSingleTaskMeta?.supports_mcp && (
                   <div className="form-group">
                     <label htmlFor="single-tool-transport" className="form-label">文档工具传输</label>
                     <select id="single-tool-transport" className="form-select" value={singleToolTransport}
                       onChange={(e) => setSingleToolTransport(e.target.value as 'local' | 'mcp')} disabled={isLoading}>
                       <option value="local">本地 ToolLab</option>
-                      <option value="mcp" disabled={!singleTasks.find((task) => task.id === selectedSingleTask)?.supports_mcp}>
-                        MCP HTTP（需启动独立服务）
-                      </option>
+                      <option value="mcp">MCP HTTP（需启动独立服务）</option>
                     </select>
                   </div>
                 )}
@@ -1727,54 +1860,8 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Task Selection */}
-                <div className="form-group">
-                  <label htmlFor="suite-select" className="form-label">数据集</label>
-                  <select
-                    id="suite-select"
-                    className="form-select"
-                    value={selectedSuite}
-                    onChange={(e) => {
-                      const suite = e.target.value as 'tool_lab_core' | 'bfcl_adapted';
-                      setSelectedSuite(suite);
-                      const first = meta?.tasks.find((task) => task.suite === suite);
-                      if (first) setSelectedSingleTask(first.id);
-                      setMaxSteps(suite === 'bfcl_adapted' ? 1 : 6);
-                    }}
-                    disabled={isLoading}
-                  >
-                    <option value="tool_lab_core">原生 ToolLab</option>
-                    <option value="bfcl_adapted" disabled={bfclTaskCount === 0}>
-                      BFCL 改编子集（{bfclTaskCount === 0 ? '请先运行导入脚本' : `${bfclTaskCount} 道真实固定题`}）
-                    </option>
-                  </select>
-                  {selectedSuite === 'bfcl_adapted' && (
-                    <p className="metric-sub">
-                      来源：BFCL V4 固定上游提交；AgentLabyrinth-adapted subset；本地精确匹配，不是官方 BFCL 分数。
-                    </p>
-                  )}
-                </div>
-                <div className="form-group">
-                  <label htmlFor="task-select" className="form-label">评测任务</label>
-                  <select
-                    id="task-select"
-                    className="form-select"
-                    value={selectedSingleTask}
-                    onChange={(e) => {
-                      setSelectedSingleTask(e.target.value);
-                      setSingleToolTransport('local');
-                    }}
-                    disabled={isLoading}
-                  >
-                    {singleTasks.map((task) => (
-                      <option key={task.id} value={task.id}>
-                        {task.name} · {task.split}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Max Steps Override */}
+                <details className="advanced-settings">
+                  <summary>高级设置 <span>步数与 Token 预算</span></summary>
                 <div className="form-group">
                   <label htmlFor="steps-input" className="form-label">步数上限 (Max Steps)</label>
                   <input
@@ -1791,14 +1878,22 @@ export default function App() {
 
                 {selectedModel !== 'fake' && (
                   <div className="form-group">
-                    <label htmlFor="single-token-budget">总 Token 预算（输入 + 输出）</label>
-                    <input id="single-token-budget" type="number" min={100} max={20000}
+                    <label htmlFor="single-token-budget" className="form-label">总 Token 预算（输入 + 输出）</label>
+                    <input id="single-token-budget" className="form-input" type="number" min={100} max={20000}
                       value={singleTokenBudget ?? ''} placeholder="留空使用任务原预算"
                       onChange={(e) => setSingleTokenBudget(e.target.value === '' ? null : Number(e.target.value))}
                       disabled={isLoading} />
                     <p className="metric-sub">真实多轮建议 8000；两种策略使用相同预算。免费通道按约 13 秒间隔发起请求，仍可能遇到账户限额。</p>
                   </div>
                 )}
+                </details>
+
+                <div className="config-stage-label"><span>03</span> 运行前核对</div>
+                <div className="run-review" aria-live="polite">
+                  <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
+                  <p>{currentSingleModelMeta?.name || selectedModel || '请选择模型'} · {singleRuntimeBackend === 'langgraph' ? 'LangGraph' : 'Reference'} · {singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp ? 'MCP HTTP' : '本地工具'}</p>
+                  <span>最多 {maxSteps} 步 · {selectedModel === 'fake' ? '离线模拟' : '真实模型请求'}</span>
+                </div>
 
                 <button
                   id="run-button"
@@ -1987,8 +2082,42 @@ export default function App() {
 
                   {artifact && artifact.events.length > 0 ? (
                     <>
-                      <div className="replay-toolbar" aria-label="Replay controls">
-                        <label>
+                      <div className="view-switch" data-active={replayView} aria-label="Replay 视图">
+                        <button type="button" className={replayView === 'story' ? 'active' : ''}
+                          aria-pressed={replayView === 'story'}
+                          onClick={() => { setReplayPlaying(false); setReplayIndex(0); setReplayView('story'); }}>
+                          过程概览
+                        </button>
+                        <button type="button" className={replayView === 'events' ? 'active' : ''}
+                          aria-pressed={replayView === 'events'}
+                          onClick={() => { setReplayPlaying(false); setReplayIndex(0); setReplayView('events'); }}>
+                          技术 Trace
+                        </button>
+                      </div>
+                      {replayView === 'story' && <div className="step-rail" role="group" aria-label="执行步骤（方向键切换）"
+                        onKeyDown={(event) => {
+                          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                          const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('.step-card'));
+                          const current = buttons.indexOf(event.target as HTMLButtonElement);
+                          if (current < 0) return;
+                          event.preventDefault();
+                          const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+                            : Math.max(0, Math.min(buttons.length - 1, current + (event.key === 'ArrowRight' ? 1 : -1)));
+                          setReplayPlaying(false);
+                          setReplayIndex(next);
+                          buttons[next]?.focus();
+                        }}>
+                        {traceSteps.map((group, index) => <button key={`${group.step}-${index}`} type="button"
+                          className={`step-card ${safeReplayIndex === index ? 'active' : ''}`}
+                          aria-current={safeReplayIndex === index ? 'step' : undefined}
+                          onClick={() => { setReplayPlaying(false); setReplayIndex(index); }}>
+                          <span className="step-card-number">{group.step === 0 ? '开始' : `Step ${group.step}`}</span>
+                          <strong>{stepTitle(group.events)}</strong>
+                          <small>{stepOutcome(group.events)}</small>
+                        </button>)}
+                      </div>}
+                      <div className={`replay-toolbar ${replayView === 'story' ? 'story-toolbar' : ''}`} aria-label="Replay controls">
+                        {replayView === 'events' && <label>
                           <span>事件类型</span>
                           <select
                             id="trace-event-filter"
@@ -2007,7 +2136,7 @@ export default function App() {
                               </option>
                             ))}
                           </select>
-                        </label>
+                        </label>}
                         <label>
                           <span>跳转 Step</span>
                           <select
@@ -2094,7 +2223,70 @@ export default function App() {
                         </div>
                       </div>
 
-                      {activeReplayEvent ? (
+                      {activeReplayEvent && replayView === 'story' && activeStep ? (
+                        <div className="story-stage" ref={storyStageRef}>
+                          <div className="story-stage-header" aria-live="polite">
+                            <div>
+                              <span className="story-eyebrow">{activeStep.step === 0 ? '开始' : `Step ${activeStep.step}`} · {activeStep.events.length} 条已保存事件</span>
+                              <h3>{stepTitle(activeStep.events)}</h3>
+                            </div>
+                            <div className="story-status-group">
+                              {artifact.run_config.environment_version === 'tool-lab-mcp-v1' && <span className="story-transport">MCP HTTP</span>}
+                              <span className={`story-outcome ${stepFailed ? 'failed' : ''}`}>
+                                {stepOutcome(activeStep.events)}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="story-stage-grid">
+                            <section className="story-sheet">
+                              <span className="story-section-label">{proposedCall ? '01 · 模型行动' : initialObservation ? '01 · 任务观察' : '01 · 运行结果'}</span>
+                              <h4>{proposedCall ? '选择工具并提交参数' : initialObservation ? '接收任务观察' : '运行结束'}</h4>
+                              {proposedCall ? <>
+                                <div className="story-tool-name">{String(proposedCall.payload.name ?? '未知工具')}</div>
+                                {isRecord(proposedCall.payload.arguments) && Object.keys(proposedCall.payload.arguments).length > 0
+                                  ? <ReadableFields entries={Object.entries(proposedCall.payload.arguments)} />
+                                  : <p className="story-muted">未记录工具参数</p>}
+                              </> : <ReadableFields entries={observationFields} />}
+                            </section>
+                            <section className="story-sheet">
+                              <span className="story-section-label">02 · 校验与反馈</span>
+                              <h4>{toolResult?.event_type === 'TOOL_FAILED' || validationRejected
+                                ? '行动未通过' : toolResult ? '工具返回' : '尚无工具反馈'}</h4>
+                              {validation && <p className={`story-validation ${validationRejected ? 'failed' : ''}`}>
+                                工具校验：{validationRejected ? validationError ?? '未通过'
+                                  : validation.payload.arguments_valid === true ? '通过' : '未记录结果'}
+                              </p>}
+                              {visibleFeedback.length > 0
+                                ? <ReadableFields entries={visibleFeedback} />
+                                : <p className="story-muted">{validationRejected
+                                  ? '工具没有执行。' : initialObservation ? '等待模型选择行动。' : '本步没有工具返回。'}</p>}
+                              {finishedEvent && proposedCall && <p className="story-finish">
+                                终止：{String(finishedEvent.payload.termination_reason ?? '已结束')}
+                              </p>}
+                            </section>
+                            <section className="story-sheet story-state-sheet">
+                              <span className="story-section-label">03 · 环境变化</span>
+                              <div className="story-state-heading"><h4>与上一步相比</h4><span>{replaySnapshot.source}</span></div>
+                              {activeStep.step === 0 && replaySnapshot.state ? <div className="story-initial-state">
+                                <span>初始环境已记录</span>
+                                {['orders', 'documents', 'acquired_evidence'].filter((key) => Array.isArray(replaySnapshot.state?.[key])).map((key) =>
+                                  <span key={key}>{fieldLabels[key]} {(replaySnapshot.state?.[key] as unknown[]).length}</span>)}
+                              </div> : hasStepSnapshot && stateChanges.length > 0
+                                ? <ReadableFields entries={visibleStateChanges} />
+                                : <p className="story-muted">{!replaySnapshot.state ? '此时还没有已保存的环境快照。'
+                                  : !hasStepSnapshot ? '本步没有新的环境快照，无法确认字段变化。'
+                                    : !previousSnapshot ? '缺少上一步快照，无法计算字段变化。'
+                                    : '状态快照与上一步一致。'}</p>}
+                            </section>
+                          </div>
+                          <button type="button" className="story-raw-link" onClick={() => {
+                            setReplayPlaying(false);
+                            setEventTypeFilter('ALL');
+                            setReplayIndex(artifact?.events.findIndex((event) => event.event_id === activeStep.events[0]?.event_id) ?? 0);
+                            setReplayView('events');
+                          }}>查看本步原始事件 →</button>
+                        </div>
+                      ) : activeReplayEvent ? (
                         <div className="replay-grid">
                           <aside className="replay-state-panel" aria-label="Environment snapshot">
                             <div className="replay-panel-heading">
@@ -2110,24 +2302,23 @@ export default function App() {
                             )}
                           </aside>
 
-                          <div className="replay-event-panel">
+                          <div className="replay-event-panel" key={activeReplayEvent.event_id}>
                             <div className="replay-panel-heading">
                               <span>当前事件</span>
                               <span className="event-step-pill">
                                 Step {activeReplayEvent.step_index}
                               </span>
                             </div>
-                            <div className="active-event-name">
-                              {formatEventTypeLabel(activeReplayEvent.event_type)}
-                            </div>
-                            <div className="event-raw-name">原始事件名：{activeReplayEvent.event_type}</div>
-                            <div className="event-meta">
-                              {new Date(activeReplayEvent.timestamp).toLocaleString()}
-                              {typeof activeReplayEvent.duration_ms === 'number' && activeReplayEvent.duration_ms > 0
-                                ? ` · ${activeReplayEvent.duration_ms} ms`
-                                : ' · 时长未知'}
-                            </div>
-                            <pre>{JSON.stringify(activeReplayEvent.payload, null, 2)}</pre>
+                            <>
+                              <div className="active-event-name">{formatEventTypeLabel(activeReplayEvent.event_type)}</div>
+                              <div className="event-raw-name">原始事件名：{activeReplayEvent.event_type}</div>
+                              <div className="event-meta">
+                                {new Date(activeReplayEvent.timestamp).toLocaleString()}
+                                {typeof activeReplayEvent.duration_ms === 'number' && activeReplayEvent.duration_ms > 0
+                                  ? ` · ${activeReplayEvent.duration_ms} ms` : ' · 时长未知'}
+                              </div>
+                              <pre>{JSON.stringify(activeReplayEvent.payload, null, 2)}</pre>
+                            </>
                           </div>
                         </div>
                       ) : (
@@ -2136,7 +2327,7 @@ export default function App() {
                         </div>
                       )}
 
-                      {visibleEvents.length > 0 && (
+                      {replayView === 'events' && visibleEvents.length > 0 && (
                         <div className="timeline-container" id="timeline-list">
                           {visibleEvents.map((ev, index) => {
                             const isExpanded = !!expandedEvents[ev.event_id];

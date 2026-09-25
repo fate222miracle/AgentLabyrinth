@@ -1,6 +1,38 @@
 # Current state
 
-更新：2026-09-24。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+更新：2026-09-25。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+
+## 2026-09-25 Replay 复核与失败测试
+
+对照需求 FR-05、UI 规范 1.1、ADR-007/012 复核本轮 UI。发现共同根因：旧过程概览只用 `arguments_valid` 判断工具校验，导致 `UNKNOWN_TOOL`/`FORBIDDEN_TOOL` 可能被误标为“通过”；现统一按已保存的 `error_code`、`arguments_valid`、`permitted` 判断，并让失败终态优先于同一步工具成功。缺失上一步快照时明确说无法计算变化；自动播放的播报范围缩至步骤标题，避免重复朗读整个详情。原始技术 Trace 仍保留完整事件与 JSON。
+
+验证：全项目质量门禁 Ruff、mypy、pytest **169 passed、1 条既有依赖 warning**；前端生产构建通过（28 modules）。Replay 单元检查 **4/4 连续 3 轮**，LangGraph 失败边界 **14/14 连续 3 轮**。浏览器回读三条历史产物：Fake `INVALID_ARGUMENTS` 步骤显示工具未执行，MCP `TOOL_EXECUTION_ERROR` 显示真实错误字段和失败终态，BFCL 工具成功但最终 `FAILED` 显示失败；URL 刷新保持同一 Episode，技术 Trace 可查看原始事件。这些是历史回放与离线失败测试，没有在本次复核重新调用真实模型，也不构成 V0.2 整版验收。首次受限进程的 pytest 临时目录权限和 Vite 子进程权限导致启动/测试失败，获准正常进程重跑后上述门禁通过。
+
+## 2026-09-25 Replay 关键字段与失败路径接续
+
+按用户确认，过程概览只呈现理解行动所需的 JSON 字段：初始观察优先任务说明/问题，工具反馈按工具类型选择记录、文档或提交确认，状态区优先证据、提交、结束标志和 BFCL 调用；其他未知工具保留最多四个已保存字段作为兜底。技术 Trace 仍保留完整原始 JSON。MCP 失败时从真实 `TOOL_FAILED.payload.error` 展示错误码、说明、可重试标志，并在步骤顶部标明 `MCP HTTP`；不把通用 `TOOL_EXECUTION_ERROR` 擅自解释成某个具体网络原因。步骤轨道支持焦点在卡片时用左右方向键、Home、End 跳转，焦点与播放游标同步。若同一步工具成功但 Episode 最终失败，步骤结果优先显示已保存的失败终态，避免误导。
+
+阅读顺序：`apps/web/src/traceSteps.ts` 的 `keyFields` → `apps/web/src/App.tsx` 的 `preferredFeedbackKeys`/`visibleStateChanges`/`observationFields` 与步骤轨道 `onKeyDown` → `apps/web/src/index.css` 的 MCP 标签。调用链仍是历史 GET 或单次 POST → 保存 Artifact → 步骤分组 → 从本步实际提议、工具结果及环境快照抽取关键字段；原始 Trace 不裁剪。错误路径以保存的 `TOOL_FAILED` 和 `EPISODE_FINISHED` 为依据；无 `ENVIRONMENT_UPDATED.state` 时明确提示无法确认字段变化。
+
+验证：前端生产构建通过（28 modules）；`node apps/web/tests/traceSteps.test.mjs` **3/3 通过**；网页用已保存 MCP 失败 Episode `a6950cc3-95cc-4ea0-8d70-8e6afa168ad8` 回读：Step 1 显示 `search_documents`、`MCP HTTP`、`TOOL_EXECUTION_ERROR`、`retryable=false` 与 `FAILED`，没有虚构状态变化。该验收副本从 `artifacts/mcp-smoke/` 放到被 Git 忽略的默认 Artifact 目录，仅供网页回读，原始文件保留。Fake Recovery Episode 上聚焦 Step 1 后按右箭头到 Step 2，焦点、下拉框与详情同步；文档任务 `bc4079e8-d881-4f10-b460-6a49c6e29d7a` 的 `read_document` 步骤只呈现 DOC-007 标题、内容、证据 ID 与新增证据。另用历史真实 BFCL 失败 Episode `1090793d-7036-4186-b0aa-ebd75310240c` 检查工具已接受但最终评测 `FAILED` 的步骤，轨道与详情均显示失败；此处只是回读历史产物，并未新调用模型。代码仍未提交或推送。
+
+## 2026-09-25 Replay 可读详情与切换整改
+
+用户复核首版后指出双栏原始 JSON 单调、切步生硬。过程概览已改为同一视图区的“任务观察/模型行动 → 校验与工具反馈 → 环境变化”三段阅读卡：字段名可读、嵌套记录按键值呈现，参数错误明确显示错误码及工具未执行；环境变化只比较前后**已保存**快照，旧产物或失败步骤没有新快照时明确说明不能确认变化。初始状态只显示环境条目数量；每一步可直达对应的技术 Trace 原始事件。技术 Trace 的 JSON、筛选和时间线仍保留。步骤卡选中使用短距离位移与阴影，详情容器通过可打断的原生 Web Animations API 过渡；系统开启减少动效时不播放该过渡。未引入前端依赖，也未改变 API、Artifact 或评分契约。
+
+阅读顺序：`apps/web/src/traceSteps.ts` 的 `groupTraceByStep`/`changedStateFields` → `apps/web/src/App.tsx` 的 `snapshotAt`、`ReadableFields`、Replay 派生状态与 story JSX → `apps/web/src/index.css` 的 `.story-*`。调用链：GET 历史 Episode 或单次 POST → `setArtifact` → 按保存事件分组 → 游标切换 → 提取提议工具、校验、反馈与不晚于该步的快照 → 渲染可读卡；点击“查看本步原始事件”定位技术 Trace 的该步首事件。失败路径：`INVALID_ARGUMENTS` 可见但无工具返回/新快照；无快照的旧产物只显示未知，不补造中间状态。播放仍只移动本地游标。
+
+验证：`node apps/web/tests/traceSteps.test.mjs` **2/2 通过**（增加快照差异断言），前端生产构建通过（28 modules），`git diff --check` 通过。浏览器回读 Fake Recovery Episode `1f3148a2-3ded-4e78-a02f-c4d39a840859`：Step 1 显示 `INVALID_ARGUMENTS`、工具未执行且无新状态快照；Step 2 显示查询记录和新增证据；Step 3 显示提交与 `done` 变化。过程视图点击原始事件入口可定位技术 Trace Step 2 的首事件。390px 视口 document scrollWidth 375px，无整体横向溢出。动画手感属主观验收，仍需项目负责人在本机观看。此次只验收 Fake Replay UI，不代表真实模型稳定性或 V0.2 整版验收。工作区未提交/推送；原有未提交改动保持原样。
+
+## 2026-09-25 单次运行与 Replay UI 首轮实现
+
+按 UI 规范 1.1，在 `apps/web/src/App.tsx` 将单次运行配置排为“任务 → 执行方式 → 运行前核对”，加任务目标预览与原生高级设置折叠；运行按钮始终在折叠区外。选择任务时不覆盖已加载的历史结果；切换任务/数据集会把 MCP 传输恢复为本地，只有任务声明支持时展示 MCP 选项。`apps/web/src/index.css` 增加选中标记滑动、短距离内容进入、任务/步骤选中反馈，并在中等视口把 Replay 详情与状态面板改为纵向，减少窄栏 JSON 换行。没有新增动画依赖。
+
+Replay 默认“过程概览”：`apps/web/src/traceSteps.ts` 仅按已保存事件的相邻 `step_index` 分组，从 `TOOL_CALL_PROPOSED`、校验、工具结果提取标题与结果；步骤轨道选中后更新详情和 `snapshotAt` 状态。步骤播放仍只移动前端游标。切到“技术 Trace”会恢复逐事件筛选、展开、JSON 和事件级播放；URL 刷新继续 GET 原 Episode，不重新调用模型/工具。失败事件只根据真实 payload 展示，缺少快照仍沿用 ADR-007 的回退规则。调用链：历史 GET 或单次 POST → `setArtifact` → `groupTraceByStep` → `visibleEvents`（过程步骤末事件或技术筛选事件）→ `replayIndex` → Inspector 与 Snapshot。
+
+验证：`node apps/web/tests/traceSteps.test.mjs` 1/1 通过，覆盖步骤顺序、参数错误和工具成功；`npm.cmd --prefix apps/web run build` 通过（28 modules）。浏览器回读 BFCL Episode `4716ca38-5f67-4f6d-8239-a5488541826b`：10 事件显示为 2 个步骤，切换到技术 Trace 可见完整 10 事件。网页发起 Fake `order-status-007` Episode `bc4079e8-d881-4f10-b460-6a49c6e29d7a`：SUCCESS、Evaluator true、3 步/3 工具、24 事件，过程概览呈现初始观察、search_documents、read_document、submit_answer；刷新原 URL 后仍显示同一产物。另在 Fake `invalid-then-success` + Recovery 下运行 `order-status-001`，Episode `1f3148a2-3ded-4e78-a02f-c4d39a840859` 为 SUCCESS、21 事件；Step 1 显示“参数错误”和真实 `INVALID_ARGUMENTS`，Step 2 显示工具成功。390px 视口 DOM 主面板宽 351px、document scrollWidth 375px，无整体横向溢出。受限进程曾阻止 esbuild/Node 测试子进程，正常构建和直接 Node 测试均通过。此为 Fake UI 验证，不代表真实模型能力或 V0.2 整版验收。
+
+接续：用一条 MCP 失败产物检查过程概览的网络错误表达，再考虑键盘快速跳步与对照实验的同类过渡。状态变化可读摘要已在上方整改中完成。真实模型目录本次浏览器会话为 unavailable，不据此判断模型失效；原因需另行诊断。本轮代码尚未提交或推送。
 
 ## 2026-09-24 UI 风格与动效规范更新
 
