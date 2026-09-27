@@ -1,6 +1,28 @@
 # Current state
 
-更新：2026-09-25。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+更新：2026-09-27。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+
+## 2026-09-27 开源流程动画原型
+
+输入卡片视觉接续：用户反馈首尾输入提示生硬，改为对话图标、“这次要做什么”标题和带名称的搜索关键词/目标订单标签；保留原始描述和值，未改任务语义。浏览器截图核对暖色卡片与关键词标签，生产构建通过，git diff --check通过。
+
+追加用户要求的最初输入/最终输出：图上方首个已保存 Observation 描述与查询/订单条件，图下方 final_state.submission 的答案及证据，开始/结束帧分别高亮；无提交时显示缺失及实际终止原因。不使用评分标准答案，不生成猜测结论。成功/断线两个历史 Fake Episode 浏览器回读验证字段正确，构建及7项回放检查通过。阅读见 MCP-flow-replay.md；本轮无新模型/工具调用，未提交推送。
+
+按用户“画面优先、展示 MCP 工具行为”要求，调研 React Flow/Rete/Motion 后复用 MIT @xyflow/react 12.12.0 开源核心，选择记录在 Accepted ADR-013。新增 flowFrames.ts、McpFlowReplay.tsx、flowReplay.css，默认流程动画；旧概览和技术 Trace 保留。模型→调度→实际工具节点用活动线和移动光点播放，失败为红色，参数折叠。手机纵向显示当前工具。只读已保存事件，播放器不发模型/工具请求，不展示未记录协议报文或阶段耗时；Core/API/Schema/评分无变化。
+
+浏览器新运行 Fake MCP SUCCESS Episode `0e14e216-ffbf-4165-a4e0-2af8cfdcf97b`：Evaluator true、3 模型/3 工具、24 事件、11 帧；搜索与读取显示 MCP，提交本地。关闭本轮 MCP 服务后浏览器新运行 `48a252cb-87f3-4a8c-9fb3-41fb89bdcf69`：FAILED TOOL_EXECUTION_ERROR、9 事件、5 帧，失败返回红色，无后续工具；服务已恢复。播放、暂停、逐帧与进度操作已验证。390px scrollWidth375，无整体溢出。图和字段没有消失：浏览器可访问树会省略视口外节点，DOM 实查节点保持存在；最终截图确认活动路径。
+
+Flow 测试3/3、原 Replay4/4，生产构建192 modules通过，git diff --check通过；官方 registry production npm audit=0 vulnerabilities。gzip JS127.15 KB（此前63.92），CSS8.53 KB。阅读链、失败与截图路径见 `docs/learning/MCP-flow-replay.md`，库对比见 `docs/research/mcp-network-visualization.md`。未重新调用真实模型、未重跑 Python 门禁，减少动效尚未浏览器实测；不宣称 V0.2 整版验收。未提交/推送，需负责人观看动画手感。
+
+## 2026-09-27 单次配置交互接续
+
+追加导航：按用户明确要求，顶部采用暖白 78% 背景、16px backdrop blur，不支持时保持原 96% 背景。将 html/body/root 的 overflow-x 从 hidden 改为 clip，避免 sticky 被祖先滚动容器约束；保留 sticky/top=0，加入 scroll-padding-top。浏览器桌面与 390px 下滚动约 995px，导航 boundingClientRect.top 均为 0；390px scrollWidth=375，无整体溢出。前端构建 28 modules、1.01s 通过，截图 artifacts/ui-check/sticky-glass-390.png。UI 规范记录了用户授权的局部毛玻璃例外。MCP 课设可视化建议见 docs/research/mcp-network-visualization.md，尚未实施协议遥测或新 Schema。
+
+先将 main 从 4d01e41 快进到 GitHub 的 4a57da0，工作区干净后接续已有 UI。Runtime 选择改为原生 radio 卡片，显示 Reference/LangGraph 及调度方式，支持键盘选择、焦点和运行期间禁用。高级设置沿用原生 details，支持 intrinsic-size 的浏览器使用 240ms 高度过渡，不支持时正常展开；减少动效沿用现有全局规则。折叠标题保留当前步数，运行前摘要显示 Task/请求预算、纠错策略及模拟/真实调用性质。历史结果存在时配置标题明确为“下次运行配置”。无新增依赖、API 或 Schema 变化。
+
+本轮实测：前端生产构建 28 modules 通过（1.30s）；Replay Node 检查 4/4 通过；git diff --check 通过。浏览器点击 LangGraph、展开预算、改为 5 步再关闭，摘要保持一致；发起 Fake clean order-status-001 得到 Episode f10abdbe-d599-416f-9740-a69a7b1ac890，Evaluator true、SUCCESS、2 模型/2 工具调用、17 事件。点击查询步骤显示参数、记录与新增证据；URL 刷新回读同一 Episode。390/768/1280/1440px 下 document scrollWidth 分别 375/753/1265/1425，没有整体横向溢出。截图：被忽略的 artifacts/ui-check/runtime-options-390.png。
+
+阅读入口见 docs/learning/UI-runtime-options.md。此轮仅 Fake UI 验证；模型目录显示 unavailable，未重新调用真实模型。减少动效和 200% 缩放尚未浏览器实测，动效手感仍需项目负责人观看；不宣称 V0.2 整版验收。Python 核心未改，本轮未重跑 Python 全量门禁。未提交或推送。
 
 ## 2026-09-25 Replay 复核与失败测试
 

@@ -1,0 +1,47 @@
+.flow-replay { border: 1px solid var(--border-color); border-radius: var(--radius-lg); overflow: hidden; background: var(--color-canvas); }
+.flow-caption { display: flex; gap: 0.8rem; align-items: center; padding: 1rem 1.2rem; border-bottom: 1px solid var(--border-color); flex-wrap: wrap; }
+.flow-caption strong { flex: 1; font-size: 0.95rem; }
+.flow-caption > span { color: var(--text-secondary); font-size: 0.75rem; }
+.flow-caption .flow-failure { color: var(--fail-text); }
+.flow-replay-label { border: 1px solid var(--border-highlight); padding: 0.2rem 0.5rem; border-radius: var(--radius-full); }
+.flow-canvas { height: 470px; }
+.flow-node { width: 180px; min-height: 116px; border: 1px solid var(--border-highlight); border-radius: 18px; background: var(--color-surface); display: grid; justify-items: center; padding: 1rem 0.6rem; gap: 0.3rem; transition: border-color 180ms, background 180ms, box-shadow 180ms; }
+.flow-node.current { border-color: var(--brand-action); background: #fff5ee; box-shadow: 0 0 0 5px rgb(201 100 66 / 12%); }
+.flow-node.failed { border-color: var(--fail-text); background: var(--fail-bg); }
+.flow-symbol { width: 34px; height: 34px; color: var(--brand-action); margin-bottom: 0.2rem; }
+.flow-symbol svg { width: 100%; height: 100%; }
+.flow-node strong { font-size: 15px; }
+.flow-node > span { font: 10px var(--font-mono); color: var(--text-secondary); max-width: 100%; overflow-wrap: anywhere; text-align: center; }
+.flow-node .react-flow__handle { background: var(--border-control); border: 2px solid var(--color-surface); width: 8px; height: 8px; }
+.flow-player { display: flex; gap: 0.5rem; align-items: center; padding: 1rem; border-top: 1px solid var(--border-color); }
+.flow-player .btn-primary { width: auto; margin: 0; font-size: 0.8rem; padding: 0.55rem 0.8rem; white-space: nowrap; }
+.flow-player .btn-secondary { padding: 0.5rem 0.65rem; min-height: 40px; }
+.flow-scrubber { flex: 1; min-width: 50px; }
+.flow-scrubber input { width: 100%; accent-color: var(--brand-action); }
+.flow-position { font-size: 0.75rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.flow-player select { background: var(--color-surface); color: var(--text-primary); padding: 0.4rem; border: 1px solid var(--border-control); border-radius: var(--radius-sm); }
+.flow-detail { padding: 0 1rem 1rem; font-size: 0.78rem; color: var(--text-secondary); }
+.flow-detail summary { cursor: pointer; }
+.flow-bookend { display: flex; gap: 0.8rem; margin: 0.9rem 1rem; padding: 0.8rem 1rem; border: 1px solid var(--border-color); border-radius: 12px; background: var(--color-surface); transition: border-color 180ms, background 180ms; }
+.flow-bookend.current { border-color: var(--brand-action); background: #fff5ee; }
+.flow-bookend-icon { color: var(--brand-action); font-size: 1.5rem; line-height: 1.4; }
+.flow-bookend > div { min-width: 0; }
+.flow-bookend-label { color: var(--text-secondary); font-size: 0.72rem; }
+.flow-bookend p { margin: 0.25rem 0; font-size: 0.9rem; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; max-height: 9rem; overflow-y: auto; }
+.flow-bookend-meta { color: var(--text-secondary); font-size: 0.73rem; overflow-wrap: anywhere; }
+.flow-bookend.failed .flow-bookend-icon { color: var(--fail-text); }
+.flow-bookend.input { border-color: transparent; background: var(--color-surface); gap: 0.85rem; padding: 1rem; }
+.flow-bookend.input.current { border-color: rgb(201 100 66 / 25%); background: #fff8f3; }
+.flow-input-icon { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: 11px; background: rgb(201 100 66 / 9%); color: var(--brand-action); }
+.flow-input-icon svg { width: 22px; height: 22px; }
+.flow-bookend.input p { margin: 0.35rem 0 0.65rem; }
+.flow-input-context { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.flow-input-context > span { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.3rem 0.55rem; color: var(--text-secondary); font-size: 0.73rem; }
+.flow-input-context strong { color: var(--text-primary); font-weight: 500; overflow-wrap: anywhere; min-width: 0; }
+.flow-detail pre { max-height: 240px; overflow: auto; margin-top: 0.75rem; }
+.view-switch.flow-switch { max-width: 420px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.25rem; }
+.view-switch.flow-switch::before { display: none; }
+.flow-switch button.active { background: var(--color-surface); border-radius: var(--radius-sm); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (max-width: 640px) { .flow-caption { padding: 0.8rem; } .flow-caption strong { flex-basis: 100%; order: 2; } .flow-player { flex-wrap: wrap; padding: 0.7rem; } .flow-scrubber { order: 2; flex-basis: 75%; } .flow-canvas { height: 560px; } }
+@media (prefers-reduced-motion: reduce) { .flow-packet { display: none; } }

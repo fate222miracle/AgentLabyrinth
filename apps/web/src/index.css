@@ -67,8 +67,10 @@ html,
 body,
 #root {
   max-width: 100%;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
+
+html { scroll-padding-top: 9rem; }
 
 /* App Header */
 .app-header {
@@ -78,6 +80,16 @@ body,
   top: 0;
   z-index: 50;
   padding: 0.875rem 1.5rem;
+}
+
+/* Keep text readable without backdrop-filter; blur only the navigation surface. */
+@supports ((backdrop-filter: blur(16px)) or (-webkit-backdrop-filter: blur(16px))) {
+  .app-header {
+    background: rgb(252 251 248 / 78%);
+    -webkit-backdrop-filter: blur(16px) saturate(120%);
+    backdrop-filter: blur(16px) saturate(120%);
+    border-bottom-color: rgb(213 208 199 / 65%);
+  }
 }
 
 .header-container {
@@ -332,6 +344,37 @@ body,
 .advanced-settings[open] summary::after { content: '－'; }
 .advanced-settings summary span { margin-left: auto; color: var(--text-secondary); font-size: 0.72rem; font-weight: 400; }
 .advanced-settings[open] .form-group { animation: content-enter var(--motion-slow) ease-out; }
+
+/* Native disclosure remains usable when intrinsic-size transitions are unsupported. */
+@supports (interpolate-size: allow-keywords) {
+  .advanced-settings { interpolate-size: allow-keywords; }
+  .advanced-settings::details-content {
+    height: 0;
+    overflow: clip;
+    opacity: 0;
+    transition: height var(--motion-slow) ease, opacity var(--motion-default),
+      content-visibility var(--motion-slow) allow-discrete;
+  }
+  .advanced-settings[open]::details-content { height: auto; opacity: 1; }
+}
+
+.execution-choice { min-width: 0; border: 0; margin: 0 0 1.25rem; }
+.execution-choice legend { margin-bottom: 0.5rem; }
+.execution-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+.execution-option {
+  display: flex; align-items: flex-start; gap: 0.45rem; min-width: 0;
+  padding: 0.75rem 0.6rem; border: 1px solid var(--border-control);
+  border-radius: var(--radius-md); cursor: pointer;
+  transition: background var(--motion-default), border-color var(--motion-default);
+}
+.execution-option:has(input:checked) { background: var(--brand-soft); border-color: var(--brand-action); }
+.execution-option:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.execution-option input { margin-top: 0.3rem; accent-color: var(--brand-action); }
+.execution-option span { min-width: 0; }
+.execution-option strong { display: block; font-size: 0.82rem; overflow-wrap: anywhere; }
+.execution-option small { display: block; color: var(--text-secondary); font-size: 0.72rem; }
+.execution-choice .metric-sub { margin-top: 0.5rem; }
+.execution-choice:disabled .execution-option { opacity: 0.6; cursor: default; }
 
 @keyframes content-enter {
   from { opacity: 0; transform: translateY(6px); }

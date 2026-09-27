@@ -1,5 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { changedStateFields, groupTraceByStep, keyFields, stepOutcome, stepTitle } from './traceSteps';
+import { McpFlowReplay } from './McpFlowReplay';
 
 interface ModelOption {
   id: string;
@@ -393,7 +394,7 @@ export default function App() {
   const [replayIndex, setReplayIndex] = useState<number>(0);
   const [replayPlaying, setReplayPlaying] = useState<boolean>(false);
   const [replaySpeedMs, setReplaySpeedMs] = useState<number>(1000);
-  const [replayView, setReplayView] = useState<'story' | 'events'>('story');
+  const [replayView, setReplayView] = useState<'flow' | 'story' | 'events'>('flow');
   const storyStageRef = useRef<HTMLDivElement>(null);
   const previousStoryIndex = useRef(0);
 
@@ -1703,7 +1704,7 @@ export default function App() {
               {/* Left Panel: Single Episode Config */}
               <section className="card" id="config-panel">
                 <div className="card-title">
-                  <span>单次运行配置</span>
+                  <span>{artifact ? '下次运行配置' : '单次运行配置'}</span>
                   <span className="badge badge-blue">ToolLab</span>
                 </div>
                 <div className="card-desc">选择任务与执行方式，核对后启动一次受控评测。</div>
@@ -1813,14 +1814,23 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="form-group">
-                  <label htmlFor="single-runtime-backend" className="form-label">执行 Runtime</label>
-                  <select id="single-runtime-backend" className="form-select" value={singleRuntimeBackend}
-                    onChange={(e) => setSingleRuntimeBackend(e.target.value as 'handwritten' | 'langgraph')} disabled={isLoading}>
-                    <option value="handwritten">Reference：Python 手写循环</option>
-                    <option value="langgraph">LangGraph</option>
-                  </select>
-                </div>
+                <fieldset className="execution-choice" disabled={isLoading}>
+                  <legend className="form-label">执行 Runtime</legend>
+                  <div className="execution-choice-grid">
+                    {([
+                      ['handwritten', 'Reference', 'Python 手写控制循环'],
+                      ['langgraph', 'LangGraph', '独立图节点调度'],
+                    ] as const).map(([backend, name, description]) => (
+                      <label className="execution-option" key={backend}>
+                        <input type="radio" name="single-runtime-backend" value={backend}
+                          checked={singleRuntimeBackend === backend}
+                          onChange={() => setSingleRuntimeBackend(backend)} />
+                        <span><strong>{name}</strong><small>{description}</small></span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="metric-sub">两种调度方式使用相同工具与评测规则。</p>
+                </fieldset>
                 {selectedSingleTaskMeta?.supports_mcp && (
                   <div className="form-group">
                     <label htmlFor="single-tool-transport" className="form-label">文档工具传输</label>
@@ -1861,7 +1871,7 @@ export default function App() {
                 )}
 
                 <details className="advanced-settings">
-                  <summary>高级设置 <span>步数与 Token 预算</span></summary>
+                  <summary>高级设置 <span>最多 {maxSteps} 步</span></summary>
                 <div className="form-group">
                   <label htmlFor="steps-input" className="form-label">步数上限 (Max Steps)</label>
                   <input
@@ -1892,7 +1902,10 @@ export default function App() {
                 <div className="run-review" aria-live="polite">
                   <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
                   <p>{currentSingleModelMeta?.name || selectedModel || '请选择模型'} · {singleRuntimeBackend === 'langgraph' ? 'LangGraph' : 'Reference'} · {singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp ? 'MCP HTTP' : '本地工具'}</p>
-                  <span>最多 {maxSteps} 步 · {selectedModel === 'fake' ? '离线模拟' : '真实模型请求'}</span>
+                  <span>最多 {maxSteps} 步 · Token 上限 {selectedModel === 'fake'
+                    ? selectedSingleTaskMeta?.token_budget ?? '任务预算'
+                    : singleTokenBudget ?? selectedSingleTaskMeta?.token_budget ?? '任务预算'}</span>
+                  <span>参数纠错{singleRuntimeStrategy === 'handwritten_recovery' ? '开启：最多一次' : '关闭'} · {selectedModel === 'fake' ? '离线模拟，不调用真实模型' : '将发起真实模型请求'}</span>
                 </div>
 
                 <button
@@ -2082,7 +2095,12 @@ export default function App() {
 
                   {artifact && artifact.events.length > 0 ? (
                     <>
-                      <div className="view-switch" data-active={replayView} aria-label="Replay 视图">
+                      <div className="view-switch flow-switch" data-active={replayView} aria-label="Replay 视图">
+                        <button type="button" className={replayView === 'flow' ? 'active' : ''}
+                          aria-pressed={replayView === 'flow'}
+                          onClick={() => { setReplayPlaying(false); setReplayView('flow'); }}>
+                          流程动画
+                        </button>
                         <button type="button" className={replayView === 'story' ? 'active' : ''}
                           aria-pressed={replayView === 'story'}
                           onClick={() => { setReplayPlaying(false); setReplayIndex(0); setReplayView('story'); }}>
@@ -2094,6 +2112,11 @@ export default function App() {
                           技术 Trace
                         </button>
                       </div>
+                      {replayView === 'flow' && <McpFlowReplay key={artifact.episode.episode_id}
+                        events={artifact.events} environmentVersion={artifact.run_config.environment_version ?? ''}
+                        model={artifact.agent.model.model} finalState={artifact.episode.final_state}
+                        termination={artifact.episode.termination_reason} detail={artifact.episode.detail} />}
+                      <div hidden={replayView === 'flow'}>
                       {replayView === 'story' && <div className="step-rail" role="group" aria-label="执行步骤（方向键切换）"
                         onKeyDown={(event) => {
                           if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
@@ -2368,6 +2391,7 @@ export default function App() {
                           })}
                         </div>
                       )}
+                      </div>
                     </>
                   ) : (
                     <div className="empty-state">
