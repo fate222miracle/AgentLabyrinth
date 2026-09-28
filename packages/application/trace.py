@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -56,6 +57,7 @@ class JsonTraceRecorder:
         run_config: RunConfig,
         episode_id: UUID | None = None,
         events: tuple[TraceEvent, ...] = (),
+        on_event: Callable[[TraceEvent], None] | None = None,
     ) -> None:
         self._episode_id = episode_id or uuid4()
         self._run_config = run_config.model_copy(deep=True)
@@ -73,6 +75,7 @@ class JsonTraceRecorder:
         ):
             raise ValueError("Checkpoint must contain an unfinished episode")
         self._events: list[TraceEvent] = [event.model_copy(deep=True) for event in events]
+        self._on_event = on_event
 
     @property
     def episode_id(self) -> UUID:
@@ -126,6 +129,8 @@ class JsonTraceRecorder:
             estimated_cost=estimated_cost or EstimatedCost(),
         ).model_copy(deep=True)
         self._events.append(event)
+        if self._on_event is not None:
+            self._on_event(event.model_copy(deep=True))
         return event.model_copy(deep=True)
 
 

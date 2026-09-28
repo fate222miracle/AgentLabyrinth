@@ -85,6 +85,45 @@ def test_create_fake_episode_success(client: TestClient, temp_artifacts_dir: Pat
     assert saved_file.is_file()
 
 
+def test_streamed_trace_matches_saved_fake_episode(
+    client: TestClient, temp_artifacts_dir: Path
+) -> None:
+    """Live events are the same ordered events later returned by read-only GET."""
+    response = client.post(
+        "/api/v1/episodes/stream",
+        json={"provider": "fake", "model": "fake-model", "scenario": "success"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    messages = [
+        (block.split("\n")[0][7:], json.loads(block.split("\n")[1][6:]))
+        for block in response.text.strip().split("\n\n")
+    ]
+    assert [kind for kind, _ in messages].count("complete") == 1
+    assert messages[-1][0] == "complete"
+    artifact = messages[-1][1]["artifact"]
+    streamed = [body for kind, body in messages if kind == "trace"]
+    assert streamed == artifact["events"]
+    assert streamed[0]["event_type"] == "EPISODE_STARTED"
+    assert streamed[-1]["event_type"] == "EPISODE_FINISHED"
+    episode_id = artifact["episode"]["episode_id"]
+    assert (temp_artifacts_dir / f"{episode_id}.json").is_file()
+    assert client.get(f"/api/v1/episodes/{episode_id}").json()["artifact"] == artifact
+
+
+def test_stream_rejects_invalid_model_without_fake_completion(client: TestClient) -> None:
+    """Validation errors are explicit stream errors and create no success artifact."""
+    response = client.post(
+        "/api/v1/episodes/stream",
+        json={"provider": "aihubmix", "model": "unapproved-paid-model"},
+    )
+    assert "event: error" in response.text
+    assert "event: complete" not in response.text
+    error = json.loads(response.text.split("data: ", 1)[1])
+    assert error["schema_version"] == "1.0"
+    assert error["error_code"] == "VALIDATION_ERROR"
+
+
 def test_create_fake_episode_failure(client: TestClient) -> None:
     """Verify failed runs still return 201 with viewable failed artifact, not fake success."""
     payload = {

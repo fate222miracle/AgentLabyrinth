@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "suite": "bfcl_java_adapted",
+  "source_name": "Berkeley Function Calling Leaderboard (BFCL) V4 simple_java",
+  "source_url": "https://github.com/ShishirPatil/gorilla/tree/6ea57973c7a6097fd7c5915698c54c17c5b1b6c8/berkeley-function-call-leaderboard/bfcl_eval/data",
+  "source_version_or_commit": "6ea57973c7a6097fd7c5915698c54c17c5b1b6c8",
+  "code_license": "Apache-2.0",
+  "data_license": "No separate dataset license found at the pinned commit",
+  "upstream_dependencies": [],
+  "import_mode": "reference_adapter_local_cache",
+  "transformation_script": "scripts/import_bfcl_subset.py@1.1.0",
+  "attribution": "BFCL by the Gorilla / UC Berkeley authors; cite the upstream dataset README and papers.",
+  "redistribution_allowed": false,
+  "official_protocol_compatible": false,
+  "result_label": "AgentLabyrinth-adapted Java subset",
+  "adapter_version": "bfcl-adapter-1.0.0",
+  "evaluator_version": "bfcl-local-exact-v1",
+  "source_files": [
+    {
+      "path": "berkeley-function-call-leaderboard/bfcl_eval/data/BFCL_v4_simple_java.json",
+      "cache_name": "BFCL_v4_simple_java_questions.json",
+      "sha256": "13d2303a125b08754f0e41995b9273b5005fa8ed8ebfaa24ef53b4d83c4b5c6e"
+    },
+    {
+      "path": "berkeley-function-call-leaderboard/bfcl_eval/data/possible_answer/BFCL_v4_simple_java.json",
+      "cache_name": "BFCL_v4_simple_java.json",
+      "sha256": "78f25616084044fa05bbfcee68e03f6ececb222bdd5cb3b7783a675fb3366e35"
+    }
+  ],
+  "checksum": "1ae5d9a0bf9a1a7193bacc89daf67a9ef6549a942f1a893b1b675b75055fd566",
+  "selected_cases": {
+    "development": ["simple_java_6", "simple_java_18", "simple_java_53"],
+    "evaluation": ["simple_java_74", "simple_java_76"]
+  },
+  "selection_notes": "Five fixed non-Live, one-function Java cases whose parameters use primitive JSON types; functions are never executed. Scores are local adapted-subset scores, not official BFCL scores."
+}

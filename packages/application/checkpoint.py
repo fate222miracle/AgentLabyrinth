@@ -1,7 +1,8 @@
-"""Local, atomic ToolLab episode checkpoints at runtime safe points."""
+"""Local, atomic episode checkpoints for the currently supported environments."""
 
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
@@ -20,6 +21,10 @@ from packages.domain.models import AgentSpec, EpisodeArtifact, RunConfig, TaskSp
 from packages.domain.ports import AgentRuntime, Environment, Evaluator
 from packages.runtime.session import SessionState
 
+CHECKPOINT_ENVIRONMENTS = frozenset(
+    {"tool-lab-m0-v1", "tool-lab-mcp-v1", "bfcl-adapted-single-call-v1"}
+)
+
 
 class EpisodeCheckpoint(BaseModel):
     """Complete portable state needed to continue one unfinished Episode."""
@@ -37,8 +42,8 @@ class EpisodeCheckpoint(BaseModel):
 
     def validated_recorder(self) -> JsonTraceRecorder:
         """Reject modified provenance or a broken Trace before restoring tools."""
-        if self.run_config.environment_version != "tool-lab-m0-v1":
-            raise ValueError("Checkpoint is not for ToolLab")
+        if self.run_config.environment_version not in CHECKPOINT_ENVIRONMENTS:
+            raise ValueError("Checkpoint environment is unsupported")
         expected = {
             "agent": content_hash(self.agent),
             "task": content_hash(self.task),
@@ -121,11 +126,13 @@ async def run_checkpointed_episode(
     evaluator: Evaluator,
     artifacts_dir: Path,
     fake_scenario: str | None = None,
+    on_event: Callable[[TraceEvent], None] | None = None,
+    episode_id: UUID | None = None,
 ) -> EpisodeArtifact:
-    """Run one ToolLab episode with durable safe points and a final artifact."""
-    if config.environment_version != "tool-lab-m0-v1":
-        raise ValueError("Checkpointing currently supports ToolLab only")
-    recorder = JsonTraceRecorder(config)
+    """Run one supported episode with durable safe points and a final artifact."""
+    if config.environment_version not in CHECKPOINT_ENVIRONMENTS:
+        raise ValueError("Checkpoint environment is unsupported")
+    recorder = JsonTraceRecorder(config, episode_id=episode_id, on_event=on_event)
     store = CheckpointStore(artifacts_dir / "checkpoints")
     artifact = await run_episode(
         agent,
@@ -151,7 +158,7 @@ async def resume_checkpointed_episode(
     evaluator: Evaluator,
     artifacts_dir: Path,
 ) -> EpisodeArtifact:
-    """Continue one unfinished ToolLab run, or return its existing final artifact."""
+    """Continue one unfinished run, or return its existing final artifact."""
     artifact_path = artifacts_dir / f"{episode_id}.json"
     if artifact_path.is_file():
         return read_artifact(artifact_path)

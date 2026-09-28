@@ -1,5 +1,6 @@
 """Download and deterministically transform the pinned BFCL reference subset."""
 
+import argparse
 import hashlib
 import json
 import urllib.request
@@ -107,7 +108,15 @@ def materialize_subset(
 
 def main() -> None:
     """Materialize a verified local cache; never execute upstream code."""
-    count, digest = materialize_subset()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--suite", choices=("python", "java"), default="python")
+    args = parser.parse_args()
+    if args.suite == "java":
+        manifest = ROOT / "benchmarks/bfcl_java_adapted/dataset_manifest.json"
+        output = CACHE / "java_subset.json"
+    else:
+        manifest, output = MANIFEST, OUTPUT
+    count, digest = materialize_subset(manifest, CACHE, output)
     print(f"BFCL subset ready: {count} cases, sha256={digest}")
 
 

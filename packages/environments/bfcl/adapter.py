@@ -95,7 +95,7 @@ class BFCLCase(BaseModel):
             token_budget=8000,
             evaluator_config={
                 "name": manifest["evaluator_version"],
-                "suite": "bfcl_adapted",
+                "suite": manifest.get("suite", "bfcl_adapted"),
                 "split": self.split,
                 "origin": "external_reference",
                 "source_commit": manifest["source_version_or_commit"],

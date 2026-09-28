@@ -1,6 +1,74 @@
 # Current state
 
-更新：2026-09-27。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+更新：2026-09-28。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+
+## 2026-09-28 V0.2 五项部分能力接续
+
+依据 [ADR-015](../adr/ADR-015-v02-partial-closure.md) 收口截图中的五项，当前证据与边界如下：
+
+| 项目 | 本轮可用能力 | 验证与边界 |
+| --- | --- | --- |
+| Checkpoint/Resume | 单 Episode 扩至 BFCL Python/Java 单调用与固定文档 MCP；Experiment 持久化运行矩阵，恢复时复用已完成侧，同 ID 继续未完成侧。 | ToolLab 已有 Fake 跨进程和 MiniMax 真实安全点验证；BFCL Python/Java、MCP 有序列化后新 Service 恢复测试；Experiment 有中断、重启 Service、API 恢复与篡改拒绝测试。BFCL/MCP 真实模型中断及 Experiment 操作系统进程退出仍未实测。 |
+| 幂等性 | 当前 ToolLab 本地状态与 BFCL 非执行提议在安全点不重放；MCP 工具仅只读，完成后恢复不重复已提交读取。 | 不存在可验证的外部写工具，不能宣称对任意外部写的恰好一次保证；未来引入写工具须服务端幂等键或事务协议。模型请求中断仍可能重发、增加上游用量。 |
+| 故障注入 | Fake 单次/成对实验可选择工具超时、查询空结果；固定文档 MCP 单次可选择本机断线。故障名随 Task 和 Experiment 保存。 | 集成测试核对 Trace 失败码、终态、两侧相同故障配置及真实模型禁用注入；这不是外部网络故障的全面模拟。 |
+| 外部 Benchmark | 在原 BFCL `simple_python` 8 题外，接入同一固定上游提交的 `simple_java` 5 题；两套 Manifest、原始及转换 SHA256、独立 suite 标签。 | `python scripts/import_bfcl_subset.py --suite java` 可重复导入；Java 恢复测试通过。真实 MiniMax 在 `bfcl-simple_java_18` Episode `104c043a-6f7a-4887-ad6e-02305b142f71` 得到 SUCCESS、`exact_call_match`、1 模型/1 工具。仍是本地改编评分，非 BFCL 官方分数，也不是任意 Benchmark 的通用运行器。 |
+| Trace/指标看板 | Web 读取持久化 Experiment 列表，逐实验展示两侧成功率、Token、平均耗时、费用并可回读；损坏产物跳过且提示，不跨协议排名。 | Dashboard GET 集成测试保证只读、损坏文件不遮蔽有效实验；前端生产构建通过。未知费用保留“未知”，不按 0 计。 |
+
+复核时独立运行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\check.ps1`：Ruff、mypy、pytest **183 passed**（1 条已有 Starlette/AnyIO 弃用警告）；`npm.cmd --prefix apps/web run build` 通过（194 modules）；BFCL Java 导入校验产出 5 题且转换 SHA256 与 Manifest 一致；新增前端聚焦测试 10/10 通过，`git diff --check` 通过。真实浏览器从当前 API 读取 25 个任务（ToolLab 12、BFCL Python 8、BFCL Java 5），Java 套件呈现 5 个任务，卡片明确标为“本地函数调用提议评测”，不暗示执行上游函数；Fake SSE 单次 Episode `7a1ac771-54c3-454c-a8b7-c8ac4917a6e3` 为 SUCCESS、2 模型/2 工具、17 事件。刷新和前进/后退回到同一 Episode，相关请求均为 GET、没有重新 POST；实验看板实际显示 8 条记录且无损坏提示。1280px 与 390px 浏览器视口均无整体横向溢出，截图在被忽略的 `artifacts/ui-check/codex-dashboard-{1280,390}.png`。这些是 Fake/UI 与固定数据验证，不是新的真实模型实验；V0.2 整版的暂停/取消、并发、失败任务重跑、自动回归和经验证价格表的全局费用上限仍待实现。
+
+## 2026-09-28 V0.2 已实现能力收口：真实恢复与 CSV 下载
+
+按 Accepted ADR-011 的现有范围，用 `scripts/probe_live_checkpoint_resume.py` 对当前 Key 目录可见的 `coding-minimax-m2.7-free` 做一题真实 ToolLab 中断恢复。子进程首次提交查询工具后退出，新进程从同一 Checkpoint 继续；Episode `f4bba2a4-68c7-418f-8b15-096989bfd7e0` 最终 SUCCESS、Evaluator true，累计 2 次模型、2 次工具、2373 tokens、18 事件。原查询未重跑：2 个 `TOOL_STARTED` 的 Call ID 唯一，Trace 父链完整，`EPISODE_RESUMED` 和 `EPISODE_FINISHED` 各一次，最终 Artifact 存在且 Checkpoint 已清理。首次尝试使用任务默认 1000 Token 预算，在首个模型响应后 `TOKEN_BUDGET_EXCEEDED`、0 工具；验收脚本现显式设 8000，失败产物仍留在被忽略的 `artifacts/live-resume-probe/`。此为单题小样本，未验证模型请求中途退出的重复计费，也不把 ToolLab 保证推广到外部写工具、BFCL 或 MCP。
+
+历史 Fake Experiment `ad386c5d-6458-4a59-b88b-7ed534b18ae6` 的网页“导出 CSV”已实际点击；IAB 下载事件接口未返回，但本机 Downloads 中出现对应文件。用 Python `csv` 读取为表头 + 2 行，每行 20 列，UTF-8 BOM 正确，`reference`/`langgraph` 侧别正确，Runtime 对照不适用的挽救字段为空。前端 CSV 交互与内容据此收口；没有改 API、Artifact Schema 或评分。
+
+新增探针已通过 Ruff、mypy；全项目 `scripts/check.ps1` 在普通进程通过：Ruff format/lint、mypy、pytest **171 passed、1 条既有依赖 warning**。受限沙箱初跑因 `artifacts/pytest-temp` 的 WinError 5 失败，普通进程重跑通过；`git diff --check` 通过。
+
+V0.2 整版仍未验收。并发、暂停/取消、失败任务重跑、自动回归评测、扩展故障注入、跨实验看板和经验证价格表的全局费用上限仍需独立设计与实施；固定 BFCL 改编子集已是当前外部 Benchmark 接入，不宣称通用 Adapter。下一开发项优先定义暂停/取消的持久化语义，再扩展批量编排；未知费用不可写成 0。现有工作区改动均未提交/推送。
+
+## 2026-09-28 手写 Runtime 调研与 MCP 演示可见性
+
+手写 Runtime 的公开样例、现有实现对照及可行补强顺序见 [调研](../research/handwritten-runtime-examples-20260928.md)。结论是控制循环短属正常，先补 V0.2 取消/恢复/失败路径与对照证据，不为显得复杂而新增抽象。
+
+用户未看到 MCP 协议可视化：现有 React Flow 仅在工具节点写 `MCP`，没有突出两进程网络边界。`apps/web/src/McpFlowReplay.tsx` 对已标记 `tool-lab-mcp-v1` 的 Episode 增加 Client → localhost Streamable HTTP → Server 链路，按实际 Trace 中的远程工具开始/结果/失败高亮；本地 `submit_answer` 不伪装为远程调用。页面明示 Trace 没有记录握手或 `tools/list` 报文，因此这是网络调用链演示，不是协议抓包。历史真实模型 Episode `c302b854-5a35-4ec7-b1b5-749b417e59e0` 可直接回读：浏览器第 3 帧显示 `search_documents · 远程调用开始`，第 4 帧显示结果返回；390px 视口无横向溢出。旧 Fake MCP ID `0e14e216-ffbf-4165-a4e0-2af8cfdcf97b` 在当前默认产物目录不存在，不能再作为直达演示链接；旧失败产物 `a6950cc3-95cc-4ea0-8d70-8e6afa168ad8` 缺少逐工具传输标记，因此不会把失败帧伪称为已记录的 MCP 往返。前端构建 194 modules、流程帧测试 3/3、`git diff --check` 通过；未重跑 Python 全套或调用新模型。
+
+## 2026-09-28 暖色小字可读性
+
+根据用户的过程概览截图，`apps/web/src/index.css` 把步骤编号、分段标签、工具名及“查看本步原始事件”等关键暖色文字提升到至少 14px，并使用现有深陶土色；链接常态显示下划线。同步覆盖页眉提示、任务类别、选中页签和错误标签，规则已写入 UI 规范。390px 浏览器回读已保存的 ToolLab Episode `7eb9bad7-7696-4263-a3e1-2c42988e6b86`，核对 Step 1 标签计算字号为 14px、深陶土色，入口为 14px 且有下划线；页面无横向溢出。深陶土文字在三种实际浅色背景上的对比度为 5.93–7.10:1；前端生产构建 194 modules、`git diff --check` 通过。仅展示层变更，未调用模型、未修改 Trace/评分或提交推送。
+
+## 2026-09-28 单次 Episode 实时 Trace
+
+用户明确要求运行时节点实时出现。Accepted [ADR-014](../adr/ADR-014-live-episode-trace.md) 后保留原 `POST /episodes`，新增 `POST /episodes/stream`，复用同一 Recorder/Runner/Checkpoint 路径顺序发送脱敏 Trace；落盘成功再发完整 Artifact。Web 运行中用现有 React Flow 图根据实到事件增加节点，结束后切到原只读 Replay；断线显示状态未知和 Episode ID。无领域事件、Artifact Schema、Evaluator、模型提供商或依赖变更。源码阅读顺序、状态、失败路径与实验见 [学习记录](../learning/V0.2-live-trace.md)。
+
+项目完整质量门禁 Ruff、mypy、pytest **171 passed**（1 条既有 Starlette/AnyIO 警告）；API 流单元测试 19/19（包括流与 Artifact 完全一致、非法模型无完成事件），Web 流解析 2/2，前端生产构建 194 modules、`git diff --check` 通过。浏览器离线 Fake 成功 Episode `9bd6b972-596c-4572-8f28-381a31c64ba0`；真实 MiniMax/BFCL `99b2bc6f-5452-4e13-a17a-78d36fec4a50` 在请求未完成时可见实时模型/校验节点，最终 SUCCESS；真实 MiniMax/ToolLab `7eb9bad7-7696-4263-a3e1-2c42988e6b86` 最终 SUCCESS。后两者只是小样本，未证明模型长期可用。当前本机 API 已重启加载最终新路由，Web 服务仍在 5173；非法模型的实时错误已通过本机 HTTP 复核为版本化响应。未提交推送，既有未提交改动保留。
+
+## 2026-09-28 BFCL 流程回放与长序列方向
+
+用户指出 BFCL 回放画布空白。浏览器回读真实模型历史 Episode `6af0d696-d26c-4849-a25a-1637d19f3b77`：Trace 有 10 个事件、1 次 `solve_quadratic_equation(a=2,b=6,c=5)` 提议，`flowFrames` 已生成 5 帧及 3 个节点；空白不能归因于无事件。React Flow 原允许拖动画布，可能将全部节点移出可视区；现关闭拖动平移，保留缩放和适应画布控件。另发现 BFCL Observation 保存的是 `question`、终态保存的是 `proposed_call`，旧 UI 只读取 ToolLab 的 `description`/`submission`，误称两端未保存。`apps/web/src/McpFlowReplay.tsx` 现按 BFCL 保存字段显示原题、函数名和参数，并把执行阶段标为“记录函数调用/调用已接收”，避免将非执行型 BFCL 改编任务说成实际运行了上游函数。ToolLab 文案和数据路径保留。
+
+阅读顺序：`packages/environments/bfcl/environment.py`（只校验和记录一次提议）→ `apps/web/src/flowFrames.ts`（按已保存事件生成帧）→ `apps/web/src/McpFlowReplay.tsx`（首尾卡、节点、播放状态）→ `apps/web/src/App.tsx`（按 Episode ID 重建回放组件）。调用链为历史 GET/运行产物 → Observation/Trace/final_state → 流程帧和 BFCL 首尾字段 → 只读 React Flow；失败时无 `proposed_call` 就显示“未保存函数调用提议”与真实终止原因，不补造函数执行结果。验证：Flow Node 测试 3/3、前端生产构建 193 modules、`git diff --check` 通过；浏览器回读上述成功 BFCL 显示原题、调用节点与 `a=2 · b=6 · c=5`，限流失败 BFCL `23b3bc8d-f0cc-45aa-9f54-324a16be2733` 显示原题、无提议和 `RATE_LIMIT_EXCEEDED`，ToolLab `1f3148a2-3ded-4e78-a02f-c4d39a840859` 仍显示原答案/证据。只读历史产物；本轮未调用模型、未改 API/Schema/评测、未提交推送。
+
+长序列调研与需求 §9.8 一致：当前固定 BFCL `simple_python` 为单调用、最多 1 步。可优先评估官方 BFCL 多轮子集，但需新环境状态、工具反馈与独立评分协议，不能仅扩充 JSON；τ 系列适合多轮用户/业务工具，当前需求建议 V0.3 后接入。其旧 `tau-bench` 仓库已标记任务过时，后续实际选型应核对维护中的 [τ³-bench](https://github.com/sierra-research/tau2-bench) 固定 release。WebArena/BrowserGym 环境和部署更重，不作为近期课程演示主线。选型前锁定上游版本、许可、任务数、改编标签与失败样本；当前没有接入或测出长序列成绩。目前 API `POST /episodes` 等运行完成才返回 Artifact，流程图只读回放已保存 Trace；若“执行时”是指运行过程中实时出帧，则需要另行设计流式事件传输和持久化边界，不能把回放动画冒充实时运行。
+
+## 2026-09-28 BFCL 任务卡中文展示
+
+按用户反馈，单次运行的固定 8 道 BFCL 任务卡改用中文说明，并将类别、开发集/评测集标签统一中文化；搜索同时匹配中英文。仅修改 `apps/web/src/App.tsx` 展示层，API 任务目录、上游英文原题、模型输入、Adapter、Evaluator 与历史 Artifact 均保持原值。页面明确提示“任务卡为中文说明，模型仍接收英文原题”。浏览器已逐卡核对 8 道题的中文内容与原始数值；本轮未发起模型运行。
+
+## 2026-09-28 Codex 复核单次运行工作区
+
+复核 Copilot 未提交 UI 改动时发现并修复：快速 URL 前进/后退可能由较早 GET 覆盖当前产物或过早结束加载；搜索过滤掉已选任务后仍能运行不可见任务；历史摘要缺少部分字段时被误判为请求失败或评测失败；损坏的本地历史列表可能让页面渲染报错；旧版对照实验缺少 `comparison_axis` 时会借用当前草稿变量显示；折叠配置在 768px 时模型名与“修改”过近。修复在 `apps/web/src/App.tsx`、`apps/web/src/historySummary.ts`、`apps/web/src/index.css`，新增 `apps/web/tests/historySummary.test.mjs`。无 API/Schema/评分修改。
+
+浏览器用本机 API/Web 实测：历史 Episode `1f3148a2-3ded-4e78-a02f-c4d39a840859` 保留产物模型 `fake-orders-v1`，下次运行草稿仍为当前 MiniMax；刷新和连续前进/后退回到 URL 对应 Episode/Experiment `ad386c5d-6458-4a59-b88b-7ed534b18ae6`；无效 Episode/Experiment ID 显示错误，深链不展示旧产物。历史回读调用路径只有 GET，本轮未新建运行。搜索隐藏已选任务后按钮禁用；ToolLab 文档任务可选 MCP，过滤/切换到不支持任务后隐藏控件并使用本地，BFCL 选中首个目录任务。键盘 Tab 可聚焦任务卡且焦点描边可见。
+
+390/768/1280/1440 CSS px 的 DOM `scrollWidth=clientWidth`，全页截图复核单列/双列、主按钮、历史行及任务说明；768px 折叠标题间距已修。减少动效 CSS 的全局动画/过渡短路规则已核对。当前浏览器的视口覆盖最小约 240 CSS px，无法独立复现 Copilot 所述的 195px 或真实 200% 缩放；该项仍需在可设置 200% 缩放的浏览器人工看一遍。`node apps/web/tests/historySummary.test.mjs` 1/1、Replay 4/4、流程帧 3/3、前端生产构建 193 modules、`git diff --check` 均通过。未重跑 Python 全套、未调用真实模型、未提交/推送；V0.2 整版仍未验收。
+
+## 2026-09-28 单次运行工作区优化
+
+按 [UI 调研](../research/replay-config-ui-20260924.md#2026-09-28-补充调研停止把配置堆进窄侧栏) 完成单次运行工作区重排。`apps/web/src/App.tsx` 以 API 返回的 ToolLab/BFCL 任务目录提供套件筛选、搜索和任务卡，右侧执行区集中模型/Runtime 与运行按钮；纠错、MCP、步数和 Token 预算收进更多设置，MCP 仅在任务支持时出现。套件切换清空搜索并选中首个可见任务。历史存在时配置折叠标为“下次运行配置”，历史条目读取任务、模型、时间和结果，恢复条目与历史分开；不以历史产物覆盖草稿、不改变 API/Schema/评分口径。`apps/web/src/index.css` 复用现有暖色 Token，加入宽屏双栏、窄屏单列和响应式任务/执行卡布局；`docs/product/ui-design-guidelines.md` 与本研究报告同步记录实施边界。
+
+真实本机 API + Web 的 Fake 浏览器闭环：Fake `order-status-007` Episode `fa71b63d-83ce-42cc-8183-07be14285771` 成功，刷新 GET 回读同一 Episode 和 24 个事件；Fake `order-status-001`、`invalid-then-success` + `handwritten_recovery` Episode `659eecb4-b712-4aa1-a42a-9b627990e667` 回读成功，3 次模型调用、2 次工具调用、21 个事件。浏览器检查任务支持时 MCP 选项出现并反映于摘要，切到不支持 MCP 的任务后控件消失且传输回本地；切换 BFCL 清空搜索，选择 `bfcl-simple_python_0`（development、最多 1 步、本地工具）。后退/前进和刷新回到同一 URL/产物；本轮 URL 回读未观察到重新 POST。真实模型本轮未调用。
+
+验收：390/768/1280/1440 CSS px 的 `scrollWidth` 均等于 `clientWidth`（375/753/1265/1425）；以 200% 等效宽度 195px 检查时两者均为 180px。键盘 Space 可切换到 BFCL 并选中首个任务；`prefers-reduced-motion: reduce` 生效。截图保存在被忽略的 `artifacts/ui-check/single-workspace-{390,768,1280,1440}.png`。`npm.cmd --prefix apps/web run build` 通过（192 modules）；Replay 4/4、流程帧 3/3；`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\check.ps1` 通过（Ruff、mypy、pytest 169 passed，1 条既有 Starlette/AnyIO 弃用警告）；`git diff --check` 通过。无依赖、密钥、真实模型或公共契约变更；未提交或推送。截图交互与视觉仍请 Codex 复核，本轮不代表 V0.2 整版验收。
 
 ## 2026-09-27 开源流程动画原型
 

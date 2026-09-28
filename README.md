@@ -2,7 +2,7 @@
 
 面向 AI Agent 的可复现实验平台。唯一权威需求：`docs/product/requirements.md` **V0.6**。
 
-**V0.1 已完成 18 项验收。V0.2 已完成独立 Reference/LangGraph Runtime 对照、网页实跑与单模型真实小样本；ToolLab 单 Episode 的 Checkpoint/Resume 已接入 API/Web，并通过跨进程、接口和浏览器 Fake 故障演练，真实模型中断仍待实测。最新证据与模型可用性见 `docs/handoffs/current-state.md`。**
+**V0.1 已完成 18 项验收。V0.2 已实现 Reference/LangGraph 对照、当前受控环境的断点恢复、Fake 故障配置与实验指标看板；ToolLab 有单模型真实中断恢复小样本。V0.2 整版仍未验收，证据与限制见 `docs/handoffs/current-state.md`。**
 
 课程演示 M1 推进：
 - 切片 A：完成 AIHubMix 真实 ToolLab 闭环。
@@ -29,9 +29,10 @@ Codex 负责 Domain 契约、预算与评测审查；Antigravity 负责内部实
 
 ```powershell
 uv run python scripts/import_bfcl_subset.py
+uv run python scripts/import_bfcl_subset.py --suite java
 ```
 
-上游题目许可未单独明确，因此原始数据和转换缓存不入库；已缓存后可断网运行。manifest 位于 `benchmarks/bfcl_adapted/dataset_manifest.json`。
+上游题目许可未单独明确，因此原始数据和转换缓存不入库；已缓存后可断网运行。两套 manifest 分别位于 `benchmarks/bfcl_adapted/` 与 `benchmarks/bfcl_java_adapted/`；本地改编评分不等于官方 BFCL 分数。
 
 本地网页需要分别启动 API 与前端（两个终端，项目根目录执行）：
 
@@ -51,14 +52,16 @@ npm run dev
 uv run python -m packages.environments.tool_lab.mcp
 ```
 
-服务仅监听 `127.0.0.1:8765/mcp`，使用官方 MCP Streamable HTTP；不接收任意任务路径。服务停止后远程工具会失败并留下 Trace，本地 ToolLab 仍可运行。MCP Episode 当前保存最终 Artifact，但不提供断点恢复。
+服务仅监听 `127.0.0.1:8765/mcp`，使用官方 MCP Streamable HTTP；不接收任意任务路径。服务停止后远程工具会失败并留下 Trace，本地 ToolLab 仍可运行。MCP Episode 可在已保存安全点恢复；未完成的远程只读请求可能重发。
+
+观看 MCP 网络演示：网页切到「单次运行」→ ToolLab 文档任务 `order-status-007` →「更多设置」选「MCP HTTP」→ 选择 Fake 模型并运行。结果区默认的「流程动画」先展示 Client、localhost HTTP、独立 Server；播放到搜索/读取文档步骤时显示远程调用和返回。本地提交答案不会标成 MCP。此视图依据 Trace 展示工具边界，未记录协议握手或 `tools/list` 报文。
 
 浏览器打开 `http://127.0.0.1:5173/`。支持切换“对照实验 (Paired Experiment)”与“单次运行 (Single Episode)”：
 - 对照实验模式：可选择恢复策略对照（Baseline vs Recovery）或 Runtime 对照（Reference vs LangGraph），多选原生评测任务并配置 1–10 个不重复 Seed 与每 Seed 重复次数。运行前显示真实 Episode 数。结果按对照类型展示成功率、适用的恢复指标、Token 与费用，成对表格可穿透审查两侧 Trace。支持 `?experiment_id=...` 与 `?episode_id=...` 刷新回读。
 - 已加载的实验可导出 JSON 和 CSV。CSV 每个 Episode 一行，含实验哈希、任务、Seed、重复次数、对照侧、成功判定、用量及指标；未知费用和不适用的恢复指标留空。导出只读取当前产物，不重新调用模型。
-- 单次运行模式：可切换原生 ToolLab 与 8 道 BFCL 改编真题，展示数据来源、本地评分协议、结果与完整 Trace。
+- 单次运行模式：可切换原生 ToolLab、8 道 BFCL Python 与 5 道 BFCL Java 固定改编真题，展示数据来源、本地评分协议、结果与完整 Trace。
 - 单次运行可选择 Reference/LangGraph Runtime 和关闭/单次参数纠错策略；实际版本保存在 Episode RunConfig。
-- ToolLab 单次运行在安全点本地存档。后端进程意外退出并重启后，单次运行表单可列出并恢复上次进程留下的 Episode；也可调用 `GET /api/v1/episodes/resumable` 与 `POST /api/v1/episodes/{id}/resume`。中断中的上游模型请求可能重新发送并产生额外用量；BFCL 和 Experiment 暂不支持恢复。
+- 单次运行在安全点本地存档。后端进程意外退出并重启后，可在单次运行表单恢复上次进程留下的 ToolLab、BFCL 或固定文档 MCP Episode；也可调用 `GET /api/v1/episodes/resumable` 与 `POST /api/v1/episodes/{id}/resume`。对照实验保存运行矩阵，可通过 `GET /api/v1/experiments/resumable` 与 `POST /api/v1/experiments/{id}/resume` 继续，同一侧已完成 Episode 不重算。中断中的上游模型请求可能重新发送并产生额外用量；这不保证任意外部写操作恰好一次。
 - Trace Replay：按事件类型筛选，使用前后按钮或 Step 下拉定位，左侧查看截至当前事件最近的 Environment Snapshot；历史旧产物缺少中间快照时仍可浏览事件。
 
 真实免费模型必须在本机后端环境配置 `AIHUBMIX_API_KEY` 后验证，Key 不写入仓库、前端或聊天。页面模型目录从 `benchmarks/tool_lab_core/models.json` 的已验证候选中筛选当前 Key `/v1/models` 可见项，目录缓存 5 分钟；模型上游仍可能临时限流或不可用。默认复测 MiniMax M2.7 与 MiMo V2.5 Pro；`--all-catalog` 会串行复测候选表中的 AIHubMix 模型，每个模型各跑一条 BFCL 和一条 ToolLab，并把真实结果增量保存到 `artifacts/selected-model-results.json`：

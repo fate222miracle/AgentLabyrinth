@@ -41,7 +41,7 @@ class BFCLEvaluator:
             success=bool(name_match and argument_match),
             reason=reason,
             metrics={
-                "suite": "bfcl_adapted",
+                "suite": task.evaluator_config.get("suite", "bfcl_adapted"),
                 "tool_name_match": name_match,
                 "argument_match": argument_match,
                 "overall_success": bool(name_match and argument_match),

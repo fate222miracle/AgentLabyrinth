@@ -1,23 +1,26 @@
 """FastAPI entrypoint and routing for AgentLabyrinth M1 Slice B."""
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from apps.api.schemas import (
     CreateEpisodeRequest,
     CreateExperimentRequest,
     EpisodeResponse,
     ErrorResponse,
+    ExperimentDashboardResponse,
     ExperimentResponse,
     MetaResponse,
 )
 from apps.api.service import EpisodeService
+from packages.domain.models import TraceEvent
 
 app = FastAPI(
     title="AgentLabyrinth API",
@@ -35,6 +38,7 @@ app.add_middleware(
 )
 
 _default_service = EpisodeService(live_model_catalog=True)
+_stream_runs: set[asyncio.Task[None]] = set()
 
 
 def get_episode_service() -> EpisodeService:
@@ -135,6 +139,63 @@ async def create_episode(
     )
 
 
+@app.post("/api/v1/episodes/stream", summary="Run one episode with live Trace events")
+async def stream_episode(
+    req: CreateEpisodeRequest,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> StreamingResponse:
+    """Stream recorded events while independently completing and saving the episode."""
+    events: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+
+    def publish(event: TraceEvent) -> None:
+        events.put_nowait(("trace", event.model_dump_json()))
+
+    async def run() -> None:
+        try:
+            artifact = await service.execute_episode(req, on_event=publish)
+            response = EpisodeResponse(request_id=req.request_id, artifact=artifact)
+            events.put_nowait(("complete", response.model_dump_json()))
+        except ValueError as exc:
+            events.put_nowait(
+                (
+                    "error",
+                    ErrorResponse(
+                        request_id=req.request_id, error_code="VALIDATION_ERROR", message=str(exc)
+                    ).model_dump_json(),
+                )
+            )
+        except Exception:
+            events.put_nowait(
+                (
+                    "error",
+                    ErrorResponse(
+                        request_id=req.request_id,
+                        error_code="INTERNAL_ERROR",
+                        message="Episode execution failed.",
+                    ).model_dump_json(),
+                )
+            )
+        finally:
+            events.put_nowait(("done", ""))
+
+    task = asyncio.create_task(run())
+    _stream_runs.add(task)
+    task.add_done_callback(_stream_runs.discard)
+
+    async def stream() -> AsyncIterator[str]:
+        while True:
+            kind, payload = await events.get()
+            if kind == "done":
+                break
+            yield f"event: {kind}\ndata: {payload}\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get(
     "/api/v1/episodes/resumable",
     response_model=list[UUID],
@@ -222,6 +283,52 @@ async def create_experiment(
         request_id=req.request_id,
         experiment=artifact,
     )
+
+
+@app.get(
+    "/api/v1/experiments",
+    response_model=ExperimentDashboardResponse,
+    summary="Summarize completed experiments from saved artifacts",
+)
+async def list_experiments(
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> ExperimentDashboardResponse:
+    """Read the local experiment index without running a model."""
+    return await asyncio.to_thread(service.experiment_dashboard)
+
+
+@app.get(
+    "/api/v1/experiments/resumable",
+    response_model=list[UUID],
+    summary="List unfinished paired experiments from an earlier API instance",
+)
+async def list_resumable_experiments(
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> list[UUID]:
+    """Return persisted experiment plans that can continue with their original IDs."""
+    return service.resumable_experiment_ids()
+
+
+@app.post(
+    "/api/v1/experiments/{experiment_id}/resume",
+    response_model=ExperimentResponse,
+    summary="Resume an unfinished paired experiment",
+)
+async def resume_experiment(
+    experiment_id: UUID,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> ExperimentResponse:
+    """Continue remaining matrix cells and reuse completed Episode artifacts."""
+    try:
+        artifact = await service.resume_experiment(experiment_id)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Experiment resume encountered an unexpected failure.",
+        ) from exc
+    return ExperimentResponse(request_id=uuid4(), experiment=artifact)
 
 
 @app.get(

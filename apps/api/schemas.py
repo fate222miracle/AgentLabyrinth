@@ -1,5 +1,6 @@
 """API DTO schemas for AgentLabyrinth M1 Slice B Web Demo."""
 
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -21,6 +22,8 @@ ALLOWED_FAKE_SCENARIOS: set[str] = {
     "invalid-then-success",
     "max-steps",
 }
+
+FaultProfile = Literal["none", "tool_timeout", "empty_result", "mcp_disconnect"]
 
 
 def is_model_permitted(model_id: str, extra_allowed: set[str] | None = None) -> bool:
@@ -57,7 +60,7 @@ class TaskOption(BaseModel):
     description: str
     max_steps: int
     token_budget: int
-    suite: Literal["tool_lab_core", "bfcl_adapted"] = "tool_lab_core"
+    suite: Literal["tool_lab_core", "bfcl_adapted", "bfcl_java_adapted"] = "tool_lab_core"
     split: str = "development"
     supports_mcp: bool = False
 
@@ -90,12 +93,13 @@ class CreateEpisodeRequest(BaseModel):
         | None
     ) = None
     task_id: str = "order-status-001"
-    suite: Literal["tool_lab_core", "bfcl_adapted"] = "tool_lab_core"
+    suite: Literal["tool_lab_core", "bfcl_adapted", "bfcl_java_adapted"] = "tool_lab_core"
     max_steps: int | None = Field(default=None, ge=1, le=20)
     token_budget: int | None = Field(default=None, ge=100, le=20000)
     runtime_backend: RuntimeBackend = "handwritten"
     runtime_strategy: RuntimeStrategy = "handwritten"
     tool_transport: Literal["local", "mcp"] = "local"
+    fault_profile: FaultProfile = "none"
 
 
 class EpisodeResponse(BaseModel):
@@ -143,6 +147,7 @@ class CreateExperimentRequest(BaseModel):
     comparison_axis: ComparisonAxis = "recovery_policy"
     runtime_backend: RuntimeBackend = "handwritten"
     runtime_strategy: RuntimeStrategy = "handwritten"
+    fault_profile: FaultProfile = "none"
 
 
 class ExperimentResponse(BaseModel):
@@ -153,6 +158,35 @@ class ExperimentResponse(BaseModel):
     schema_version: Literal["1.0"] = "1.0"
     request_id: UUID
     experiment: ExperimentArtifact
+
+
+class ExperimentDashboardItem(BaseModel):
+    """Read-only metrics from one completed and persisted experiment."""
+
+    model_config = ConfigDict(frozen=True)
+    experiment_id: UUID
+    created_at: str
+    config_hash: str
+    environment_version: str
+    comparison_axis: str
+    total_pairs: int
+    baseline_success_rate: float
+    recovery_success_rate: float
+    baseline_total_tokens: int
+    recovery_total_tokens: int
+    baseline_avg_duration_ms: float
+    recovery_avg_duration_ms: float
+    baseline_total_cost: Decimal | None
+    recovery_total_cost: Decimal | None
+
+
+class ExperimentDashboardResponse(BaseModel):
+    """Completed experiments only; invalid files are counted, never invented."""
+
+    model_config = ConfigDict(frozen=True)
+    schema_version: Literal["1.0"] = "1.0"
+    items: list[ExperimentDashboardItem]
+    skipped_count: int = 0
 
 
 class ErrorResponse(BaseModel):

@@ -2,19 +2,25 @@
 
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from pydantic import BaseModel, ConfigDict
 
-from packages.application.runner import run_episode
-from packages.application.trace import write_artifact
+from packages.application.checkpoint import (
+    CheckpointStore,
+    resume_checkpointed_episode,
+    run_checkpointed_episode,
+)
+from packages.application.trace import read_artifact
 from packages.domain.models import (
     AgentSpec,
+    EpisodeArtifact,
     RunConfig,
     TaskSpec,
     TerminationReason,
@@ -114,6 +120,56 @@ class ExperimentArtifact(BaseModel):
     metrics: ExperimentAggregateMetrics
 
 
+class ExperimentCheckpoint(BaseModel):
+    """Frozen paired-run plan; completed Episode artifacts are the progress ledger."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    schema_version: Literal["1.0"] = "1.0"
+    experiment_id: UUID
+    created_at: str
+    baseline_agent: AgentSpec
+    recovery_agent: AgentSpec
+    tasks: list[TaskSpec]
+    seeds: list[int]
+    repeat_count: int
+    comparison_axis: ComparisonAxis
+    config_metadata: dict[str, Any]
+    plan_hash: str
+
+    def verify(self) -> None:
+        """Reject any changed matrix input before reusing prior Episode output."""
+        fields = self.model_dump(mode="json", exclude={"plan_hash"})
+        if compute_config_hash(fields) != self.plan_hash:
+            raise ValueError("Experiment checkpoint provenance mismatch")
+
+
+def experiment_checkpoint_path(artifacts_dir: Path, experiment_id: UUID) -> Path:
+    """Keep in-progress plans separate from final experiment artifacts."""
+    return artifacts_dir / "experiments" / "checkpoints" / f"{experiment_id}.json"
+
+
+def read_experiment_checkpoint(path: Path) -> ExperimentCheckpoint:
+    """Validate a durable plan before resuming any model or tool call."""
+    state = ExperimentCheckpoint.model_validate_json(path.read_text(encoding="utf-8"))
+    state.verify()
+    return state
+
+
+def write_experiment_checkpoint(path: Path, state: ExperimentCheckpoint) -> None:
+    """Publish a complete plan before launching the first matrix cell."""
+    state.verify()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.stem}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as output:
+            output.write(state.model_dump_json(indent=2) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def compute_config_hash(data: dict[str, Any]) -> str:
     """Compute deterministic SHA-256 hash of experiment input configuration."""
     canonical = json.dumps(data, sort_keys=True, separators=(",", ":"))
@@ -132,8 +188,10 @@ async def run_experiment(
     artifacts_dir: Path,
     config_metadata: dict[str, Any] | None = None,
     comparison_axis: ComparisonAxis = "recovery_policy",
+    checkpoint_state: ExperimentCheckpoint | None = None,
+    resume_provider_factory: Callable[[int], ModelProvider] | None = None,
 ) -> ExperimentArtifact:
-    """Run paired episodes serially, persist each episode, and aggregate comparative outcomes."""
+    """Run or resume a fixed paired matrix, reusing completed Episode artifacts."""
     if not tasks:
         raise ValueError("Experiment requires at least one task")
     resolved_seeds = list(seeds) if seeds is not None else [seed]
@@ -163,10 +221,91 @@ async def run_experiment(
     else:
         raise ValueError("Unknown comparison axis")
 
-    experiment_id = uuid4()
-    created_at = datetime.now(UTC).isoformat()
+    if checkpoint_state is None:
+        plan = {
+            "schema_version": "1.0",
+            "experiment_id": str(uuid4()),
+            "created_at": datetime.now(UTC).isoformat(),
+            "baseline_agent": baseline_agent.model_dump(mode="json"),
+            "recovery_agent": recovery_agent.model_dump(mode="json"),
+            "tasks": [task.model_dump(mode="json") for task in tasks],
+            "seeds": resolved_seeds,
+            "repeat_count": repeat_count,
+            "comparison_axis": comparison_axis,
+            "config_metadata": config_metadata or {},
+        }
+        checkpoint_state = ExperimentCheckpoint.model_validate_json(
+            json.dumps({**plan, "plan_hash": compute_config_hash(plan)})
+        )
+        write_experiment_checkpoint(
+            experiment_checkpoint_path(artifacts_dir, checkpoint_state.experiment_id),
+            checkpoint_state,
+        )
+    else:
+        checkpoint_state.verify()
+        if (
+            baseline_agent != checkpoint_state.baseline_agent
+            or recovery_agent != checkpoint_state.recovery_agent
+            or tasks != checkpoint_state.tasks
+            or resolved_seeds != checkpoint_state.seeds
+            or repeat_count != checkpoint_state.repeat_count
+            or comparison_axis != checkpoint_state.comparison_axis
+        ):
+            raise ValueError("Experiment resume configuration mismatch")
+    experiment_id = checkpoint_state.experiment_id
+    created_at = checkpoint_state.created_at
     episode_ids: list[UUID] = []
     pairs: list[PairComparison] = []
+
+    async def run_arm(
+        agent: AgentSpec, task: TaskSpec, current_seed: int, episode_id: UUID
+    ) -> EpisodeArtifact:
+        """Read completed work, restore a safe point, or start one planned Episode."""
+        config = RunConfig(
+            seed=current_seed, runtime_version=runtime_version(agent.runtime_backend)
+        )
+        registry = create_tool_lab_registry()
+        validator = DefaultToolValidator(registry)
+        environment = ToolLabEnvironment(
+            registry=registry,
+            executor=ToolExecutor(registry, validator),
+            validator=validator,
+        )
+        artifact_path = artifacts_dir / f"{episode_id}.json"
+        if artifact_path.is_file():
+            artifact = read_artifact(artifact_path)
+            if artifact.agent != agent or artifact.task != task or artifact.run_config != config:
+                raise ValueError("Saved experiment Episode provenance mismatch")
+            return artifact
+        store = CheckpointStore(artifacts_dir / "checkpoints")
+        if store.path(episode_id).is_file():
+            if resume_provider_factory is None:
+                raise ValueError("A resumable provider factory is required")
+            saved = store.load(episode_id)
+            if saved.agent != agent or saved.task != task or saved.run_config != config:
+                raise ValueError("Saved experiment checkpoint provenance mismatch")
+            return await resume_checkpointed_episode(
+                episode_id,
+                create_runtime(
+                    agent,
+                    resume_provider_factory(saved.session.budget.model_call_count),
+                    validator,
+                ),
+                environment,
+                OrderStatusEvaluator(),
+                artifacts_dir,
+            )
+        return await run_checkpointed_episode(
+            agent,
+            task,
+            config,
+            create_runtime(agent, provider_factory(), validator),
+            environment,
+            OrderStatusEvaluator(),
+            artifacts_dir,
+            fake_scenario=(config_metadata or {}).get("scenario"),
+            episode_id=episode_id,
+        )
 
     runs = (
         (task, current_seed, repeat_index)
@@ -176,56 +315,16 @@ async def run_experiment(
     )
 
     # Run every matrix cell serially: Baseline then Recovery under exact same conditions.
-    for task, current_seed, repeat_index in runs:
+    for pair_index, (task, current_seed, repeat_index) in enumerate(runs):
         # 1. Execute Baseline Episode
-        provider_base = provider_factory()
-        registry_base = create_tool_lab_registry()
-        validator_base = DefaultToolValidator(registry_base)
-        executor_base = ToolExecutor(registry_base, validator_base)
-        env_base = ToolLabEnvironment(
-            registry=registry_base, executor=executor_base, validator=validator_base
-        )
-        runtime_base = create_runtime(baseline_agent, provider_base, validator_base)
-        eval_base = OrderStatusEvaluator()
-
-        art_base = await run_episode(
-            agent=baseline_agent,
-            task=task,
-            config=RunConfig(
-                seed=current_seed, runtime_version=runtime_version(baseline_agent.runtime_backend)
-            ),
-            runtime=runtime_base,
-            environment=env_base,
-            evaluator=eval_base,
-        )
-        base_id = art_base.episode.episode_id
+        base_id = uuid5(experiment_id, f"{pair_index}:baseline")
+        art_base = await run_arm(baseline_agent, task, current_seed, base_id)
         episode_ids.append(base_id)
-        write_artifact(art_base, artifacts_dir / f"{base_id}.json")
 
         # 2. Execute Recovery Episode
-        provider_rec = provider_factory()
-        registry_rec = create_tool_lab_registry()
-        validator_rec = DefaultToolValidator(registry_rec)
-        executor_rec = ToolExecutor(registry_rec, validator_rec)
-        env_rec = ToolLabEnvironment(
-            registry=registry_rec, executor=executor_rec, validator=validator_rec
-        )
-        runtime_rec = create_runtime(recovery_agent, provider_rec, validator_rec)
-        eval_rec = OrderStatusEvaluator()
-
-        art_rec = await run_episode(
-            agent=recovery_agent,
-            task=task,
-            config=RunConfig(
-                seed=current_seed, runtime_version=runtime_version(recovery_agent.runtime_backend)
-            ),
-            runtime=runtime_rec,
-            environment=env_rec,
-            evaluator=eval_rec,
-        )
-        rec_id = art_rec.episode.episode_id
+        rec_id = uuid5(experiment_id, f"{pair_index}:recovery")
+        art_rec = await run_arm(recovery_agent, task, current_seed, rec_id)
         episode_ids.append(rec_id)
-        write_artifact(art_rec, artifacts_dir / f"{rec_id}.json")
 
         # 3. Assess paired outcome
         base_success = art_base.evaluation.success
@@ -480,6 +579,7 @@ async def run_experiment(
     exp_dir.mkdir(parents=True, exist_ok=True)
     exp_file = exp_dir / f"{experiment_id}.json"
     write_experiment(experiment_artifact, exp_file)
+    experiment_checkpoint_path(artifacts_dir, experiment_id).unlink(missing_ok=True)
 
     return experiment_artifact
 

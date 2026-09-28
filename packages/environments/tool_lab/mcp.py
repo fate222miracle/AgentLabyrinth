@@ -17,6 +17,7 @@ from packages.environments.tool_lab.environment import (
 )
 
 MCP_URL = "http://127.0.0.1:8765/mcp"
+MCP_DISCONNECTED_URL = "http://127.0.0.1:1/mcp"
 TASKS_DIR = Path(__file__).resolve().parents[3] / "benchmarks/tool_lab_core/tasks"
 
 
@@ -57,8 +58,8 @@ def read_document(task_name: str, document_id: str) -> dict[str, JsonValue]:
     return {"document": cast(JsonValue, document)}
 
 
-async def _call_remote(name: str, arguments: dict[str, Any]) -> dict[str, JsonValue]:
-    async with Client(MCP_URL, read_timeout_seconds=5) as client:
+async def _call_remote(name: str, arguments: dict[str, Any], url: str) -> dict[str, JsonValue]:
+    async with Client(url, read_timeout_seconds=5) as client:
         result = await client.call_tool(name, arguments)
     if result.is_error or not isinstance(result.structured_content, dict):
         raise ValueError("MCP tool returned an error")
@@ -71,9 +72,12 @@ class MCPToolLabEnvironment(ToolLabEnvironment):
     tool_transport = "mcp"
     remote_tools = ("search_documents", "read_document")
 
-    def __init__(self) -> None:
+    def __init__(self, url: str | None = None) -> None:
         super().__init__()
         self._remote_task_name = ""
+        if url not in (None, MCP_DISCONNECTED_URL):
+            raise ValueError("Only the fixed MCP endpoint and test disconnect are allowed")
+        self._url = url or MCP_URL
 
     def reset(self, task: TaskSpec, seed: int) -> Observation:
         """Keep the same isolated state while selecting the server's fixed task."""
@@ -87,6 +91,7 @@ class MCPToolLabEnvironment(ToolLabEnvironment):
             return _call_sync(
                 "search_documents",
                 {"task_name": self._remote_task_name, **args.model_dump()},
+                self._url,
             )
         except Exception as exc:
             raise ValueError("MCP document search failed") from exc
@@ -97,6 +102,7 @@ class MCPToolLabEnvironment(ToolLabEnvironment):
             result = _call_sync(
                 "read_document",
                 {"task_name": self._remote_task_name, **args.model_dump()},
+                self._url,
             )
         except Exception as exc:
             raise ValueError("MCP document read failed") from exc
@@ -111,9 +117,9 @@ class MCPToolLabEnvironment(ToolLabEnvironment):
         }
 
 
-def _call_sync(name: str, arguments: dict[str, Any]) -> dict[str, JsonValue]:
+def _call_sync(name: str, arguments: dict[str, Any], url: str) -> dict[str, JsonValue]:
     """Bridge the synchronous Tool Executor from the runtime's worker thread."""
-    return asyncio.run(_call_remote(name, arguments))
+    return asyncio.run(_call_remote(name, arguments, url))
 
 
 if __name__ == "__main__":

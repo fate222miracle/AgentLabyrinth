@@ -1,6 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { changedStateFields, groupTraceByStep, keyFields, stepOutcome, stepTitle } from './traceSteps';
 import { McpFlowReplay } from './McpFlowReplay';
+import { summarizeEpisode, type EpisodeHistorySummary } from './historySummary';
+import { readEpisodeStream } from './streamEpisode';
 
 interface ModelOption {
   id: string;
@@ -19,9 +21,37 @@ interface TaskOption {
   description: string;
   max_steps: number;
   token_budget: number;
-  suite: 'tool_lab_core' | 'bfcl_adapted';
+  suite: 'tool_lab_core' | 'bfcl_adapted' | 'bfcl_java_adapted';
   split: string;
   supports_mcp: boolean;
+}
+
+const bfclDescriptions: Record<string, string> = {
+  'bfcl-simple_python_0': '求底边长为 10、高为 5 的三角形面积。',
+  'bfcl-simple_python_1': '使用数学函数计算 5 的阶乘。',
+  'bfcl-simple_python_2': '已知直角三角形的两条直角边分别为 4 和 5，求斜边长度。',
+  'bfcl-simple_python_3': '求二次方程的根，系数为 a=1、b=-3、c=2。',
+  'bfcl-simple_python_4': '求解系数为 a=2、b=6、c=5 的二次方程。',
+  'bfcl-simple_python_5': '求二次方程的所有根，系数为 a=3、b=-11、c=-4。',
+  'bfcl-simple_python_6': '求系数为 a=2、b=5、c=3 的二次方程的根。',
+  'bfcl-simple_python_7': '求半径为 4 英寸的圆的周长。',
+  'bfcl-simple_java_6': '刷新数据库表格视图的元数据、追加已有数据，并保留当前状态。',
+  'bfcl-simple_java_18': '查询系统角色数量的第 3 页，每页 20 条。',
+  'bfcl-simple_java_53': '构造谓词：判断 Join 是否为完整主节点，且状态早于本地接受的任期 42、版本 7。',
+  'bfcl-simple_java_74': '在 XML 序列化中处理高代理值 55357、低代理值 56832；内容不在 CDATA 内。',
+  'bfcl-simple_java_76': '以宽 800、高 600 的尺寸更新开场动画画面。',
+};
+
+const taskCategoryLabels: Record<string, string> = {
+  tool_selection: '工具选择',
+  parameter_generation: '参数生成',
+  multi_step_planning: '多步规划',
+  error_recovery: '错误恢复',
+  bfcl_single_call: '单次函数调用',
+};
+
+function taskDescription(task: TaskOption): string {
+  return task.suite !== 'tool_lab_core' ? bfclDescriptions[task.id] ?? task.description : task.description;
 }
 
 interface MetaResponse {
@@ -36,6 +66,7 @@ interface MetaResponse {
 
 interface TraceEvent {
   event_id: string;
+  episode_id: string;
   step_index: number;
   event_type: string;
   timestamp: string;
@@ -168,6 +199,22 @@ interface ExperimentArtifact {
   episode_ids: string[];
   pairs: PairComparison[];
   metrics: ExperimentAggregateMetrics;
+}
+
+interface ExperimentDashboardItem {
+  experiment_id: string;
+  created_at: string;
+  environment_version: string;
+  comparison_axis: string;
+  total_pairs: number;
+  baseline_success_rate: number;
+  recovery_success_rate: number;
+  baseline_total_tokens: number;
+  recovery_total_tokens: number;
+  baseline_avg_duration_ms: number;
+  recovery_avg_duration_ms: number;
+  baseline_total_cost: string | null;
+  recovery_total_cost: string | null;
 }
 
 function explainFailure(detail: string): string {
@@ -382,11 +429,20 @@ export default function App() {
   // Single Episode states
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [selectedScenario, setSelectedScenario] = useState<string>('success');
+  const [singleFaultProfile, setSingleFaultProfile] = useState<string>('none');
   const [selectedSingleTask, setSelectedSingleTask] = useState<string>('');
-  const [selectedSuite, setSelectedSuite] = useState<'tool_lab_core' | 'bfcl_adapted'>('tool_lab_core');
+  const [selectedSuite, setSelectedSuite] = useState<TaskOption['suite']>('tool_lab_core');
+  const [singleTaskQuery, setSingleTaskQuery] = useState('');
   const [maxSteps, setMaxSteps] = useState<number>(6);
   const [artifact, setArtifact] = useState<EpisodeArtifact | null>(null);
+  const [liveRun, setLiveRun] = useState<{
+    events: TraceEvent[]; episodeId: string | null; model: string;
+    environmentVersion: string; status: 'running' | 'interrupted';
+  } | null>(null);
   const [recentEpisodeIds, setRecentEpisodeIds] = useState<string[]>([]);
+  const [episodeHistorySummaries, setEpisodeHistorySummaries] = useState<
+    Record<string, EpisodeHistorySummary>
+  >({});
   const [resumableEpisodeIds, setResumableEpisodeIds] = useState<string[]>([]);
   const [inputEpisodeId, setInputEpisodeId] = useState<string>('');
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
@@ -401,6 +457,7 @@ export default function App() {
   // Experiment states
   const [expModel, setExpModel] = useState<string>('');
   const [expScenario, setExpScenario] = useState<string>('invalid-then-success');
+  const [expFaultProfile, setExpFaultProfile] = useState<string>('none');
   const [comparisonAxis, setComparisonAxis] = useState<'recovery_policy' | 'runtime_backend'>('recovery_policy');
   const [expRuntimeBackend, setExpRuntimeBackend] = useState<'handwritten' | 'langgraph'>('handwritten');
   const [expRuntimeStrategy, setExpRuntimeStrategy] = useState<'handwritten' | 'handwritten_recovery'>('handwritten_recovery');
@@ -414,6 +471,10 @@ export default function App() {
   const [singleTokenBudget, setSingleTokenBudget] = useState<number | null>(8000);
   const [experiment, setExperiment] = useState<ExperimentArtifact | null>(null);
   const [recentExpIds, setRecentExpIds] = useState<string[]>([]);
+  const [resumableExpIds, setResumableExpIds] = useState<string[]>([]);
+  const [dashboardItems, setDashboardItems] = useState<ExperimentDashboardItem[]>([]);
+  const [dashboardSkipped, setDashboardSkipped] = useState(0);
+  const [dashboardError, setDashboardError] = useState(false);
   const [inputExpId, setInputExpId] = useState<string>('');
 
   // Custom Model states
@@ -429,6 +490,7 @@ export default function App() {
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const historyRequestId = useRef(0);
 
   useEffect(() => {
     if (!copyNotice) return;
@@ -455,6 +517,20 @@ export default function App() {
   const finishLoading = () => {
     setIsLoading(false);
     setLoadingMessage('');
+  };
+
+  const refreshExperimentDashboard = () => {
+    fetch('/api/v1/experiments')
+      .then((res) => {
+        if (!res.ok) throw new Error('dashboard unavailable');
+        return res.json();
+      })
+      .then((data: { items: ExperimentDashboardItem[]; skipped_count: number }) => {
+        setDashboardItems(Array.isArray(data.items) ? data.items : []);
+        setDashboardSkipped(data.skipped_count ?? 0);
+        setDashboardError(false);
+      })
+      .catch(() => setDashboardError(true));
   };
 
   const addCustomModel = (modelId: string, target: 'exp' | 'single') => {
@@ -498,7 +574,9 @@ export default function App() {
           setExpModel(data.default_model);
         }
         if (data.tasks && data.tasks.length > 0) {
-          setSelectedSingleTask(data.tasks[0].id);
+          const initialTask = data.tasks.find((task) => task.suite === 'tool_lab_core') ?? data.tasks[0];
+          setSelectedSuite(initialTask.suite);
+          setSelectedSingleTask(initialTask.id);
           setExpTasks(data.tasks.filter((t) => t.suite === 'tool_lab_core').map((t) => t.id));
         }
       })
@@ -509,15 +587,21 @@ export default function App() {
       .then((res) => res.ok ? res.json() : [])
       .then((ids: string[]) => setResumableEpisodeIds(ids))
       .catch(() => setResumableEpisodeIds([]));
+    fetch('/api/v1/experiments/resumable')
+      .then((res) => res.ok ? res.json() : [])
+      .then((ids: string[]) => setResumableExpIds(ids))
+      .catch(() => setResumableExpIds([]));
+    refreshExperimentDashboard();
 
     // Load recent history from localStorage
     try {
-      const savedEpisodes = localStorage.getItem('al_recent_episodes');
-      if (savedEpisodes) setRecentEpisodeIds(JSON.parse(savedEpisodes));
-      const savedExps = localStorage.getItem('al_recent_experiments');
-      if (savedExps) setRecentExpIds(JSON.parse(savedExps));
-      const savedCustom = localStorage.getItem('al_custom_models');
-      if (savedCustom) setCustomModels(JSON.parse(savedCustom));
+      const readList = (key: string): string[] => {
+        const value: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
+        return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+      };
+      setRecentEpisodeIds(readList('al_recent_episodes').slice(0, 5));
+      setRecentExpIds(readList('al_recent_experiments').slice(0, 5));
+      setCustomModels(readList('al_custom_models'));
     } catch {
       // ignore storage error
     }
@@ -541,9 +625,12 @@ export default function App() {
         setActiveTab('single');
         loadEpisodeById(nextEpId, false);
       } else {
+        historyRequestId.current += 1;
         setExperiment(null);
         setArtifact(null);
+        setLiveRun(null);
         setErrorMsg(null);
+        finishLoading();
       }
     };
     window.addEventListener('popstate', handlePopState);
@@ -556,6 +643,34 @@ export default function App() {
     setReplayIndex(Math.max((artifact?.events.length ?? 1) - 1, 0));
     setExpandedEvents({});
   }, [artifact?.episode.episode_id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setEpisodeHistorySummaries(Object.fromEntries(
+      recentEpisodeIds.map((id) => [id, { status: 'loading' } satisfies EpisodeHistorySummary]),
+    ));
+
+    const loadSummaries = async () => {
+      const entries = await Promise.all(recentEpisodeIds.map(async (id) => {
+        if (artifact?.episode.episode_id === id) {
+          return [id, summarizeEpisode(artifact)] as const;
+        }
+        try {
+          const response = await fetch(`/api/v1/episodes/${encodeURIComponent(id)}`);
+          if (!response.ok) return [id, { status: 'error' } satisfies EpisodeHistorySummary] as const;
+          const data = await response.json() as { artifact?: Partial<EpisodeArtifact> };
+          return [id, data.artifact ? summarizeEpisode(data.artifact)
+            : { status: 'error' } satisfies EpisodeHistorySummary] as const;
+        } catch {
+          return [id, { status: 'error' } satisfies EpisodeHistorySummary] as const;
+        }
+      }));
+      if (!cancelled) setEpisodeHistorySummaries(Object.fromEntries(entries));
+    };
+
+    void loadSummaries();
+    return () => { cancelled = true; };
+  }, [recentEpisodeIds, artifact]);
 
   useEffect(() => {
     setReplayPlaying(false);
@@ -588,15 +703,20 @@ export default function App() {
   // Load an existing episode by ID
   const loadEpisodeById = async (id: string, updateUrl = true) => {
     if (!id || id.trim().length === 0) return;
+    const requestId = ++historyRequestId.current;
+    setLiveRun(null);
     beginLoading('正在读取历史 Episode。');
     setErrorMsg(null);
+    if (!updateUrl) setArtifact(null);
     try {
       const res = await fetch(`/api/v1/episodes/${encodeURIComponent(id.trim())}`);
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.message || `未能找到 Episode (${res.status})`);
+        throw new Error(res.status === 404
+          ? `未能找到 Episode ${id.trim()}` : errData.message || `读取 Episode 失败 (${res.status})`);
       }
       const data = await res.json();
+      if (requestId !== historyRequestId.current) return;
       setArtifact(data.artifact);
       addRecentEpisodeId(id.trim());
 
@@ -607,25 +727,31 @@ export default function App() {
         window.history.pushState({}, '', url.toString());
       }
     } catch (err: unknown) {
+      if (requestId !== historyRequestId.current) return;
       const message = err instanceof Error ? err.message : '加载失败';
       setErrorMsg(message);
     } finally {
-      finishLoading();
+      if (requestId === historyRequestId.current) finishLoading();
     }
   };
 
   // Load an existing experiment by ID
   const loadExperimentById = async (id: string, updateUrl = true) => {
     if (!id || id.trim().length === 0) return;
+    const requestId = ++historyRequestId.current;
+    setLiveRun(null);
     beginLoading('正在读取历史对照实验。');
     setErrorMsg(null);
+    if (!updateUrl) setExperiment(null);
     try {
       const res = await fetch(`/api/v1/experiments/${encodeURIComponent(id.trim())}`);
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.message || `未能找到 Experiment (${res.status})`);
+        throw new Error(res.status === 404
+          ? `未能找到 Experiment ${id.trim()}` : errData.message || `读取 Experiment 失败 (${res.status})`);
       }
       const data = await res.json();
+      if (requestId !== historyRequestId.current) return;
       setExperiment(data.experiment);
       addRecentExpId(id.trim());
 
@@ -636,17 +762,28 @@ export default function App() {
         window.history.pushState({}, '', url.toString());
       }
     } catch (err: unknown) {
+      if (requestId !== historyRequestId.current) return;
       const message = err instanceof Error ? err.message : '加载实验失败';
       setErrorMsg(message);
     } finally {
-      finishLoading();
+      if (requestId === historyRequestId.current) finishLoading();
     }
   };
 
   // Execute single episode
   const handleRunEpisode = async () => {
-    beginLoading('正在执行单次运行，完成后展示详细轨迹。');
+    const requestId = ++historyRequestId.current;
+    beginLoading('正在运行，Trace 节点会随事件出现。');
     setErrorMsg(null);
+    setArtifact(null);
+    const runningUrl = new URL(window.location.href);
+    runningUrl.searchParams.delete('episode_id');
+    runningUrl.searchParams.delete('experiment_id');
+    window.history.pushState({}, '', runningUrl.toString());
+    setLiveRun({ events: [], episodeId: null, model: selectedModel,
+      environmentVersion: selectedSuite !== 'tool_lab_core' ? 'bfcl-adapted-single-call-v1'
+        : selectedSingleTaskMeta?.supports_mcp && singleToolTransport === 'mcp' ? 'tool-lab-mcp-v1' : 'tool-lab-m0-v1',
+      status: 'running' });
     try {
       const currentModelObj = meta?.models.find((m) => m.id === selectedModel);
       const isFake = selectedModel === 'fake' || currentModelObj?.provider === 'fake';
@@ -661,11 +798,16 @@ export default function App() {
         token_budget: isFake ? null : singleTokenBudget,
         runtime_backend: singleRuntimeBackend,
         runtime_strategy: singleRuntimeStrategy,
-        tool_transport: singleTasks.find((task) => task.id === selectedSingleTask)?.supports_mcp
+        tool_transport: selectedSingleTaskMeta?.supports_mcp
           ? singleToolTransport : 'local',
+        fault_profile: isFake && selectedSuite === 'tool_lab_core'
+          ? singleToolTransport === 'mcp'
+            ? singleFaultProfile === 'mcp_disconnect' ? 'mcp_disconnect' : 'none'
+            : singleFaultProfile === 'mcp_disconnect' ? 'none' : singleFaultProfile
+          : 'none',
       };
 
-      const res = await fetch('/api/v1/episodes', {
+      const res = await fetch('/api/v1/episodes/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -676,28 +818,46 @@ export default function App() {
         throw new Error(errData.message || `执行失败 (${res.status})`);
       }
 
-      const data = await res.json();
+      const data = await readEpisodeStream(res, (value) => {
+        if (requestId !== historyRequestId.current) return;
+        if (!value || typeof value !== 'object' || !('event_id' in value)
+          || typeof value.event_id !== 'string' || !('episode_id' in value)
+          || typeof value.episode_id !== 'string' || !('event_type' in value)
+          || typeof value.event_type !== 'string' || !('payload' in value)
+          || !value.payload || typeof value.payload !== 'object') {
+          throw new Error('实时 Trace 格式无效。');
+        }
+        const event = value as TraceEvent;
+        setLiveRun((current) => current ? { ...current, episodeId: event.episode_id,
+          events: [...current.events, event] } : current);
+      }) as { artifact?: EpisodeArtifact };
+      if (requestId !== historyRequestId.current) return;
+      if (!data?.artifact?.episode?.episode_id) throw new Error('完成事件缺少 Episode 产物。');
       const newArtifact = data.artifact as EpisodeArtifact;
       setArtifact(newArtifact);
+      setLiveRun(null);
       addRecentEpisodeId(newArtifact.episode.episode_id);
 
       const url = new URL(window.location.href);
       url.searchParams.set('episode_id', newArtifact.episode.episode_id);
       url.searchParams.delete('experiment_id');
-      window.history.pushState({}, '', url.toString());
+      window.history.replaceState({}, '', url.toString());
     } catch (err: unknown) {
+      if (requestId !== historyRequestId.current) return;
       const message = err instanceof Error ? err.message : '运行失败';
       setErrorMsg(message);
+      setLiveRun((current) => current ? { ...current, status: 'interrupted' } : current);
       fetch('/api/v1/episodes/resumable')
         .then((res) => res.ok ? res.json() : [])
         .then((ids: string[]) => setResumableEpisodeIds(ids))
         .catch(() => {});
     } finally {
-      finishLoading();
+      if (requestId === historyRequestId.current) finishLoading();
     }
   };
 
   const handleResumeEpisode = async (id: string) => {
+    setLiveRun(null);
     beginLoading('正在从最近存档恢复 Episode。');
     setErrorMsg(null);
     try {
@@ -724,6 +884,33 @@ export default function App() {
   };
 
   // Execute paired experiment
+  const handleResumeExperiment = async (id: string) => {
+    beginLoading('正在恢复原实验，已完成的 Episode 会直接复用。');
+    setErrorMsg(null);
+    try {
+      const res = await fetch(`/api/v1/experiments/${encodeURIComponent(id)}/resume`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || `实验恢复失败 (${res.status})`);
+      }
+      const data = await res.json();
+      setExperiment(data.experiment as ExperimentArtifact);
+      refreshExperimentDashboard();
+      setResumableExpIds((previous) => previous.filter((item) => item !== id));
+      addRecentExpId(id);
+      const url = new URL(window.location.href);
+      url.searchParams.set('experiment_id', id);
+      url.searchParams.delete('episode_id');
+      window.history.pushState({}, '', url.toString());
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : '实验恢复失败');
+    } finally {
+      finishLoading();
+    }
+  };
+
   const handleRunExperiment = async () => {
     if (expTasks.length === 0) {
       setErrorMsg('请至少选择一个评测任务');
@@ -752,6 +939,7 @@ export default function App() {
         comparison_axis: comparisonAxis,
         runtime_backend: expRuntimeBackend,
         runtime_strategy: expRuntimeStrategy,
+        fault_profile: isFake ? expFaultProfile : 'none',
       };
 
       const res = await fetch('/api/v1/experiments', {
@@ -768,6 +956,7 @@ export default function App() {
       const data = await res.json();
       const expArt = data.experiment as ExperimentArtifact;
       setExperiment(expArt);
+      refreshExperimentDashboard();
       addRecentExpId(expArt.experiment_id);
 
       const url = new URL(window.location.href);
@@ -777,6 +966,10 @@ export default function App() {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : '对照实验运行失败';
       setErrorMsg(message);
+      fetch('/api/v1/experiments/resumable')
+        .then((res) => res.ok ? res.json() : [])
+        .then((ids: string[]) => setResumableExpIds(ids))
+        .catch(() => {});
     } finally {
       finishLoading();
     }
@@ -796,8 +989,22 @@ export default function App() {
   const currentExpModelMeta = meta?.models.find((m) => m.id === expModel);
   const experimentTasks = meta?.tasks.filter((task) => task.suite === 'tool_lab_core') ?? [];
   const singleTasks = meta?.tasks.filter((task) => task.suite === selectedSuite) ?? [];
+  const filteredSingleTasks = singleTasks.filter((task) => {
+    const query = singleTaskQuery.trim().toLocaleLowerCase();
+    return !query || `${task.name} ${task.id} ${task.category} ${taskCategoryLabels[task.category] ?? ''} ${task.description} ${taskDescription(task)}`
+      .toLocaleLowerCase().includes(query);
+  });
   const bfclTaskCount = meta?.tasks.filter((task) => task.suite === 'bfcl_adapted').length ?? 0;
-  const selectedSingleTaskMeta = singleTasks.find((task) => task.id === selectedSingleTask);
+  const selectedSingleTaskMeta = filteredSingleTasks.find((task) => task.id === selectedSingleTask);
+  const defaultSingleMaxSteps = selectedSuite !== 'tool_lab_core' ? 1 : 6;
+  const singleAdvancedChangeCount = [
+    singleRuntimeStrategy !== 'handwritten',
+    singleToolTransport === 'mcp' && Boolean(selectedSingleTaskMeta?.supports_mcp),
+    maxSteps !== defaultSingleMaxSteps,
+    selectedModel === 'fake' && selectedScenario !== 'success',
+    selectedModel === 'fake' && singleFaultProfile !== 'none',
+    selectedModel !== 'fake' && singleTokenBudget !== 8000,
+  ].filter(Boolean).length;
   const eventTypes = Array.from(new Set(artifact?.events.map((event) => event.event_type) ?? []));
   const traceSteps = groupTraceByStep(artifact?.events ?? []);
   const visibleEvents = replayView === 'story'
@@ -884,14 +1091,14 @@ export default function App() {
     ? 'runtime_backend'
     : experiment?.config.comparison_axis === 'recovery_policy'
       ? 'recovery_policy'
-      : comparisonAxis;
+      : experiment ? 'recovery_policy' : comparisonAxis;
   const armLeftLabel = activeComparisonAxis === 'runtime_backend' ? 'Reference Runtime' : 'Baseline Policy';
   const armRightLabel = activeComparisonAxis === 'runtime_backend' ? 'LangGraph Runtime' : 'Recovery Policy';
   const expEpisodeCount =
     expTasks.length * (parsedExpSeeds?.length ?? 0) * expRepeatCount * 2;
   const isExperimentRunReady = Boolean(meta) && Boolean(expModel) && expTasks.length > 0 &&
     parsedExpSeeds !== null && expRepeatCount >= 1 && expRepeatCount <= 10 && !isLoading;
-  const isSingleRunReady = Boolean(meta) && Boolean(selectedModel) && Boolean(selectedSingleTask) && !isLoading;
+  const isSingleRunReady = Boolean(meta) && Boolean(selectedModel) && Boolean(selectedSingleTaskMeta) && !isLoading;
 
   return (
     <div>
@@ -1032,6 +1239,35 @@ export default function App() {
               </div>
             )}
 
+            <section className="card experiment-dashboard" aria-labelledby="experiment-dashboard-title">
+              <div className="card-title" id="experiment-dashboard-title">实验指标看板</div>
+              <p className="card-desc">读取最近保存的实验；每张卡仅比较同一实验的两侧，不跨任务集或协议排名。</p>
+              {dashboardError && <p role="status">历史指标暂不可读取，单次实验结果仍可查看。</p>}
+              {dashboardSkipped > 0 && <p role="status">有 {dashboardSkipped} 份损坏或不匹配的历史文件未计入。</p>}
+              {!dashboardError && dashboardItems.length === 0 && <p className="metric-sub">暂无已完成实验。</p>}
+              <div className="experiment-dashboard-list">
+                {dashboardItems.slice(0, 8).map((item) => (
+                  <article className="experiment-dashboard-item" key={item.experiment_id}>
+                    <button className="dashboard-open" type="button"
+                      aria-current={experiment?.experiment_id === item.experiment_id ? 'true' : undefined}
+                      onClick={() => loadExperimentById(item.experiment_id)}>
+                      <strong>{item.comparison_axis === 'runtime_backend' ? 'Runtime 对照' : '恢复策略对照'}</strong>
+                      <span>{item.environment_version} · {item.total_pairs} 对 · {new Date(item.created_at).toLocaleString()}</span>
+                    </button>
+                    <div className="dashboard-bars" aria-label="两侧成功率">
+                      <label>左侧 {Math.round(item.baseline_success_rate * 100)}%
+                        <progress max="100" value={Math.round(item.baseline_success_rate * 100)} />
+                      </label>
+                      <label>右侧 {Math.round(item.recovery_success_rate * 100)}%
+                        <progress max="100" value={Math.round(item.recovery_success_rate * 100)} />
+                      </label>
+                    </div>
+                    <p className="metric-sub">Token {item.baseline_total_tokens} / {item.recovery_total_tokens} · 平均耗时 {Math.round(item.baseline_avg_duration_ms)} / {Math.round(item.recovery_avg_duration_ms)} ms · 费用 {item.baseline_total_cost ?? '未知'} / {item.recovery_total_cost ?? '未知'} USD</p>
+                  </article>
+                ))}
+              </div>
+            </section>
+
             <div className="dashboard-grid">
               {/* Left Panel: Experiment Config */}
               <section className="card" id="exp-config-panel">
@@ -1155,6 +1391,7 @@ export default function App() {
 
                 {/* Scenario selector if Fake model */}
                 {expModel === 'fake' && (
+                  <>
                   <div className="form-group">
                     <label htmlFor="exp-scenario-select" className="form-label">
                       Fake 模拟场景
@@ -1175,6 +1412,17 @@ export default function App() {
                       <option value="max-steps">max-steps (步数超限)</option>
                     </select>
                   </div>
+                  <div className="form-group">
+                    <label htmlFor="exp-fault-profile" className="form-label">受控故障</label>
+                    <select id="exp-fault-profile" className="form-select" value={expFaultProfile}
+                      onChange={(e) => setExpFaultProfile(e.target.value)} disabled={isLoading}>
+                      <option value="none">无注入</option>
+                      <option value="tool_timeout">工具超时</option>
+                      <option value="empty_result">查询空结果</option>
+                    </select>
+                    <p className="metric-sub">两侧使用同一故障任务；结果只用于工程对照。</p>
+                  </div>
+                  </>
                 )}
 
                 {/* Task Checkbox List */}
@@ -1293,6 +1541,21 @@ export default function App() {
                   </p>
                 )}
 
+                {resumableExpIds.length > 0 && (
+                  <section className="resumable-panel" aria-labelledby="resumable-exp-title">
+                    <div className="card-title" id="resumable-exp-title">待恢复的对照实验</div>
+                    <p className="card-desc">继续原实验并复用已完成结果；中断中的模型请求可能重新发送。</p>
+                    <div className="resumable-list">
+                      {resumableExpIds.map((id) => (
+                        <button key={id} className="btn-secondary" disabled={isLoading}
+                          onClick={() => handleResumeExperiment(id)}>
+                          恢复 Experiment <code>{id}</code>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
                 {/* Recent Experiments History */}
                 {recentExpIds.length > 0 && (
                   <div className="history-panel">
@@ -1315,7 +1578,7 @@ export default function App() {
               </section>
 
               {/* Right Panel: Aggregate Metrics + Comparison Table */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+              <div className="single-result-stack">
                 {/* Aggregate Summary Cards */}
                 <section className="card" id="exp-metrics-panel">
                   <div className="card-title">
@@ -1700,62 +1963,166 @@ export default function App() {
               </div>
             )}
 
-            <div className="dashboard-grid">
-              {/* Left Panel: Single Episode Config */}
-              <section className="card" id="config-panel">
-                <div className="card-title">
-                  <span>{artifact ? '下次运行配置' : '单次运行配置'}</span>
-                  <span className="badge badge-blue">ToolLab</span>
-                </div>
-                <div className="card-desc">选择任务与执行方式，核对后启动一次受控评测。</div>
+            <div className={`dashboard-grid single-dashboard ${artifact ? 'has-artifact' : 'configuring'}`}>
+              <details className="card config-panel" id="config-panel" open={!artifact}>
+                <summary className="card-title config-panel-summary">
+                  <span>{artifact ? '下次运行配置' : '配置单次运行'}</span>
+                  <span className="config-summary-meta">
+                    {artifact
+                      ? `${selectedSingleTaskMeta?.name ?? '选择任务'} · ${currentSingleModelMeta?.name ?? (selectedModel || '选择模型')}`
+                      : `${singleTasks.length} 个可用任务`}
+                  </span>
+                </summary>
+                <div className="config-panel-content">
+                  <div className="single-launch-bar">
+                    <div className="single-launch-summary" aria-live="polite">
+                      <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
+                      <span>
+                        {currentSingleModelMeta?.name || selectedModel || '请选择模型'}
+                        {' · '}{singleRuntimeBackend === 'langgraph' ? 'LangGraph' : 'Reference'}
+                        {' · '}
+                        {singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp
+                          ? 'MCP HTTP'
+                          : selectedSuite === 'tool_lab_core' ? '本地工具' : '本地函数调用提议评测'}
+                      </span>
+                      <small>{selectedModel === 'fake' ? 'Fake 离线模拟' : '将发起真实模型请求'}</small>
+                    </div>
+                    <div className="single-launch-action">
+                      <button id="run-button" className="btn-primary"
+                        onClick={handleRunEpisode} disabled={!isSingleRunReady}
+                        title={!meta ? '元数据尚未就绪' : !selectedSingleTaskMeta ? '请选择一个可见任务后再运行' : undefined}>
+                        {isLoading ? <><div className="spinner" /><span>正在运行 Episode...</span></>
+                          : <span>开始运行 Episode</span>}
+                      </button>
+                      {isLoading && (
+                        <p className="loading-note" role="status" aria-live="polite">
+                          {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="single-setup-grid">
+                    <section className="task-picker" aria-labelledby="task-picker-title">
+                      <div className="task-picker-heading">
+                        <div>
+                          <h2 id="task-picker-title">先选一个任务</h2>
+                          <p>查看任务目标，再决定使用哪种执行方式。</p>
+                        </div>
+                        <span className="task-picker-count">{filteredSingleTasks.length} 个</span>
+                      </div>
 
-                <div className="config-stage-label"><span>01</span> 选择任务</div>
-                <div className="form-group">
-                  <label htmlFor="suite-select" className="form-label">数据集</label>
-                  <select id="suite-select" className="form-select" value={selectedSuite}
-                    onChange={(e) => {
-                      const suite = e.target.value as 'tool_lab_core' | 'bfcl_adapted';
-                      setSelectedSuite(suite);
-                      const first = meta?.tasks.find((task) => task.suite === suite);
-                      if (first) setSelectedSingleTask(first.id);
-                      setMaxSteps(suite === 'bfcl_adapted' ? 1 : 6);
-                      setSingleToolTransport('local');
-                    }} disabled={isLoading}>
-                    <option value="tool_lab_core">原生 ToolLab</option>
-                    <option value="bfcl_adapted" disabled={bfclTaskCount === 0}>
-                      BFCL 改编子集（{bfclTaskCount === 0 ? '请先运行导入脚本' : `${bfclTaskCount} 道真实固定题`}）
-                    </option>
-                  </select>
-                  {selectedSuite === 'bfcl_adapted' && <p className="metric-sub">
-                    来源：BFCL V4 固定上游提交；AgentLabyrinth-adapted subset；本地精确匹配，非官方分数。
-                  </p>}
-                </div>
-                <div className="form-group">
-                  <label htmlFor="task-select" className="form-label">评测任务</label>
-                  <select id="task-select" className="form-select" value={selectedSingleTask}
-                    onChange={(e) => { setSelectedSingleTask(e.target.value); setSingleToolTransport('local'); }}
-                    disabled={isLoading}>
-                    {singleTasks.map((task) => <option key={task.id} value={task.id}>
-                      {task.name} · {task.split}
-                    </option>)}
-                  </select>
-                </div>
-                {selectedSingleTaskMeta && <div className="task-preview" aria-live="polite">
-                  <span className="task-preview-kicker">{selectedSingleTaskMeta.category} · {selectedSingleTaskMeta.split}</span>
-                  <strong>{selectedSingleTaskMeta.name}</strong>
-                  <p>{selectedSingleTaskMeta.description}</p>
-                  <span className="task-preview-foot">任务建议上限 {selectedSingleTaskMeta.max_steps} 步 · {selectedSingleTaskMeta.supports_mcp ? '支持本地 / MCP 工具' : '本地工具'}</span>
-                </div>}
+                      <fieldset className="suite-choice" disabled={isLoading || !meta}>
+                        <legend className="form-label">任务集</legend>
+                        <div className="suite-choice-options">
+                          <label className={selectedSuite === 'tool_lab_core' ? 'selected' : ''}>
+                            <input type="radio" name="single-suite" value="tool_lab_core"
+                              checked={selectedSuite === 'tool_lab_core'}
+                              onChange={() => {
+                                setSelectedSuite('tool_lab_core');
+                                setSingleTaskQuery('');
+                                const first = meta?.tasks.find((task) => task.suite === 'tool_lab_core');
+                                if (first) setSelectedSingleTask(first.id);
+                                setMaxSteps(6);
+                                setSingleToolTransport('local');
+                                setSingleFaultProfile('none');
+                              }} />
+                            <span>ToolLab</span>
+                            <small>原生任务</small>
+                          </label>
+                          <label className={selectedSuite === 'bfcl_adapted' ? 'selected' : ''}
+                            aria-disabled={bfclTaskCount === 0}>
+                            <input type="radio" name="single-suite" value="bfcl_adapted"
+                              checked={selectedSuite === 'bfcl_adapted'}
+                              disabled={bfclTaskCount === 0}
+                              onChange={() => {
+                                setSelectedSuite('bfcl_adapted');
+                                setSingleTaskQuery('');
+                                const first = meta?.tasks.find((task) => task.suite === 'bfcl_adapted');
+                                if (first) setSelectedSingleTask(first.id);
+                                setMaxSteps(1);
+                                setSingleToolTransport('local');
+                                setSingleFaultProfile('none');
+                              }} />
+                            <span>BFCL</span>
+                            <small>{bfclTaskCount > 0 ? `${bfclTaskCount} 道改编题` : '尚未导入'}</small>
+                          </label>
+                          <label className={selectedSuite === 'bfcl_java_adapted' ? 'selected' : ''}
+                            aria-disabled={!meta?.tasks.some((task) => task.suite === 'bfcl_java_adapted')}>
+                            <input type="radio" name="single-suite" value="bfcl_java_adapted"
+                              checked={selectedSuite === 'bfcl_java_adapted'}
+                              disabled={!meta?.tasks.some((task) => task.suite === 'bfcl_java_adapted')}
+                              onChange={() => {
+                                setSelectedSuite('bfcl_java_adapted');
+                                setSingleTaskQuery('');
+                                const first = meta?.tasks.find((task) => task.suite === 'bfcl_java_adapted');
+                                if (first) setSelectedSingleTask(first.id);
+                                setMaxSteps(1);
+                                setSingleToolTransport('local');
+                                setSingleFaultProfile('none');
+                              }} />
+                            <span>BFCL Java</span>
+                            <small>固定改编题</small>
+                          </label>
+                        </div>
+                      </fieldset>
+                      {selectedSuite !== 'tool_lab_core' && (
+                        <p className="suite-provenance">
+                          BFCL V4 固定上游提交的 AgentLabyrinth 改编子集；任务卡为中文说明，模型接收英文原题。仅本地精确匹配函数调用提议，非官方分数。
+                        </p>
+                      )}
 
-                <div className="config-stage-label"><span>02</span> 选择执行方式</div>
+                      <label htmlFor="single-task-search" className="form-label task-search-label">搜索任务</label>
+                      <input id="single-task-search" className="form-input task-search" type="search"
+                        value={singleTaskQuery} placeholder="名称、类别或目标"
+                        onChange={(event) => setSingleTaskQuery(event.target.value)}
+                        disabled={isLoading || !meta} />
+
+                      <div className="task-option-list" role="group" aria-label="评测任务">
+                        {!meta && <p className="task-list-message">正在读取可用任务…</p>}
+                        {meta && filteredSingleTasks.length === 0 && (
+                          <p className="task-list-message">没有匹配的任务，请调整搜索条件。</p>
+                        )}
+                        {filteredSingleTasks.map((task) => (
+                          <button key={task.id} type="button"
+                            className={`task-option ${selectedSingleTask === task.id ? 'selected' : ''}`}
+                            aria-pressed={selectedSingleTask === task.id}
+                            onClick={() => {
+                              setSelectedSingleTask(task.id);
+                              setSingleToolTransport('local');
+                              setSingleFaultProfile('none');
+                            }}
+                            disabled={isLoading}>
+                            <span className="task-option-topline">
+                              <strong>{task.name}</strong>
+                              <span>{taskCategoryLabels[task.category] ?? task.category.replace(/_/g, ' ')}</span>
+                            </span>
+                            <span className="task-option-description">{taskDescription(task)}</span>
+                            <span className="task-option-foot">
+                              {task.split === 'development' ? '开发集' : task.split === 'evaluation' ? '评测集' : task.split} · 最多 {task.max_steps} 步 · {
+                                task.suite === 'tool_lab_core'
+                                  ? task.supports_mcp ? '支持 MCP' : '本地工具'
+                                  : '本地函数调用提议评测'
+                              }
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+
+                    <section className="single-run-options" aria-labelledby="execution-heading">
+                      <div className="task-picker-heading execution-heading">
+                        <div>
+                          <h2 id="execution-heading">配置执行方式</h2>
+                          <p>选择模型与 Runtime；其他参数按需展开。</p>
+                        </div>
+                      </div>
 
                 <div className="form-group">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div className="model-select-heading">
                     <label htmlFor="model-select" className="form-label">评测模型</label>
                     <button
                       type="button"
                       className="btn-secondary"
-                      style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
                       onClick={() => setShowCustomModelInputSingle(!showCustomModelInputSingle)}
                     >
                       {showCustomModelInputSingle ? '取消' : '+ 自定义模型'}
@@ -1806,12 +2173,15 @@ export default function App() {
 
                 {/* Model Notes Box */}
                 <div className="form-group">
-                  <div className="model-note-box">
-                    <strong>说明：</strong>{' '}
-                    {currentSingleModelMeta
-                      ? currentSingleModelMeta.notes
-                      : `自定义免费模型 (${selectedModel})，将使用 AIHubMix 接口发起真实测试。`}
-                  </div>
+                  <details className="model-note-disclosure">
+                    <summary>模型目录说明</summary>
+                    <div className="model-note-box">
+                      <strong>说明：</strong>{' '}
+                      {currentSingleModelMeta
+                        ? currentSingleModelMeta.notes
+                        : `自定义免费模型 (${selectedModel})，将使用 AIHubMix 接口发起真实测试。`}
+                    </div>
+                  </details>
                 </div>
 
                 <fieldset className="execution-choice" disabled={isLoading}>
@@ -1831,142 +2201,95 @@ export default function App() {
                   </div>
                   <p className="metric-sub">两种调度方式使用相同工具与评测规则。</p>
                 </fieldset>
-                {selectedSingleTaskMeta?.supports_mcp && (
-                  <div className="form-group">
-                    <label htmlFor="single-tool-transport" className="form-label">文档工具传输</label>
-                    <select id="single-tool-transport" className="form-select" value={singleToolTransport}
-                      onChange={(e) => setSingleToolTransport(e.target.value as 'local' | 'mcp')} disabled={isLoading}>
-                      <option value="local">本地 ToolLab</option>
-                      <option value="mcp">MCP HTTP（需启动独立服务）</option>
-                    </select>
-                  </div>
-                )}
-                <div className="form-group">
-                  <label htmlFor="single-runtime-policy" className="form-label">参数纠错策略</label>
-                  <select id="single-runtime-policy" className="form-select" value={singleRuntimeStrategy}
-                    onChange={(e) => setSingleRuntimeStrategy(e.target.value as 'handwritten' | 'handwritten_recovery')} disabled={isLoading}>
-                    <option value="handwritten">关闭：参数错误后终止</option>
-                    <option value="handwritten_recovery">开启：INVALID_ARGUMENTS 最多纠错一次</option>
-                  </select>
-                </div>
-
-                {/* Scenario selector if Fake model */}
-                {selectedModel === 'fake' && (
-                  <div className="form-group">
-                    <label htmlFor="scenario-select" className="form-label">Fake 模拟场景</label>
-                    <select
-                      id="scenario-select"
-                      className="form-select"
-                      value={selectedScenario}
-                      onChange={(e) => setSelectedScenario(e.target.value)}
-                      disabled={isLoading}
-                    >
-                      <option value="success">success (完整通过，答案匹配)</option>
-                      <option value="invalid-then-success">invalid-then-success (一次重试后通过)</option>
-                      <option value="wrong-answer">wrong-answer (提交错误答案)</option>
-                      <option value="invalid-arguments">invalid-arguments (工具参数校验失败)</option>
-                      <option value="max-steps">max-steps (步数超限终止)</option>
-                    </select>
-                  </div>
-                )}
-
                 <details className="advanced-settings">
-                  <summary>高级设置 <span>最多 {maxSteps} 步</span></summary>
-                <div className="form-group">
-                  <label htmlFor="steps-input" className="form-label">步数上限 (Max Steps)</label>
-                  <input
-                    id="steps-input"
-                    type="number"
-                    className="form-input"
-                    min={1}
-                    max={20}
-                    value={maxSteps}
-                    onChange={(e) => setMaxSteps(parseInt(e.target.value) || 6)}
-                    disabled={isLoading}
-                  />
-                </div>
-
-                {selectedModel !== 'fake' && (
+                  <summary>
+                    <span>更多设置</span>
+                    <span>
+                      {singleAdvancedChangeCount > 0
+                        ? `${singleAdvancedChangeCount} 项非默认 · 最多 ${maxSteps} 步`
+                        : '保持默认值'}
+                    </span>
+                  </summary>
+                  {selectedSingleTaskMeta?.supports_mcp && (
+                    <div className="form-group">
+                      <label htmlFor="single-tool-transport" className="form-label">文档工具传输</label>
+                      <select id="single-tool-transport" className="form-select" value={singleToolTransport}
+                        onChange={(e) => {
+                          setSingleToolTransport(e.target.value as 'local' | 'mcp');
+                          setSingleFaultProfile('none');
+                        }} disabled={isLoading}>
+                        <option value="local">本地 ToolLab</option>
+                        <option value="mcp">MCP HTTP（需启动独立 localhost 服务）</option>
+                      </select>
+                    </div>
+                  )}
                   <div className="form-group">
-                    <label htmlFor="single-token-budget" className="form-label">总 Token 预算（输入 + 输出）</label>
-                    <input id="single-token-budget" className="form-input" type="number" min={100} max={20000}
-                      value={singleTokenBudget ?? ''} placeholder="留空使用任务原预算"
-                      onChange={(e) => setSingleTokenBudget(e.target.value === '' ? null : Number(e.target.value))}
-                      disabled={isLoading} />
-                    <p className="metric-sub">真实多轮建议 8000；两种策略使用相同预算。免费通道按约 13 秒间隔发起请求，仍可能遇到账户限额。</p>
+                    <label htmlFor="single-runtime-policy" className="form-label">参数纠错策略</label>
+                    <select id="single-runtime-policy" className="form-select" value={singleRuntimeStrategy}
+                      onChange={(e) => setSingleRuntimeStrategy(e.target.value as 'handwritten' | 'handwritten_recovery')} disabled={isLoading}>
+                      <option value="handwritten">关闭：参数错误后终止</option>
+                      <option value="handwritten_recovery">开启：INVALID_ARGUMENTS 最多纠错一次</option>
+                    </select>
                   </div>
-                )}
-                </details>
-
-                <div className="config-stage-label"><span>03</span> 运行前核对</div>
-                <div className="run-review" aria-live="polite">
-                  <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
-                  <p>{currentSingleModelMeta?.name || selectedModel || '请选择模型'} · {singleRuntimeBackend === 'langgraph' ? 'LangGraph' : 'Reference'} · {singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp ? 'MCP HTTP' : '本地工具'}</p>
-                  <span>最多 {maxSteps} 步 · Token 上限 {selectedModel === 'fake'
-                    ? selectedSingleTaskMeta?.token_budget ?? '任务预算'
-                    : singleTokenBudget ?? selectedSingleTaskMeta?.token_budget ?? '任务预算'}</span>
-                  <span>参数纠错{singleRuntimeStrategy === 'handwritten_recovery' ? '开启：最多一次' : '关闭'} · {selectedModel === 'fake' ? '离线模拟，不调用真实模型' : '将发起真实模型请求'}</span>
-                </div>
-
-                <button
-                  id="run-button"
-                  className="btn-primary"
-                  onClick={handleRunEpisode}
-                  disabled={!isSingleRunReady}
-                  title={!meta ? '元数据尚未就绪' : !selectedSingleTask ? '请选择一个任务后再运行' : undefined}
-                >
-                  {isLoading ? (
+                  {selectedModel === 'fake' && (
                     <>
-                      <div className="spinner" />
-                      <span>正在运行 Episode...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>开始运行 Episode</span>
+                    <div className="form-group">
+                      <label htmlFor="scenario-select" className="form-label">Fake 模拟场景</label>
+                      <select id="scenario-select" className="form-select"
+                        value={selectedScenario}
+                        onChange={(e) => setSelectedScenario(e.target.value)}
+                        disabled={isLoading}>
+                        <option value="success">success (完整通过，答案匹配)</option>
+                        <option value="invalid-then-success">invalid-then-success (一次重试后通过)</option>
+                        <option value="wrong-answer">wrong-answer (提交错误答案)</option>
+                        <option value="invalid-arguments">invalid-arguments (工具参数校验失败)</option>
+                        <option value="max-steps">max-steps (步数超限终止)</option>
+                      </select>
+                    </div>
+                    {selectedSuite === 'tool_lab_core' && (
+                      <div className="form-group">
+                        <label htmlFor="single-fault-profile" className="form-label">受控故障</label>
+                        <select id="single-fault-profile" className="form-select" value={
+                          singleToolTransport === 'mcp'
+                            ? singleFaultProfile === 'mcp_disconnect' ? 'mcp_disconnect' : 'none'
+                            : singleFaultProfile === 'mcp_disconnect' ? 'none' : singleFaultProfile
+                        } onChange={(e) => setSingleFaultProfile(e.target.value)} disabled={isLoading}>
+                          <option value="none">无注入</option>
+                          {singleToolTransport === 'mcp'
+                            ? <option value="mcp_disconnect">MCP 连接中断</option>
+                            : <>
+                              <option value="tool_timeout">工具超时</option>
+                              <option value="empty_result">查询空结果</option>
+                            </>}
+                        </select>
+                        <p className="metric-sub">仅 Fake 工程演示；产物记录故障配置。</p>
+                      </div>
+                    )}
                     </>
                   )}
-                </button>
-                {isLoading && (
-                  <p className="loading-note" role="status" aria-live="polite">
-                    {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
-                  </p>
-                )}
-
-                {resumableEpisodeIds.length > 0 && (
-                  <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
-                    <div className="form-label">待恢复的 ToolLab 运行</div>
-                    <p className="metric-sub">仅列出上次后端进程留下的运行。中断中的模型请求可能重新发送并产生额外用量。</p>
-                    {resumableEpisodeIds.map((id) => (
-                      <button key={id} className="btn-secondary" disabled={isLoading}
-                        style={{ display: 'block', width: '100%', marginTop: '0.4rem', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                        onClick={() => handleResumeEpisode(id)}>
-                        恢复 {id}
-                      </button>
-                    ))}
+                  <div className="form-group">
+                    <label htmlFor="steps-input" className="form-label">步数上限 (Max Steps)</label>
+                    <input id="steps-input" type="number" className="form-input" min={1} max={20}
+                      value={maxSteps}
+                      onChange={(e) => setMaxSteps(parseInt(e.target.value, 10) || 6)}
+                      disabled={isLoading} />
                   </div>
-                )}
+                  {selectedModel !== 'fake' && (
+                    <div className="form-group">
+                      <label htmlFor="single-token-budget" className="form-label">总 Token 预算（输入 + 输出）</label>
+                      <input id="single-token-budget" className="form-input" type="number" min={100} max={20000}
+                        value={singleTokenBudget ?? ''} placeholder="留空使用任务原预算"
+                        onChange={(e) => setSingleTokenBudget(e.target.value === '' ? null : Number(e.target.value))}
+                        disabled={isLoading} />
+                      <p className="metric-sub">真实多轮建议 8000；两种策略使用相同预算。免费通道仍可能遇到账户限额。</p>
+                    </div>
+                  )}
+                </details>
 
-                {/* Recent Runs */}
-                {recentEpisodeIds.length > 0 && (
-                  <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-                      最近运行历史：
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                      {recentEpisodeIds.map((rid) => (
-                        <button
-                          key={rid}
-                          className="btn-secondary"
-                          style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                          onClick={() => loadEpisodeById(rid)}
-                        >
-                          {rid}
-                        </button>
-                      ))}
-                    </div>
+                    </section>
                   </div>
-                )}
-              </section>
+                </div>
+              </details>
 
               {/* Right Column: Single Episode Result + Trace View */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -1991,12 +2314,12 @@ export default function App() {
                         <div className="metric-box">
                           <div className="metric-label">数据集 / 评分协议</div>
                           <div className="metric-value" style={{ fontSize: '0.95rem' }}>
-                            {artifact.task.evaluator_config.suite === 'bfcl_adapted'
-                              ? 'BFCL 改编子集'
+                            {String(artifact.task.evaluator_config.suite ?? '').startsWith('bfcl_')
+                              ? `BFCL ${artifact.task.evaluator_config.suite === 'bfcl_java_adapted' ? 'Java ' : ''}改编子集`
                               : '原生 ToolLab'}
                           </div>
                           <div className="metric-sub">
-                            {artifact.task.evaluator_config.suite === 'bfcl_adapted'
+                            {String(artifact.task.evaluator_config.suite ?? '').startsWith('bfcl_')
                               ? `AgentLabyrinth-adapted subset · ${String(artifact.task.evaluator_config.source_case_id ?? artifact.task.name)}`
                               : artifact.task.name}
                           </div>
@@ -2072,9 +2395,8 @@ export default function App() {
                       </div>
                     </div>
                   ) : (
-                    <div className="empty-state">
-                      <div className="empty-icon">尚无运行结果</div>
-                      <div>请在左侧选择模型并点击“开始运行 Episode”，或输入已有 ID 查看历史结果。</div>
+                    <div className="empty-state compact-empty">
+                      <div>运行完成后，评测指标与只读 Trace 会显示在这里。</div>
                     </div>
                   )}
                 </section>
@@ -2082,7 +2404,7 @@ export default function App() {
                 {/* Trace Timeline */}
                 <section className="card" id="trace-panel">
                   <div className="card-title">
-                    <span>Trace Replay</span>
+                    <span>{liveRun ? '实时 Trace' : 'Trace Replay'}</span>
                     {artifact && (
                       <span className="badge" style={{ fontFamily: 'var(--font-mono)' }}>
                         {artifact.events.length} 个事件
@@ -2090,10 +2412,21 @@ export default function App() {
                     )}
                   </div>
                   <div className="card-desc">
-                    仅回放已保存的事件和环境快照，不重新请求模型或执行工具。
+                    {liveRun ? '节点只随已记录的事件出现；结束后保存完整产物供只读回放。'
+                      : '仅回放已保存的事件和环境快照，不重新请求模型或执行工具。'}
                   </div>
 
-                  {artifact && artifact.events.length > 0 ? (
+                  {liveRun ? (
+                    <>
+                      <p className="loading-note" role="status">
+                        {liveRun.status === 'running' ? '正在接收真实 Trace 事件。' : '实时连接已中断，后端运行状态未知。'}
+                        {liveRun.episodeId && ` Episode ID：${liveRun.episodeId}`}
+                      </p>
+                      {liveRun.events.length > 0 && <McpFlowReplay live events={liveRun.events}
+                        environmentVersion={liveRun.environmentVersion} model={liveRun.model}
+                        finalState={{}} termination={liveRun.status === 'running' ? '运行中' : '连接中断'} detail="" />}
+                    </>
+                  ) : artifact && artifact.events.length > 0 ? (
                     <>
                       <div className="view-switch flow-switch" data-active={replayView} aria-label="Replay 视图">
                         <button type="button" className={replayView === 'flow' ? 'active' : ''}
@@ -2402,6 +2735,59 @@ export default function App() {
                 </section>
               </div>
             </div>
+            {resumableEpisodeIds.length > 0 && (
+              <section className="card resumable-panel" aria-labelledby="resumable-title">
+                <div className="card-title" id="resumable-title">待恢复的单次运行</div>
+                <p className="card-desc">
+                  仅列出上次后端进程留下的运行。恢复可能重新发送中断中的模型请求并产生额外用量。
+                </p>
+                <div className="resumable-list">
+                  {resumableEpisodeIds.map((id) => (
+                    <button key={id} className="btn-secondary" disabled={isLoading}
+                      onClick={() => handleResumeEpisode(id)}>
+                      恢复 Episode <code>{id}</code>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+            {recentEpisodeIds.length > 0 && (
+              <section className="card recent-episodes" aria-labelledby="recent-episodes-title">
+                <div className="card-title" id="recent-episodes-title">最近运行</div>
+                <p className="card-desc">历史条目仅通过 GET 回读；切换历史产物不会发起新运行。</p>
+                <div className="recent-episode-list">
+                  {recentEpisodeIds.map((id) => {
+                    const summary = episodeHistorySummaries[id];
+                    const status = summary?.status === 'ready'
+                      ? summary.success === undefined ? '结果未记录' : summary.success ? '评测通过' : '评测未通过'
+                      : summary?.status === 'error' ? '摘要暂不可用' : '读取摘要中';
+                    const statusClass = summary?.status === 'ready'
+                      ? summary.success === undefined ? 'badge' : summary.success ? 'badge-green' : 'badge-red'
+                      : 'badge';
+                    const parsedTime = summary?.timestamp ? new Date(summary.timestamp) : null;
+                    const time = parsedTime && !Number.isNaN(parsedTime.getTime())
+                      ? parsedTime.toLocaleString() : '时间未记录';
+                    return (
+                      <article className="recent-episode-row" key={id}>
+                        <button type="button" className="recent-episode-open"
+                          onClick={() => loadEpisodeById(id)} disabled={isLoading}>
+                          <span className="recent-episode-main">
+                            <strong>{summary?.taskName ?? '读取历史 Episode'}</strong>
+                            <span>{summary?.modelId ?? (summary?.status === 'error' ? '无法读取摘要' : '模型信息读取中')} · {time}</span>
+                          </span>
+                          <span className={`badge ${statusClass}`}>{status}</span>
+                        </button>
+                        <button type="button" className="btn-secondary recent-episode-copy"
+                          aria-label={`复制 Episode ID ${id}`}
+                          onClick={async () => setCopyNotice(await copyTextToClipboard(id, 'Episode ID'))}>
+                          复制 ID
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
           </div>
         )}
       </main>
