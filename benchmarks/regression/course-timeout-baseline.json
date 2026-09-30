@@ -1,0 +1,200 @@
+{
+  "schema_version": "1.2",
+  "experiment_id": "39ab1e00-aa1f-416c-ab65-c717f030117e",
+  "created_at": "2026-09-30T02:10:06.427096+00:00",
+  "config": {
+    "comparison_axis": "runtime_backend",
+    "arm_labels": {
+      "baseline": "Reference Runtime",
+      "recovery": "LangGraph Runtime"
+    },
+    "baseline_agent": {
+      "id": "b1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+      "name": "baseline-m0",
+      "version": "1.0.0",
+      "runtime_strategy": "handwritten_recovery",
+      "runtime_backend": "handwritten",
+      "runtime_version": "reference-v2",
+      "recovery_policy": "invalid_arguments_once"
+    },
+    "recovery_agent": {
+      "id": "4d34e747-c9c0-47ce-8831-a61407d74906",
+      "name": "baseline-m0-langgraph",
+      "version": "1.0.0",
+      "runtime_strategy": "handwritten_recovery",
+      "runtime_backend": "langgraph",
+      "runtime_version": "1.2.12",
+      "recovery_policy": "invalid_arguments_once"
+    },
+    "model": {
+      "provider": "fake",
+      "model": "fake-model",
+      "temperature": 0.0,
+      "max_tokens": null
+    },
+    "prompt_version": "v1.0.0",
+    "tool_set_version": "v1.0.0",
+    "budget": {
+      "schema_version": "1.0",
+      "max_steps": 6,
+      "max_model_calls": 6,
+      "max_tool_calls": 5,
+      "max_prompt_tokens": 1000,
+      "max_completion_tokens": 1000,
+      "max_estimated_cost": "1"
+    },
+    "tasks": [
+      {
+        "id": "da6dcb41-d04e-42ea-8372-0e1b382f1ec6",
+        "name": "order-status-001",
+        "version": "1.0.0",
+        "max_steps": 6,
+        "token_budget": 1000,
+        "evaluator_config": {
+          "name": "order_status_v1",
+          "split": "development",
+          "origin": "native",
+          "fault_profile": "tool_timeout"
+        }
+      },
+      {
+        "id": "d9e1f305-b7c9-4da1-9234-56789abcdef0",
+        "name": "order-status-007",
+        "version": "1.0.0",
+        "max_steps": 6,
+        "token_budget": 1200,
+        "evaluator_config": {
+          "name": "order_status_v1",
+          "split": "development",
+          "origin": "native",
+          "fault_profile": "tool_timeout"
+        }
+      }
+    ],
+    "evaluator": "order_status_v1",
+    "environment_version": "tool-lab-m0-v1",
+    "seed": 1,
+    "seeds": [
+      1
+    ],
+    "repeat_count": 1,
+    "provider": "fake",
+    "requested_model": "fake-model",
+    "scenario": "success",
+    "token_budget": null,
+    "task_ids": [
+      "order-status-001",
+      "order-status-007"
+    ],
+    "baseline_strategy": "handwritten_recovery",
+    "recovery_strategy": "handwritten_recovery",
+    "baseline_backend": "handwritten",
+    "recovery_backend": "langgraph",
+    "fault_profile": "tool_timeout",
+    "max_reference_cost_usd": null,
+    "reference_price_version": null
+  },
+  "config_hash": "9f4cc34fdb5e3dadba11a91e776a8f6b08f5699b395d6128c0c6ba4e45ef22b7",
+  "episode_ids": [
+    "52a59961-fc8d-5808-acba-982740ffbb98",
+    "e04ca0f0-e5c7-5b66-8dc5-bc1fdb93e33e",
+    "0e03e2c1-b234-52fc-8c0c-5da3e1a44a20",
+    "9bc86084-713b-591a-983f-4486f900bf1f"
+  ],
+  "pairs": [
+    {
+      "task_id": "order-status-001",
+      "task_name": "order-status-001",
+      "seed": 1,
+      "repeat_index": 1,
+      "baseline_episode_id": "52a59961-fc8d-5808-acba-982740ffbb98",
+      "baseline_success": false,
+      "baseline_termination_reason": "FAILED",
+      "baseline_steps": 1,
+      "baseline_tokens": 60,
+      "baseline_duration_ms": 9,
+      "baseline_cost": "0.001",
+      "baseline_reference_cost": null,
+      "baseline_model_calls": 1,
+      "baseline_tool_calls": 1,
+      "baseline_tool_selection_accuracy": 1.0,
+      "baseline_tool_argument_validity_rate": 1.0,
+      "recovery_episode_id": "e04ca0f0-e5c7-5b66-8dc5-bc1fdb93e33e",
+      "recovery_success": false,
+      "recovery_termination_reason": "FAILED",
+      "recovery_steps": 1,
+      "recovery_tokens": 60,
+      "recovery_duration_ms": 14,
+      "recovery_cost": "0.001",
+      "recovery_reference_cost": null,
+      "recovery_model_calls": 1,
+      "recovery_tool_calls": 1,
+      "recovery_tool_selection_accuracy": 1.0,
+      "recovery_tool_argument_validity_rate": 1.0,
+      "retry_eligible": null,
+      "recovered": false
+    },
+    {
+      "task_id": "order-status-007",
+      "task_name": "order-status-007",
+      "seed": 1,
+      "repeat_index": 1,
+      "baseline_episode_id": "0e03e2c1-b234-52fc-8c0c-5da3e1a44a20",
+      "baseline_success": false,
+      "baseline_termination_reason": "FAILED",
+      "baseline_steps": 1,
+      "baseline_tokens": 60,
+      "baseline_duration_ms": 8,
+      "baseline_cost": "0.001",
+      "baseline_reference_cost": null,
+      "baseline_model_calls": 1,
+      "baseline_tool_calls": 1,
+      "baseline_tool_selection_accuracy": 1.0,
+      "baseline_tool_argument_validity_rate": 1.0,
+      "recovery_episode_id": "9bc86084-713b-591a-983f-4486f900bf1f",
+      "recovery_success": false,
+      "recovery_termination_reason": "FAILED",
+      "recovery_steps": 1,
+      "recovery_tokens": 60,
+      "recovery_duration_ms": 13,
+      "recovery_cost": "0.001",
+      "recovery_reference_cost": null,
+      "recovery_model_calls": 1,
+      "recovery_tool_calls": 1,
+      "recovery_tool_selection_accuracy": 1.0,
+      "recovery_tool_argument_validity_rate": 1.0,
+      "retry_eligible": null,
+      "recovered": false
+    }
+  ],
+  "metrics": {
+    "total_pairs": 2,
+    "baseline_success_count": 0,
+    "recovery_success_count": 0,
+    "baseline_success_rate": 0.0,
+    "recovery_success_rate": 0.0,
+    "retry_eligible_count": null,
+    "retry_recovery_count": null,
+    "retry_recovery_rate": null,
+    "baseline_total_tokens": 120,
+    "recovery_total_tokens": 120,
+    "baseline_avg_steps": 1.0,
+    "recovery_avg_steps": 1.0,
+    "baseline_avg_model_calls": 1.0,
+    "recovery_avg_model_calls": 1.0,
+    "baseline_avg_tool_calls": 1.0,
+    "recovery_avg_tool_calls": 1.0,
+    "baseline_tool_selection_accuracy": 1.0,
+    "recovery_tool_selection_accuracy": 1.0,
+    "baseline_tool_argument_validity_rate": 1.0,
+    "recovery_tool_argument_validity_rate": 1.0,
+    "baseline_avg_duration_ms": 8.5,
+    "recovery_avg_duration_ms": 13.5,
+    "baseline_total_cost": "0.002",
+    "recovery_total_cost": "0.002",
+    "is_cost_known": true,
+    "baseline_total_reference_cost": null,
+    "recovery_total_reference_cost": null,
+    "is_reference_cost_known": false
+  }
+}

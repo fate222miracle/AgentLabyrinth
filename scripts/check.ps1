@@ -12,6 +12,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Type checking failed' }
     uv --cache-dir .uv-cache run --locked pytest -q --basetemp artifacts/pytest-temp
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
+    foreach ($regressionName in @('course-smoke', 'course-four-categories', 'course-runtime', 'course-timeout')) {
+        uv --cache-dir .uv-cache run --locked python -m scripts.run_regression "benchmarks/regression/$regressionName.json"
+        if ($LASTEXITCODE -ne 0) { throw "Fixed-suite regression failed: $regressionName" }
+    }
 } finally {
     Pop-Location
 }

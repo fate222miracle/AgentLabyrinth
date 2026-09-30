@@ -4,6 +4,7 @@ from collections.abc import Callable
 from time import perf_counter
 from typing import cast
 
+from packages.application.reference_pricing import official_reference_cost
 from packages.application.trace import JsonTraceRecorder, content_hash
 from packages.domain.models import (
     AgentSpec,
@@ -125,6 +126,15 @@ async def run_episode(
         parent_event_id=recorder.events[-1].event_id,
         duration_ms=int((perf_counter() - started) * 1000),
     )
+    responded = sum(event.event_type == EventType.MODEL_RESPONDED for event in recorder.events)
+    reference_cost = (
+        official_reference_cost(agent.model.model, episode.token_usage)
+        if agent.model.provider == "aihubmix"
+        and episode.model_call_count > 0
+        and responded == episode.model_call_count
+        and evaluation.metrics.get("usage_complete") is not False
+        else None
+    )
     return EpisodeArtifact(
         agent=agent,
         task=task,
@@ -137,4 +147,5 @@ async def run_episode(
         episode=episode,
         evaluation=evaluation,
         events=recorder.events,
+        reference_cost=reference_cost,
     )

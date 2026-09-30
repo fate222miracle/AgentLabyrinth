@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -139,8 +140,21 @@ def write_artifact(artifact: EpisodeArtifact, path: Path) -> None:
     safe = sanitize(artifact.model_dump(mode="json"))
     serialized = json.dumps(safe, ensure_ascii=False, indent=2)
     EpisodeArtifact.model_validate_json(serialized)
+    write_text_atomically(path, serialized + "\n")
+
+
+def write_text_atomically(path: Path, content: str) -> None:
+    """Publish a complete UTF-8 artifact without exposing a partial final file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(serialized + "\n", encoding="utf-8")
+    temporary = path.with_name(f".{path.stem}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def read_artifact(path: Path) -> EpisodeArtifact:

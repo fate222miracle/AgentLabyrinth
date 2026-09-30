@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic, time_ns
 from uuid import UUID, uuid4
@@ -12,6 +13,7 @@ from apps.api.schemas import (
     CreateExperimentRequest,
     ExperimentDashboardItem,
     ExperimentDashboardResponse,
+    ExperimentJobState,
     FaultProfile,
     MetaResponse,
     ModelOption,
@@ -25,14 +27,17 @@ from packages.application.checkpoint import (
 )
 from packages.application.experiment import (
     ExperimentArtifact,
+    compute_config_hash,
     experiment_checkpoint_path,
     read_experiment,
     read_experiment_checkpoint,
     run_experiment,
 )
-from packages.application.trace import read_artifact
+from packages.application.reference_pricing import reference_price_version
+from packages.application.regression import fixed_config
+from packages.application.trace import read_artifact, write_text_atomically
 from packages.domain.models import AgentSpec, EpisodeArtifact, RunConfig, TaskSpec, TraceEvent
-from packages.domain.ports import Environment, Evaluator, ModelProvider
+from packages.domain.ports import Environment, Evaluator, ModelProvider, ToolValidator
 from packages.environments.bfcl.adapter import ROOT as BFCL_ROOT
 from packages.environments.bfcl.adapter import BFCLAdapter
 from packages.environments.bfcl.environment import BFCLEnvironment
@@ -56,6 +61,14 @@ DEFAULT_MODELS_PATH = ROOT / "benchmarks/tool_lab_core/models.json"
 DEFAULT_AIHUBMIX_AGENT = ROOT / "benchmarks/tool_lab_core/agents/aihubmix-m1.json"
 DEFAULT_FAKE_AGENT = ROOT / "benchmarks/tool_lab_core/agents/baseline-m0.json"
 DEFAULT_RECOVERY_AGENT = ROOT / "benchmarks/tool_lab_core/agents/recovery-m1.json"
+
+
+class ExperimentJobStopped(Exception):
+    """A user requested a stop at an Experiment Episode boundary."""
+
+    def __init__(self, action: str) -> None:
+        self.action = action
+        super().__init__(action)
 
 
 class EpisodeService:
@@ -83,6 +96,104 @@ class EpisodeService:
         self._started_ns = time_ns()
         self._resuming: set[UUID] = set()
         self._resuming_experiments: set[UUID] = set()
+
+    def _job_path(self, experiment_id: UUID) -> Path:
+        return self.artifacts_dir / "experiments" / "jobs" / f"{experiment_id}.json"
+
+    def get_experiment_job(self, experiment_id: UUID) -> ExperimentJobState | None:
+        """Read a saved job without executing an Experiment."""
+        path = self._job_path(experiment_id)
+        if not path.is_file():
+            return None
+        state = ExperimentJobState.model_validate_json(path.read_text(encoding="utf-8"))
+        if state.experiment_id != experiment_id:
+            raise ValueError("Experiment job ID mismatch")
+        return state
+
+    def resumable_experiment_job_ids(self) -> list[UUID]:
+        """Find stopped local jobs with a valid saved plan and no complete result."""
+        result: list[UUID] = []
+        for path in (self.artifacts_dir / "experiments" / "jobs").glob("*.json"):
+            try:
+                experiment_id = UUID(path.stem)
+                state = self.get_experiment_job(experiment_id)
+                if state is None or state.status in {"completed", "cancelled", "failed"}:
+                    continue
+                if not experiment_checkpoint_path(self.artifacts_dir, experiment_id).is_file():
+                    continue
+                try:
+                    final = self.get_experiment(experiment_id)
+                except ValueError:
+                    final = None
+                if final is None:
+                    result.append(experiment_id)
+            except (OSError, ValueError):
+                continue
+        return sorted(result)
+
+    def _save_job(self, state: ExperimentJobState) -> ExperimentJobState:
+        write_text_atomically(
+            self._job_path(state.experiment_id), state.model_dump_json(indent=2) + "\n"
+        )
+        return state
+
+    def reserve_experiment_job(self, experiment_id: UUID) -> ExperimentJobState:
+        """Claim a new ID before queueing any work or invoking a model."""
+        if (
+            self._job_path(experiment_id).exists()
+            or experiment_checkpoint_path(self.artifacts_dir, experiment_id).exists()
+            or (self.artifacts_dir / "experiments" / f"{experiment_id}.json").exists()
+        ):
+            raise ValueError("Experiment ID already exists")
+        return self._save_job(
+            ExperimentJobState(
+                experiment_id=experiment_id,
+                status="queued",
+                updated_at=datetime.now(UTC).isoformat(),
+            )
+        )
+
+    def update_experiment_job(
+        self,
+        experiment_id: UUID,
+        *,
+        status: str | None = None,
+        requested_action: str | None = None,
+        error_code: str | None = None,
+    ) -> ExperimentJobState:
+        """Persist one local job transition atomically."""
+        current = self.get_experiment_job(experiment_id)
+        if current is None:
+            raise ValueError("Experiment job does not exist")
+        data = current.model_dump()
+        if status is not None:
+            data["status"] = status
+        data["requested_action"] = requested_action
+        data["error_code"] = error_code
+        data["updated_at"] = datetime.now(UTC).isoformat()
+        return self._save_job(ExperimentJobState.model_validate(data))
+
+    def request_experiment_action(self, experiment_id: UUID, action: str) -> ExperimentJobState:
+        """Request pause or cancel; the runner applies it at its next safe boundary."""
+        if action not in {"pause", "cancel"}:
+            raise ValueError("Unknown experiment action")
+        current = self.get_experiment_job(experiment_id)
+        if current is None or current.status not in {"queued", "running", "paused", "interrupted"}:
+            raise ValueError("Experiment job cannot be controlled in its current state")
+        if current.status in {"paused", "interrupted"}:
+            if action != "cancel":
+                raise ValueError("Only cancellation is available for a stopped job")
+            return self.update_experiment_job(experiment_id, status="cancelled")
+        return self.update_experiment_job(
+            experiment_id, status=current.status, requested_action=action
+        )
+
+    def _check_experiment_action(self, experiment_id: UUID) -> None:
+        state = self.get_experiment_job(experiment_id)
+        if state is None:
+            raise ValueError("Experiment job disappeared")
+        if state.requested_action is not None:
+            raise ExperimentJobStopped(state.requested_action)
 
     def _get_live_model_ids(self) -> set[str]:
         """Cache the API-key-scoped model catalog briefly to keep metadata responsive."""
@@ -383,7 +494,10 @@ class EpisodeService:
         )
 
         # 4. Execute episode
-        return await run_checkpointed_episode(
+        episode_id = uuid4()
+        if req.provider == "fake":
+            self._save_fake_scenario(episode_id, req.scenario or "success")
+        artifact = await run_checkpointed_episode(
             agent,
             task,
             run_config,
@@ -393,7 +507,9 @@ class EpisodeService:
             self.artifacts_dir,
             fake_scenario=(req.scenario or "success") if req.provider == "fake" else None,
             on_event=on_event,
+            episode_id=episode_id,
         )
+        return artifact
 
     def get_episode(self, episode_id: UUID) -> EpisodeArtifact | None:
         """Strictly read previously saved artifact from disk without invoking any model."""
@@ -409,11 +525,15 @@ class EpisodeService:
         for path in store.directory.glob("*.json"):
             try:
                 episode_id = UUID(path.stem)
-                if (
-                    path.stat().st_mtime_ns < self._started_ns
-                    and not (self.artifacts_dir / f"{episode_id}.json").is_file()
-                    and episode_id not in self._resuming
-                ):
+                final_path = self.artifacts_dir / f"{episode_id}.json"
+                if final_path.is_file():
+                    try:
+                        read_artifact(final_path)
+                    except ValueError:
+                        pass
+                    else:
+                        continue
+                if path.stat().st_mtime_ns < self._started_ns and episode_id not in self._resuming:
                     result.append(episode_id)
             except (ValueError, OSError):
                 continue
@@ -446,27 +566,39 @@ class EpisodeService:
                 raise ValueError("Saved model is no longer permitted")
             self._require_live_model(model_id)
             provider = AIHubMixModelProvider(min_request_interval=13.0)
-        environment_version = checkpoint.run_config.environment_version
+        environment, validator, evaluator = self._saved_environment(
+            checkpoint.task, checkpoint.run_config.environment_version
+        )
+        return await resume_checkpointed_episode(
+            episode_id,
+            create_runtime(checkpoint.agent, provider, validator),
+            environment,
+            evaluator,
+            self.artifacts_dir,
+        )
+
+    def _saved_environment(
+        self, task: TaskSpec, environment_version: str
+    ) -> tuple[Environment, ToolValidator, Evaluator]:
+        """Reconstruct one pinned environment for resume or explicit rerun."""
         if environment_version == "bfcl-adapted-single-call-v1":
-            suite = checkpoint.task.evaluator_config.get("suite")
+            suite = task.evaluator_config.get("suite")
             adapter = self.bfcl_java if suite == "bfcl_java_adapted" else self.bfcl
-            case, loaded_task = adapter.case_for_task(checkpoint.task.name)
+            case, loaded_task = adapter.case_for_task(task.name)
             expected_task = (
-                self._with_token_budget(loaded_task, checkpoint.task.token_budget)
-                if "source_token_budget" in checkpoint.task.evaluator_config
+                self._with_token_budget(loaded_task, task.token_budget)
+                if "source_token_budget" in task.evaluator_config
                 else loaded_task
             )
-            if expected_task != checkpoint.task:
-                raise ValueError("BFCL source changed since checkpoint")
+            if expected_task != task:
+                raise ValueError("BFCL source changed since the original Episode")
             bfcl_environment = BFCLEnvironment(case)
             environment: Environment = bfcl_environment
             validator = bfcl_environment.validator
             evaluator: Evaluator = BFCLEvaluator()
         elif environment_version == "tool-lab-mcp-v1":
             environment = MCPToolLabEnvironment(
-                MCP_DISCONNECTED_URL
-                if checkpoint.task.initial_state.get("mcp_disconnect")
-                else None
+                MCP_DISCONNECTED_URL if task.initial_state.get("mcp_disconnect") else None
             )
             validator = environment._validator
             evaluator = OrderStatusEvaluator()
@@ -479,15 +611,88 @@ class EpisodeService:
             evaluator = OrderStatusEvaluator()
         else:
             raise ValueError("Unsupported checkpoint environment")
-        return await resume_checkpointed_episode(
-            episode_id,
-            create_runtime(checkpoint.agent, provider, validator),
+        return environment, validator, evaluator
+
+    def _saved_fake_scenario(self, episode_id: UUID) -> str:
+        """Recover a Fake scenario from saved single-run or paired provenance."""
+        input_path = self.artifacts_dir / "episode-inputs" / f"{episode_id}.json"
+        if input_path.is_file():
+            data = json.loads(input_path.read_text(encoding="utf-8"))
+            if data.get("schema_version") != "1.0" or data.get("episode_id") != str(episode_id):
+                raise ValueError("Episode input provenance mismatch")
+            scenario = data.get("scenario")
+        else:
+            scenario = None
+            for path in (self.artifacts_dir / "experiments").glob("*.json"):
+                try:
+                    experiment = read_experiment(path)
+                except (OSError, ValueError):
+                    continue
+                if episode_id in experiment.episode_ids:
+                    scenario = experiment.config.get("scenario")
+                    break
+        if scenario not in ALLOWED_FAKE_SCENARIOS:
+            raise ValueError("Saved Fake scenario is unavailable")
+        return str(scenario)
+
+    def _save_fake_scenario(self, episode_id: UUID, scenario: str) -> None:
+        """Persist only public Fake scenario metadata before an Episode starts."""
+        source = {"schema_version": "1.0", "episode_id": str(episode_id), "scenario": scenario}
+        write_text_atomically(
+            self.artifacts_dir / "episode-inputs" / f"{episode_id}.json",
+            json.dumps(source, indent=2) + "\n",
+        )
+
+    async def rerun_failed_episode(self, episode_id: UUID) -> EpisodeArtifact:
+        """Run a failed saved Episode under its exact Agent, Task and RunConfig."""
+        source = self.get_episode(episode_id)
+        if source is None:
+            raise FileNotFoundError("Source Episode not found")
+        if source.evaluation.success:
+            raise ValueError("Only failed Episodes may be rerun")
+        model = source.agent.model
+        if model.provider == "fake":
+            scenario = self._saved_fake_scenario(episode_id)
+            provider: ModelProvider = FakeModelProvider(scenario=scenario)
+        else:
+            if not is_model_permitted(model.model, self._configured_model_ids()):
+                raise ValueError("Saved model is no longer permitted")
+            self._require_live_model(model.model)
+            scenario = None
+            provider = AIHubMixModelProvider(min_request_interval=13.0)
+        environment, validator, evaluator = self._saved_environment(
+            source.task, source.run_config.environment_version
+        )
+        rerun_id = uuid4()
+        if scenario is not None:
+            self._save_fake_scenario(rerun_id, scenario)
+        artifact = await run_checkpointed_episode(
+            source.agent,
+            source.task,
+            source.run_config,
+            create_runtime(source.agent, provider, validator),
             environment,
             evaluator,
             self.artifacts_dir,
+            fake_scenario=scenario,
+            episode_id=rerun_id,
         )
+        lineage = {
+            "schema_version": "1.0",
+            "source_episode_id": str(episode_id),
+            "rerun_episode_id": str(artifact.episode.episode_id),
+            "source_config_hashes": source.config_hashes,
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        write_text_atomically(
+            self.artifacts_dir / "reruns" / f"{artifact.episode.episode_id}.json",
+            json.dumps(lineage, indent=2) + "\n",
+        )
+        return artifact
 
-    async def execute_experiment(self, req: CreateExperimentRequest) -> ExperimentArtifact:
+    async def execute_experiment(
+        self, req: CreateExperimentRequest, *, job_id: UUID | None = None
+    ) -> ExperimentArtifact:
         """Run a paired policy or runtime comparison and persist its artifact."""
         if not req.task_ids:
             raise ValueError("Experiment requires at least one task ID")
@@ -498,6 +703,10 @@ class EpisodeService:
             req.provider != "fake" or req.fault_profile == "mcp_disconnect"
         ):
             raise ValueError("Experiment fault injection supports local Fake ToolLab only")
+        if req.max_reference_cost_usd is not None and (
+            req.provider != "aihubmix" or reference_price_version(req.model) is None
+        ):
+            raise ValueError("Reference USD budget requires a priced real model")
 
         # 1. Load tasks
         tasks = [
@@ -608,6 +817,12 @@ class EpisodeService:
             "recovery_backend": recovery_agent.runtime_backend,
             "comparison_axis": req.comparison_axis,
             "fault_profile": req.fault_profile,
+            "max_reference_cost_usd": (
+                str(req.max_reference_cost_usd) if req.max_reference_cost_usd is not None else None
+            ),
+            "reference_price_version": (
+                reference_price_version(req.model) if req.provider == "aihubmix" else None
+            ),
         }
 
         return await run_experiment(
@@ -621,6 +836,8 @@ class EpisodeService:
             artifacts_dir=self.artifacts_dir,
             config_metadata=config_metadata,
             comparison_axis=req.comparison_axis,
+            experiment_id=job_id,
+            before_arm=(lambda: self._check_experiment_action(job_id)) if job_id else None,
         )
 
     def get_experiment(self, experiment_id: UUID) -> ExperimentArtifact | None:
@@ -639,7 +856,21 @@ class EpisodeService:
                 artifact = read_experiment(path)
                 if path.stem != str(artifact.experiment_id):
                     raise ValueError("Experiment file ID mismatch")
+                if compute_config_hash(artifact.config) != artifact.config_hash:
+                    raise ValueError("Experiment configuration hash mismatch")
                 metrics = artifact.metrics
+                if metrics.total_pairs != len(artifact.pairs):
+                    raise ValueError("Experiment pair count mismatch")
+                try:
+                    comparison_key = compute_config_hash(fixed_config(artifact))
+                except ValueError:
+                    comparison_key = None  # Legacy records retain detail access, without trends.
+                config = artifact.config
+                model = config.get("model")
+                model_id = model.get("model") if isinstance(model, dict) else model
+                provider = (
+                    model.get("provider") if isinstance(model, dict) else config.get("provider")
+                )
                 items.append(
                     ExperimentDashboardItem(
                         experiment_id=artifact.experiment_id,
@@ -660,6 +891,17 @@ class EpisodeService:
                         recovery_avg_duration_ms=metrics.recovery_avg_duration_ms,
                         baseline_total_cost=metrics.baseline_total_cost,
                         recovery_total_cost=metrics.recovery_total_cost,
+                        model_id=model_id if isinstance(model_id, str) else None,
+                        provider=provider if isinstance(provider, str) else None,
+                        task_ids=list(dict.fromkeys(pair.task_id for pair in artifact.pairs)),
+                        seeds=config.get("seeds", []),
+                        repeat_count=config.get("repeat_count"),
+                        scenario=config.get("scenario"),
+                        fault_profile=config.get("fault_profile"),
+                        comparison_key=comparison_key,
+                        baseline_reference_cost=metrics.baseline_total_reference_cost,
+                        recovery_reference_cost=metrics.recovery_total_reference_cost,
+                        reference_price_version=config.get("reference_price_version"),
                     )
                 )
             except (OSError, ValueError):
@@ -674,10 +916,18 @@ class EpisodeService:
         for path in directory.glob("*.json"):
             try:
                 experiment_id = UUID(path.stem)
+                final_path = self.artifacts_dir / "experiments" / f"{experiment_id}.json"
+                if final_path.is_file():
+                    try:
+                        read_experiment(final_path)
+                    except ValueError:
+                        pass
+                    else:
+                        continue
                 if (
                     path.stat().st_mtime_ns < self._started_ns
-                    and self.get_experiment(experiment_id) is None
                     and experiment_id not in self._resuming_experiments
+                    and self.get_experiment_job(experiment_id) is None
                 ):
                     result.append(experiment_id)
             except (ValueError, OSError):
@@ -686,8 +936,25 @@ class EpisodeService:
 
     async def resume_experiment(self, experiment_id: UUID) -> ExperimentArtifact:
         """Continue the original paired matrix without rerunning completed arms."""
+        if self.get_experiment_job(experiment_id) is not None:
+            raise ValueError("Use the Experiment job resume endpoint")
         if experiment_id not in self.resumable_experiment_ids():
             raise ValueError("No resumable experiment exists for this API instance")
+        return await self._resume_experiment_once(experiment_id)
+
+    async def resume_experiment_job(self, experiment_id: UUID) -> ExperimentArtifact:
+        """Continue a deliberately paused or interrupted local job."""
+        job = self.get_experiment_job(experiment_id)
+        if job is None or job.status not in {"paused", "interrupted", "queued", "running"}:
+            raise ValueError("No paused or interrupted job exists")
+        if not experiment_checkpoint_path(self.artifacts_dir, experiment_id).is_file():
+            raise ValueError("Experiment plan is unavailable")
+        return await self._resume_experiment_once(experiment_id, controlled=True)
+
+    async def _resume_experiment_once(
+        self, experiment_id: UUID, *, controlled: bool = False
+    ) -> ExperimentArtifact:
+        """Rebuild providers from a validated plan, preserving completed arms."""
         self._resuming_experiments.add(experiment_id)
         try:
             state = read_experiment_checkpoint(
@@ -710,6 +977,11 @@ class EpisodeService:
             else:
                 if not is_model_permitted(model.model, self._configured_model_ids()):
                     raise ValueError("Saved model is no longer permitted")
+                saved_price_version = state.config_metadata.get("reference_price_version")
+                if saved_price_version is not None and (
+                    reference_price_version(model.model) != saved_price_version
+                ):
+                    raise ValueError("Saved Experiment reference price version changed")
                 self._require_live_model(model.model)
 
                 def provider_factory() -> ModelProvider:
@@ -730,6 +1002,9 @@ class EpisodeService:
                 comparison_axis=state.comparison_axis,
                 checkpoint_state=state,
                 resume_provider_factory=resume_provider_factory,
+                before_arm=(lambda: self._check_experiment_action(experiment_id))
+                if controlled
+                else None,
             )
         finally:
             self._resuming_experiments.discard(experiment_id)

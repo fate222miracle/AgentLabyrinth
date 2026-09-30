@@ -250,6 +250,7 @@ class EvaluationResult(Contract):
 class EpisodeArtifact(Contract):
     """Self-contained JSON artifact for M0 inspection, not a Replay product."""
 
+    schema_version: Literal["1.0", "1.1"] = "1.1"  # type: ignore[assignment]
     agent: AgentSpec
     task: TaskSpec
     run_config: RunConfig
@@ -257,3 +258,4 @@ class EpisodeArtifact(Contract):
     episode: EpisodeResult
     evaluation: EvaluationResult
     events: tuple[TraceEvent, ...]
+    reference_cost: EstimatedCost | None = None

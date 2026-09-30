@@ -161,7 +161,10 @@ async def resume_checkpointed_episode(
     """Continue one unfinished run, or return its existing final artifact."""
     artifact_path = artifacts_dir / f"{episode_id}.json"
     if artifact_path.is_file():
-        return read_artifact(artifact_path)
+        try:
+            return read_artifact(artifact_path)
+        except ValueError:
+            pass  # A legacy partial final file may be rebuilt from a valid checkpoint.
     store = CheckpointStore(artifacts_dir / "checkpoints")
     checkpoint = store.load(episode_id)
     recorder = checkpoint.validated_recorder()

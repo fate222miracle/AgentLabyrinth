@@ -1,14 +1,77 @@
 # Current state
 
-更新：2026-09-28。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+更新：2026-09-30。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+
+## 2026-09-30 Codex 复核 Copilot 补验与提交授权
+
+用户已明确授权检查通过后提交并推送最新代码。独立复核下载CSV：894字节、UTF-8 BOM、3行各21列，侧别/原Episode ID正确，网关费用为空，原厂参考金额正确。已查看768/1440、200%缩放、减少动效与404截图；当前API只读回读真实Experiment和MCP Episode均200，隔离测试Job的旧ID为404，与文档说明一致。减少动效的证据仍仅为浏览器媒体偏好模拟，没有系统级开关实测。课程现场签收不因本次代码提交自动完成。
+
+本次重新运行锁定依赖同步、Ruff format/lint（补含apps/api）、mypy82文件、pytest **203 passed**（1条既有依赖弃用警告），Web构建195 modules、前端**11/11**；四套Fake回归22单元均无退化。新报告分别为 `81b4e411-9b1f-4f13-817a-930fa71630d7`、`20ac0ca4-17e8-4222-865f-49cde6aef018`、`c9fe22ee-ea2f-4058-8d1c-c96b22eda6bf`、`87eb6dd1-bc0f-4af0-9fb1-0767e9b239a2`，保存在忽略目录的regression-reports。未新增真实模型调用。
+
+`powershell.exe -NoProfile -File scripts/check.ps1`仍被系统ExecutionPolicy拒绝；按脚本内容逐项命令复核通过，不修改执行策略。前端初次沙箱构建因子进程权限失败，普通进程复跑通过。已修正文档中的CSV待验旧结论；后续继续准备课程演示，必要时新建暂停/恢复演示Job。本文将随本次提交同步；推送状态以Git远端为准，下面保留此前未提交阶段的历史记录。
+
+交接入口：[V0.2 验收记录的 Copilot 接手任务卡](V0.2-acceptance-review-20260930.md#copilot-接手任务卡)。本次已用普通 Edge 下载并验证21列 CSV，补测 768/1440px、真实浏览器200%缩放、减少动效媒体偏好与历史读取失败；课程演示操作顺序及可回读产物已补入验收记录。当前 HEAD `956437f`；仓库原有实现与文档改动仍未提交，本次不提交/推送，也未调用真实模型。`./scripts/check.ps1` 被 PowerShell ExecutionPolicy 阻止；未绕过策略，改为直接运行脚本内锁定的质量检查命令，结果全部通过。暂停/取消的旧临时 Job ID 当前不可回读，现场演示与用户签收仍待完成。
+
+## 2026-09-30 Copilot 接续实机补验
+
+- 普通浏览器打开 `http://127.0.0.1:5173/?experiment_id=ce712291-37da-45b1-af4c-abb86f5b3116`，下载到 `C:\Users\Netlab\Downloads\agentlabyrinth-experiment-ce712291-37da-45b1-af4c-abb86f5b3116.csv`（894 bytes）。UTF-8 BOM 存在；表头加两条 Episode 数据共 3 行，每行 21 列。`cost_usd` 两侧为空，`official_reference_cost_usd` 为 `0.0008154` / `0.0010038`，侧别为 `baseline` / `recovery`；下载名、CSV 转义及真实浏览器落盘均已核对。
+- 普通 Edge 视口复核：768×1000 时页面宽 753px、数据表在局部滚动容器内；1440×1000 时页面宽 1425px、成对表完整显示。Edge 通过实际 Ctrl+Plus 缩放到 200%（DPR 2、CSS 视口 460×464），页面宽 453px，无页面级横向溢出，成对表保留局部横向滚动；Tab 焦点轮廓为 3px 实线。`prefers-reduced-motion: reduce` 使用浏览器媒体偏好模拟验证，匹配为 true，按钮 transition/animation 为 `1e-05s`。此项不是 Windows 系统辅助功能开关的 OS 级验收。
+- 保存截图：`artifacts/ui-check/v02-final-edge-768.png`、`v02-final-edge-1440.png`、`v02-final-edge-200pct.png`、`v02-final-edge-reduced-motion.png`、`v02-final-edge-error-200pct.png`。200% 下不存在的 Experiment 返回 404，并显示明确的“未能找到 Experiment …”错误；页面无整体横向溢出。
+- 真实 MCP Episode `603b2362-2006-42e7-997c-7bd2804d84dc` 通过 URL `?episode_id=...` GET 回读，刷新后仍显示同一 ID、order-status-007、MCP HTTP 与 25 个事件；观察到的请求均为 GET（200），没有 POST。用于离线单次演示的 Fake Episode `92f1eeba-c76b-4307-a724-b26e6acf7b67` 可回读（SUCCESS、17 事件）；Fake 参数恢复对照 `64de7e32-e985-4e09-82e5-6b3f9e40fff2` 为 Baseline 0/1、Recovery 1/1；Fake Runtime 对照 `57ea7a88-adde-46ca-98ff-8d8ca9f37008` 两侧均成功。
+- 暂停/恢复与取消的既有网页验证 ID `aa991b59-b427-4913-b40e-79b790d28086`、`07368374-1ffd-43ee-9e4a-eaecc10913c2`，本次对当前 API 查询均返回 404；保留它们仅作历史测试记录，不作为当前可回读演示产物。可先展示对应 Fake 集成测试与原验收证据；需要现场操作演示时须重建延时 Fake Job 并重新记录 ID。
+- 验证命令：`uv --cache-dir .uv-cache sync --locked` 通过；`ruff format --check packages tests scripts`、`ruff check packages tests scripts`、`mypy`、`pytest -q --basetemp artifacts/pytest-temp` 均通过（203 passed，1 条既有 Starlette/AnyIO 弃用警告）；`course-smoke`、`course-four-categories`、`course-runtime`、`course-timeout` 回归分别 2/8/8/4 cells、均 0 regressions；`npm.cmd --prefix apps/web run build`（195 modules）及 `node --test --test-isolation=none apps/web/tests/*.test.mjs`（11/11）通过。直接执行 `./scripts/check.ps1` 因当前 PowerShell 执行策略拒绝而未能启动；没有更改执行策略或使用绕过参数。以上没有产生新的真实模型请求。
+
+下一步：由负责人检查浏览器下载文件与截图并完成课程现场演示/签收；若课程必须现场操作暂停与恢复，先创建新的延时 Fake Job 并保存当前有效 ID。之后再决定是否授权提交或推送。
+
+## 2026-09-30 可靠性实测、四套基线与同配置看板收口
+
+最新结论以本段为准，下方按日期保留历史证据。整版技术复核见 [验收矩阵](V0.2-acceptance-review-20260930.md)，源码阅读顺序、调用链、状态与失败路径见 [学习记录](../learning/V0.2-reliability-closeout.md)。当前受控范围代码与关键验证通过；**课程现场演示与用户签收尚未完成，不自签整版验收，不自动提交/推送。**
+
+可靠性真实小样本已补齐：同一个 MiniMax 免费模型，BFCL Handwritten Episode `0b04b45f-1e23-4bfb-a8d2-e52f09c89545` 成功（298 tokens，恢复无追加模型/提议）；独立 HTTP MCP + LangGraph Episode `603b2362-2006-42e7-997c-7bd2804d84dc` 成功（3433 tokens，已完成搜索/读取不重复）；Handwritten Experiment `ce712291-37da-45b1-af4c-abb86f5b3116` 子进程退出后同 ID 恢复，两侧成功（4723 tokens，Baseline 字节不变）。探针增量结果在 `artifacts/live-resume-probe/`，完整产物也已放至正式 artifacts 供网页 GET 回读。这些补齐旧文中的真实 BFCL/MCP/Experiment 恢复缺口，不推广到所有模型、真实并发或外部写工具。
+
+本轮修复 Job Resume 的共同入口：失败状态在改 queued 前返回 409，避免绕过 Service 终态校验。新增真正子进程退出后的 Fake Experiment Job 恢复测试。网页用隔离延时 Fake 服务实际验证暂停→刷新→同 ID 恢复成功，以及取消→刷新→不可恢复；临时服务已停止，正式 API/Vite/MCP 已还原运行。
+
+固定回归扩至 `course-smoke`、`course-four-categories`、`course-runtime`、`course-timeout`，22 单元，0 退化。四类 Runtime 回归两侧各 4/4；超时两侧各 0/2 是固定预期失败。基线来自实际 Fake 运行，不代表真实模型得分。
+
+按 Accepted [ADR-018](../adr/ADR-018-comparable-experiment-dashboard.md) 收口看板：GET DTO 1.1 新增可选模型/矩阵/故障/参考费用与比较键；复用固定回归协议哈希，只在兼容组比较最近两次成功率百分点、Token、耗时。旧缺来源记录不纳入趋势，损坏、配置哈希错误和 Pair 数量错误跳过并提示；费用未知不补 0。Web 处理刷新取消与迟到响应，并补 390/640/1280px、键盘焦点、筛选/读取失败实机验证；截图在 `artifacts/ui-check/v02-dashboard-{1280,390}.jpg`。本輪未再实测全页面 200% 缩放与减少动效。
+
+最终门禁：Ruff format/lint、mypy 82 文件、pytest **203 passed**（1 条既有依赖警告）、四套回归 22 单元；Web 构建195 modules、前端 **11/11**。CSV 生产函数 21 列生成/解析、BOM/转义/防公式及独立参考金额检查通过；本轮 IAB 点击导出但未返回下载事件，指定 Downloads 未发现新文件，因此新增列的实际下载仍需普通浏览器取证。2026-09-28 旧20列落盘证据不冒充本次21列验收。
+
+下一步：按验收矩阵进行课程现场演示，普通浏览器验证 CSV 下载并补 UI 缩放/减少动效复验，再由用户签收。当前范围无需新增 Runtime/Queue/数据库抽象；实际账单硬上限仍受 ADR-017 条件限制。
+
+## 2026-09-30 原厂参考成本与四类任务回归
+
+用户明确要求到各模型**原厂官网**取价，而非以 AIHubMix 免费价作模型价值。按 [ADR-017](../adr/ADR-017-official-reference-pricing.md) 固定 MiniMax M2.7（输入/输出 $0.30/$1.20）、小米 MiMo V2.6 Pro 与 V2.5 Pro（$0.435/$0.87）、Z.AI GLM-5.3（$1.40/$4.40），单位 USD/百万 Token，输入均按未命中缓存价。来源链接、四个 AIHubMix 精确 ID 映射及限制见 ADR。原厂参考成本写入独立字段，**AIHubMix 实际费用仍未知**，不得称为实付账单或硬美元费用上限；旧产物不追溯重算。Experiment 的可选参考预算只在已完成 Episode 后结算并拦截下一题，在途题可能超额；价格版本漂移和 usage 未知会拒绝恢复。前端与 CSV 区分两种费用。调用链、状态、失败路径及复现实验见 [阅读记录](../learning/V0.2-official-reference-pricing.md)。
+
+MiniMax 免费模型真实小样本：改编 BFCL `bfcl-simple_python_1` Episode `b4602664-9f62-4133-8b58-cf68c3e8c60f` 成功，234 输入/63 输出 Token，原厂参考成本 $0.0001458，网关费用未知。仅是本次真实连通与参考计算验证，非官方 BFCL 分数或长期可用保证。固定 Fake 回归新增四类各一题的 `course-four-categories`，与旧 `course-smoke` 一起由 `scripts/check.ps1` 执行；基线为 Baseline 1/4、Recovery 4/4。完整门禁已复核：Ruff、mypy、pytest **200 passed**（1 条依赖弃用警告），旧回归 2 单元与新回归 8 单元均 0 退化；Web 生产构建 194 modules。V0.2 整版仍未验收，所有本地改动未提交/推送。
+
+## 2026-09-29 截图状态复核与两项未开始工作推进
+
+截图中的五项“部分完成”按 [ADR-015](../adr/ADR-015-v02-partial-closure.md) 与下表复核：Checkpoint 已覆盖 ToolLab、BFCL Python/Java、只读 MCP 和 Experiment 计划恢复，Fake 跨进程测试通过；真实模型只验证过 ToolLab 单题安全点，BFCL/MCP 的真实中断恢复未测。幂等性只覆盖已提交的本地状态与只读 MCP；没有外部写工具的恰好一次保证。受控 Fake 故障注入有超时、空结果、MCP 断线与 Trace 断言，尚无任意故障矩阵。外部 Benchmark 有两类固定 BFCL 改编子集，仍无任意 Benchmark 通用适配器，也不是官方 BFCL 分数。指标看板已读持久化 Experiment、处理损坏与未知费用，尚未提供跨实验趋势/排名。这五项的**当前受控交付范围可用**，原截图若按通用能力解释仍不能标“全部完成”。CSV 已实际浏览器下载验收；美元费用上限仍等待经验证价格表，未知费用继续保持未知。
+
+两项“未做”现在按 [ADR-016](../adr/ADR-016-experiment-control-regression.md) 落地：`POST /api/v1/experiments/jobs` 提交有稳定 ID 的后台任务，最多两个不同 Experiment 并行，同一 Experiment 串行配对；`GET /jobs/{id}` 与 `POST /jobs/{id}/pause|cancel|resume` 使用版本化原子状态文件，在 Episode 边界停止，已完成侧通过原 Checkpoint/Artifact 复用。进程异常结束的运行态读作 `interrupted`；取消保留审计产物但不会进入可恢复列表。失败 Episode 的 `POST /api/v1/episodes/{id}/rerun` 保留原产物，以新 ID 和版本化来源记录运行保存的 Agent/Task/RunConfig；旧 Fake 单次产物若没有场景来源会拒绝，Experiment Fake 产物从已保存 Experiment 读取场景。Web 增加任务状态、暂停/取消/恢复和失败 Episode 重跑入口，运行时 URL 用 `experiment_job_id`，完成后换成只读 `experiment_id`。
+
+固定套件回归：`benchmarks/regression/course-smoke.json` 锁定 Fake 单题模型与配置，保存真实生成的基线 Experiment；`scripts/run_regression.py` 在调用模型前校验 Task 版本、Agent/Prompt/工具/预算、种子/重复、对照轴、场景与故障，然后运行当前版本、逐单元比较成功退化，写版本化 JSON 报告。`scripts/check.ps1` 现自动执行此回归；Fake 结果仅验证工程行为，不代表真实模型能力。未知费用不参与退化判定。跨实验趋势/排名仍待独立设计，不能把这个同协议回归报告称作全局 Leaderboard。
+
+验证：完整 `scripts/check.ps1` **194 passed**、Ruff、mypy、固定回归 2 单元 0 退化；Web 生产构建 194 modules、`git diff --check` 通过。集成测试覆盖两个 Job 并行/第三个排队、暂停恢复复用原文件、取消不隐式恢复、失败 Episode 来源与成功 Episode 拒绝、配置不兼容回归拒绝。浏览器 Fake 单题异步 Job `64de7e32-e985-4e09-82e5-6b3f9e40fff2` 和 12 对批量 Job `349f484c-42e5-49c8-b02d-f1ad7f930f5b` 均完成，URL 从 job ID 切到结果 ID；从批量实验的失败侧 `cf1e098c-2a3a-5aae-b3fc-43fc4bde7b81` 在 Web 点击单独重跑，生成新 Episode `e5093c3f-a827-4b8c-a2d5-4bfb9651c5c7`。Fake 跑得太快，浏览器未抢在终态前点到暂停；暂停/取消的实际生效由带闸门的 API 集成测试证明。本轮未调用真实模型，V0.2 整版仍未验收；调度仅限本地单 API 进程，部署多 worker 前需要共享队列与锁。所有改动未提交/推送。
+
+## 2026-09-29 Codex 复核 Copilot 交付：最终产物原子落盘与跨进程恢复
+
+复核提交 `956437f` 时发现断点恢复的共同失败窗口：最终 Episode/Experiment JSON 直接写到目标路径；进程写到一半退出会留下损坏文件。旧恢复列表只按文件是否存在排除存档，导致有效 Checkpoint 被隐藏。现 `packages/application/trace.py` 的最终写入先写临时文件、同步并原子替换，Experiment 复用同一写入函数；恢复列表只把**可解析的完整终态**视作已完成，旧版半截终态可从有效 Checkpoint 重建。替换失败保留旧完整文件并清理临时文件。
+
+跨进程验收补齐：`tests/integration/_checkpoint_worker.py` 在独立子进程写入 BFCL Python、BFCL Java、MCP 的安全点后直接退出；新 Service 恢复同一 Episode ID，三项均成功并清理 Checkpoint。MCP 测试在子进程用受控远程函数替身完成两次只读调用，恢复侧若重复该读取即失败；这验证持久状态和去重边界，实际 HTTP 网络链路的验证仍以 ADR-012 的独立实验为准。损坏终态文件测试覆盖 ToolLab 跨进程与 Experiment 计划恢复。
+
+验证：`scripts/check.ps1` 的 Ruff、mypy、pytest **187 passed**（1 条既有 Starlette/AnyIO 警告）；Web 生产构建 194 modules、前端聚焦测试 10/10、`git diff --check` 通过。本轮只改 Python 持久化边界、相关测试和文档；未重新调用真实模型或做本轮浏览器视觉验收，因此不把此次结果写成新的真实模型结论。V0.2 整版未验收，外部写工具仍无恰好一次语义。本地改动未提交/推送。
 
 ## 2026-09-28 V0.2 五项部分能力接续
+
+以下为 2026-09-28 的历史状态；当时写为“仍待实现”的实验控制与回归已在本文顶部更新。
 
 依据 [ADR-015](../adr/ADR-015-v02-partial-closure.md) 收口截图中的五项，当前证据与边界如下：
 
 | 项目 | 本轮可用能力 | 验证与边界 |
 | --- | --- | --- |
-| Checkpoint/Resume | 单 Episode 扩至 BFCL Python/Java 单调用与固定文档 MCP；Experiment 持久化运行矩阵，恢复时复用已完成侧，同 ID 继续未完成侧。 | ToolLab 已有 Fake 跨进程和 MiniMax 真实安全点验证；BFCL Python/Java、MCP 有序列化后新 Service 恢复测试；Experiment 有中断、重启 Service、API 恢复与篡改拒绝测试。BFCL/MCP 真实模型中断及 Experiment 操作系统进程退出仍未实测。 |
+| Checkpoint/Resume | 单 Episode 扩至 BFCL Python/Java 单调用与固定文档 MCP；Experiment 持久化运行矩阵，恢复时复用已完成侧，同 ID 继续未完成侧。 | ToolLab 已有 Fake 跨进程和 MiniMax 真实安全点验证；BFCL Python/Java、MCP 的 Fake 跨进程验证见 2026-09-29 记录；Experiment 有中断、重启 Service、API 恢复与篡改拒绝测试。BFCL/MCP 真实模型中断及 Experiment 操作系统进程退出仍未实测。 |
 | 幂等性 | 当前 ToolLab 本地状态与 BFCL 非执行提议在安全点不重放；MCP 工具仅只读，完成后恢复不重复已提交读取。 | 不存在可验证的外部写工具，不能宣称对任意外部写的恰好一次保证；未来引入写工具须服务端幂等键或事务协议。模型请求中断仍可能重发、增加上游用量。 |
 | 故障注入 | Fake 单次/成对实验可选择工具超时、查询空结果；固定文档 MCP 单次可选择本机断线。故障名随 Task 和 Experiment 保存。 | 集成测试核对 Trace 失败码、终态、两侧相同故障配置及真实模型禁用注入；这不是外部网络故障的全面模拟。 |
 | 外部 Benchmark | 在原 BFCL `simple_python` 8 题外，接入同一固定上游提交的 `simple_java` 5 题；两套 Manifest、原始及转换 SHA256、独立 suite 标签。 | `python scripts/import_bfcl_subset.py --suite java` 可重复导入；Java 恢复测试通过。真实 MiniMax 在 `bfcl-simple_java_18` Episode `104c043a-6f7a-4887-ad6e-02305b142f71` 得到 SUCCESS、`exact_call_match`、1 模型/1 工具。仍是本地改编评分，非 BFCL 官方分数，也不是任意 Benchmark 的通用运行器。 |
@@ -17,6 +80,8 @@
 复核时独立运行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\check.ps1`：Ruff、mypy、pytest **183 passed**（1 条已有 Starlette/AnyIO 弃用警告）；`npm.cmd --prefix apps/web run build` 通过（194 modules）；BFCL Java 导入校验产出 5 题且转换 SHA256 与 Manifest 一致；新增前端聚焦测试 10/10 通过，`git diff --check` 通过。真实浏览器从当前 API 读取 25 个任务（ToolLab 12、BFCL Python 8、BFCL Java 5），Java 套件呈现 5 个任务，卡片明确标为“本地函数调用提议评测”，不暗示执行上游函数；Fake SSE 单次 Episode `7a1ac771-54c3-454c-a8b7-c8ac4917a6e3` 为 SUCCESS、2 模型/2 工具、17 事件。刷新和前进/后退回到同一 Episode，相关请求均为 GET、没有重新 POST；实验看板实际显示 8 条记录且无损坏提示。1280px 与 390px 浏览器视口均无整体横向溢出，截图在被忽略的 `artifacts/ui-check/codex-dashboard-{1280,390}.png`。这些是 Fake/UI 与固定数据验证，不是新的真实模型实验；V0.2 整版的暂停/取消、并发、失败任务重跑、自动回归和经验证价格表的全局费用上限仍待实现。
 
 ## 2026-09-28 V0.2 已实现能力收口：真实恢复与 CSV 下载
+
+以下为 2026-09-28 的历史状态；后续进展以本文顶部为准。
 
 按 Accepted ADR-011 的现有范围，用 `scripts/probe_live_checkpoint_resume.py` 对当前 Key 目录可见的 `coding-minimax-m2.7-free` 做一题真实 ToolLab 中断恢复。子进程首次提交查询工具后退出，新进程从同一 Checkpoint 继续；Episode `f4bba2a4-68c7-418f-8b15-096989bfd7e0` 最终 SUCCESS、Evaluator true，累计 2 次模型、2 次工具、2373 tokens、18 事件。原查询未重跑：2 个 `TOOL_STARTED` 的 Call ID 唯一，Trace 父链完整，`EPISODE_RESUMED` 和 `EPISODE_FINISHED` 各一次，最终 Artifact 存在且 Checkpoint 已清理。首次尝试使用任务默认 1000 Token 预算，在首个模型响应后 `TOKEN_BUDGET_EXCEEDED`、0 工具；验收脚本现显式设 8000，失败产物仍留在被忽略的 `artifacts/live-resume-probe/`。此为单题小样本，未验证模型请求中途退出的重复计费，也不把 ToolLab 保证推广到外部写工具、BFCL 或 MCP。
 

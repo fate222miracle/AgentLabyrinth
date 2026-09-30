@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "baseline_artifact": "course-timeout-baseline.json",
+  "baseline_revision": "working-tree-2026-09-30",
+  "request": {
+    "provider": "fake", "model": "fake-model", "scenario": "success",
+    "task_ids": ["order-status-001", "order-status-007"],
+    "seeds": [1], "repeat_count": 1, "comparison_axis": "runtime_backend",
+    "runtime_strategy": "handwritten_recovery", "fault_profile": "tool_timeout"
+  }
+}

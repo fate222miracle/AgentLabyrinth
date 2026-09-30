@@ -48,6 +48,7 @@ def test_experiment_resume_reuses_completed_arm(tmp_path: Path) -> None:
     baseline_id = uuid5(experiment_id, "0:baseline")
     baseline_path = tmp_path / f"{baseline_id}.json"
     baseline_bytes = baseline_path.read_bytes()
+    (tmp_path / "experiments" / f"{experiment_id}.json").write_text("{", encoding="utf-8")
 
     restarted = EpisodeService(artifacts_dir=tmp_path)
     app.dependency_overrides[get_episode_service] = lambda: restarted

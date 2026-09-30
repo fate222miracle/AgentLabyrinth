@@ -17,7 +17,7 @@ from packages.application.checkpoint import (
     resume_checkpointed_episode,
     run_checkpointed_episode,
 )
-from packages.application.trace import read_artifact
+from packages.application.trace import read_artifact, write_text_atomically
 from packages.domain.models import (
     AgentSpec,
     EpisodeArtifact,
@@ -54,6 +54,7 @@ class PairComparison(BaseModel):
     baseline_tokens: int
     baseline_duration_ms: int
     baseline_cost: Decimal | None = None
+    baseline_reference_cost: Decimal | None = None
     baseline_model_calls: int | None = None
     baseline_tool_calls: int | None = None
     baseline_tool_selection_accuracy: float | None = None
@@ -65,6 +66,7 @@ class PairComparison(BaseModel):
     recovery_tokens: int
     recovery_duration_ms: int
     recovery_cost: Decimal | None = None
+    recovery_reference_cost: Decimal | None = None
     recovery_model_calls: int | None = None
     recovery_tool_calls: int | None = None
     recovery_tool_selection_accuracy: float | None = None
@@ -103,6 +105,13 @@ class ExperimentAggregateMetrics(BaseModel):
     baseline_total_cost: Decimal | None = None
     recovery_total_cost: Decimal | None = None
     is_cost_known: bool
+    baseline_total_reference_cost: Decimal | None = None
+    recovery_total_reference_cost: Decimal | None = None
+    is_reference_cost_known: bool = False
+
+
+class ReferenceCostBudgetExceeded(ValueError):
+    """The configured model-maker reference budget cannot admit another Episode."""
 
 
 class ExperimentArtifact(BaseModel):
@@ -190,6 +199,8 @@ async def run_experiment(
     comparison_axis: ComparisonAxis = "recovery_policy",
     checkpoint_state: ExperimentCheckpoint | None = None,
     resume_provider_factory: Callable[[int], ModelProvider] | None = None,
+    experiment_id: UUID | None = None,
+    before_arm: Callable[[], None] | None = None,
 ) -> ExperimentArtifact:
     """Run or resume a fixed paired matrix, reusing completed Episode artifacts."""
     if not tasks:
@@ -221,10 +232,22 @@ async def run_experiment(
     else:
         raise ValueError("Unknown comparison axis")
 
+    raw_reference_limit = (config_metadata or {}).get("max_reference_cost_usd")
+    reference_limit = Decimal(str(raw_reference_limit)) if raw_reference_limit is not None else None
+    reference_version = (config_metadata or {}).get("reference_price_version")
+    if reference_limit is not None and (reference_limit <= 0 or not reference_version):
+        raise ValueError("Reference cost budget requires a positive limit and price version")
+
     if checkpoint_state is None:
+        new_id = experiment_id or uuid4()
+        if (
+            experiment_checkpoint_path(artifacts_dir, new_id).exists()
+            or (artifacts_dir / "experiments" / f"{new_id}.json").exists()
+        ):
+            raise ValueError("Experiment ID already exists")
         plan = {
             "schema_version": "1.0",
-            "experiment_id": str(uuid4()),
+            "experiment_id": str(new_id),
             "created_at": datetime.now(UTC).isoformat(),
             "baseline_agent": baseline_agent.model_dump(mode="json"),
             "recovery_agent": recovery_agent.model_dump(mode="json"),
@@ -243,6 +266,8 @@ async def run_experiment(
         )
     else:
         checkpoint_state.verify()
+        if experiment_id is not None and experiment_id != checkpoint_state.experiment_id:
+            raise ValueError("Experiment resume ID mismatch")
         if (
             baseline_agent != checkpoint_state.baseline_agent
             or recovery_agent != checkpoint_state.recovery_agent
@@ -256,6 +281,26 @@ async def run_experiment(
     created_at = checkpoint_state.created_at
     episode_ids: list[UUID] = []
     pairs: list[PairComparison] = []
+    committed_reference_cost = Decimal("0")
+
+    def check_reference_budget(episode_id: UUID) -> None:
+        if (
+            reference_limit is not None
+            and committed_reference_cost >= reference_limit
+            and not (artifacts_dir / f"{episode_id}.json").is_file()
+        ):
+            raise ReferenceCostBudgetExceeded("Experiment reference cost budget reached")
+
+    def record_reference_cost(artifact: EpisodeArtifact) -> None:
+        nonlocal committed_reference_cost
+        if reference_limit is None:
+            return
+        cost = artifact.reference_cost
+        if cost is None or cost.price_table_version != reference_version:
+            raise ValueError("Experiment reference cost is unknown or price version changed")
+        committed_reference_cost += cost.amount
+        if committed_reference_cost > reference_limit:
+            raise ReferenceCostBudgetExceeded("Experiment reference cost budget exceeded")
 
     async def run_arm(
         agent: AgentSpec, task: TaskSpec, current_seed: int, episode_id: UUID
@@ -317,14 +362,22 @@ async def run_experiment(
     # Run every matrix cell serially: Baseline then Recovery under exact same conditions.
     for pair_index, (task, current_seed, repeat_index) in enumerate(runs):
         # 1. Execute Baseline Episode
+        if before_arm is not None:
+            before_arm()
         base_id = uuid5(experiment_id, f"{pair_index}:baseline")
+        check_reference_budget(base_id)
         art_base = await run_arm(baseline_agent, task, current_seed, base_id)
         episode_ids.append(base_id)
+        record_reference_cost(art_base)
 
         # 2. Execute Recovery Episode
+        if before_arm is not None:
+            before_arm()
         rec_id = uuid5(experiment_id, f"{pair_index}:recovery")
+        check_reference_budget(rec_id)
         art_rec = await run_arm(recovery_agent, task, current_seed, rec_id)
         episode_ids.append(rec_id)
+        record_reference_cost(art_rec)
 
         # 3. Assess paired outcome
         base_success = art_base.evaluation.success
@@ -377,6 +430,9 @@ async def run_experiment(
                     if art_base.episode.estimated_cost.is_known
                     else None
                 ),
+                baseline_reference_cost=(
+                    art_base.reference_cost.amount if art_base.reference_cost is not None else None
+                ),
                 baseline_model_calls=art_base.episode.model_call_count,
                 baseline_tool_calls=art_base.episode.tool_call_count,
                 baseline_tool_selection_accuracy=(
@@ -395,6 +451,9 @@ async def run_experiment(
                     art_rec.episode.estimated_cost.amount
                     if art_rec.episode.estimated_cost.is_known
                     else None
+                ),
+                recovery_reference_cost=(
+                    art_rec.reference_cost.amount if art_rec.reference_cost is not None else None
                 ),
                 recovery_model_calls=art_rec.episode.model_call_count,
                 recovery_tool_calls=art_rec.episode.tool_call_count,
@@ -474,6 +533,34 @@ async def run_experiment(
         if is_known
         else None
     )
+    reference_known = all(
+        pair.baseline_reference_cost is not None and pair.recovery_reference_cost is not None
+        for pair in pairs
+    )
+    baseline_reference_total = (
+        sum(
+            (
+                pair.baseline_reference_cost
+                for pair in pairs
+                if pair.baseline_reference_cost is not None
+            ),
+            Decimal(),
+        )
+        if reference_known
+        else None
+    )
+    recovery_reference_total = (
+        sum(
+            (
+                pair.recovery_reference_cost
+                for pair in pairs
+                if pair.recovery_reference_cost is not None
+            ),
+            Decimal(),
+        )
+        if reference_known
+        else None
+    )
 
     metrics = ExperimentAggregateMetrics(
         total_pairs=total,
@@ -501,6 +588,9 @@ async def run_experiment(
         baseline_total_cost=baseline_total_cost,
         recovery_total_cost=recovery_total_cost,
         is_cost_known=is_known,
+        baseline_total_reference_cost=baseline_reference_total,
+        recovery_total_reference_cost=recovery_reference_total,
+        is_reference_cost_known=reference_known,
     )
 
     exp_config: dict[str, Any] = {
@@ -586,9 +676,8 @@ async def run_experiment(
 
 def write_experiment(artifact: ExperimentArtifact, path: Path) -> None:
     """Serialize and write validated ExperimentArtifact JSON."""
-    path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(artifact.model_dump(mode="json"), ensure_ascii=False, indent=2)
-    path.write_text(serialized + "\n", encoding="utf-8")
+    write_text_atomically(path, serialized + "\n")
 
 
 def read_experiment(path: Path) -> ExperimentArtifact:

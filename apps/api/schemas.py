@@ -117,7 +117,7 @@ class CreateExperimentRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0", "1.1"] = "1.1"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
     request_id: UUID = Field(default_factory=uuid4)
     provider: Literal["fake", "aihubmix"]
     model: str
@@ -144,6 +144,7 @@ class CreateExperimentRequest(BaseModel):
     seeds: list[int] | None = Field(default=None, min_length=1, max_length=10)
     repeat_count: int = Field(default=1, ge=1, le=10)
     token_budget: int | None = Field(default=None, ge=100, le=20000)
+    max_reference_cost_usd: Decimal | None = Field(default=None, gt=0, allow_inf_nan=False)
     comparison_axis: ComparisonAxis = "recovery_policy"
     runtime_backend: RuntimeBackend = "handwritten"
     runtime_strategy: RuntimeStrategy = "handwritten"
@@ -158,6 +159,21 @@ class ExperimentResponse(BaseModel):
     schema_version: Literal["1.0"] = "1.0"
     request_id: UUID
     experiment: ExperimentArtifact
+
+
+class ExperimentJobState(BaseModel):
+    """Durable local execution status, separate from the immutable experiment."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal["1.0"] = "1.0"
+    experiment_id: UUID
+    status: Literal[
+        "queued", "running", "paused", "cancelled", "completed", "failed", "interrupted"
+    ]
+    requested_action: Literal["pause", "cancel"] | None = None
+    updated_at: str
+    error_code: str | None = None
 
 
 class ExperimentDashboardItem(BaseModel):
@@ -178,13 +194,24 @@ class ExperimentDashboardItem(BaseModel):
     recovery_avg_duration_ms: float
     baseline_total_cost: Decimal | None
     recovery_total_cost: Decimal | None
+    model_id: str | None = None
+    provider: str | None = None
+    task_ids: list[str] = Field(default_factory=list)
+    seeds: list[int] = Field(default_factory=list)
+    repeat_count: int | None = None
+    scenario: str | None = None
+    fault_profile: str | None = None
+    comparison_key: str | None = None
+    baseline_reference_cost: Decimal | None = None
+    recovery_reference_cost: Decimal | None = None
+    reference_price_version: str | None = None
 
 
 class ExperimentDashboardResponse(BaseModel):
     """Completed experiments only; invalid files are counted, never invented."""
 
     model_config = ConfigDict(frozen=True)
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     items: list[ExperimentDashboardItem]
     skipped_count: int = 0
 

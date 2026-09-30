@@ -16,10 +16,12 @@ from apps.api.schemas import (
     EpisodeResponse,
     ErrorResponse,
     ExperimentDashboardResponse,
+    ExperimentJobState,
     ExperimentResponse,
     MetaResponse,
 )
-from apps.api.service import EpisodeService
+from apps.api.service import EpisodeService, ExperimentJobStopped
+from packages.application.experiment import ReferenceCostBudgetExceeded, experiment_checkpoint_path
 from packages.domain.models import TraceEvent
 
 app = FastAPI(
@@ -39,6 +41,49 @@ app.add_middleware(
 
 _default_service = EpisodeService(live_model_catalog=True)
 _stream_runs: set[asyncio.Task[None]] = set()
+_experiment_jobs: dict[UUID, asyncio.Task[None]] = {}
+_experiment_slots = asyncio.Semaphore(2)
+
+
+async def _run_experiment_job(
+    req: CreateExperimentRequest | None,
+    service: EpisodeService,
+    experiment_id: UUID,
+) -> None:
+    """Run one durable job; each Experiment retains serial paired execution."""
+    try:
+        async with _experiment_slots:
+            current = service.get_experiment_job(experiment_id)
+            service.update_experiment_job(
+                experiment_id,
+                status="running",
+                requested_action=current.requested_action if current else None,
+            )
+            if req is None:
+                await service.resume_experiment_job(experiment_id)
+            else:
+                await service.execute_experiment(req, job_id=experiment_id)
+            service.update_experiment_job(experiment_id, status="completed")
+    except ExperimentJobStopped as exc:
+        service.update_experiment_job(
+            experiment_id, status="paused" if exc.action == "pause" else "cancelled"
+        )
+    except ReferenceCostBudgetExceeded:
+        service.update_experiment_job(
+            experiment_id, status="failed", error_code="REFERENCE_COST_BUDGET_EXCEEDED"
+        )
+    except Exception:
+        service.update_experiment_job(
+            experiment_id, status="failed", error_code="EXPERIMENT_FAILED"
+        )
+
+
+def _schedule_experiment_job(
+    req: CreateExperimentRequest | None, service: EpisodeService, experiment_id: UUID
+) -> None:
+    task = asyncio.create_task(_run_experiment_job(req, service, experiment_id))
+    _experiment_jobs[experiment_id] = task
+    task.add_done_callback(lambda _: _experiment_jobs.pop(experiment_id, None))
 
 
 def get_episode_service() -> EpisodeService:
@@ -255,6 +300,25 @@ async def get_episode(
 
 
 @app.post(
+    "/api/v1/episodes/{episode_id}/rerun",
+    response_model=EpisodeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def rerun_failed_episode(
+    episode_id: UUID,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> EpisodeResponse:
+    """Explicitly rerun one failed Episode with a new ID and saved lineage."""
+    try:
+        artifact = await service.rerun_failed_episode(episode_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return EpisodeResponse(request_id=uuid4(), artifact=artifact)
+
+
+@app.post(
     "/api/v1/experiments",
     response_model=ExperimentResponse,
     status_code=status.HTTP_201_CREATED,
@@ -283,6 +347,74 @@ async def create_experiment(
         request_id=req.request_id,
         experiment=artifact,
     )
+
+
+@app.post(
+    "/api/v1/experiments/jobs",
+    response_model=ExperimentJobState,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_experiment_job(
+    req: CreateExperimentRequest,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> ExperimentJobState:
+    """Queue a bounded background Experiment with a stable, client-known ID."""
+    try:
+        state = service.reserve_experiment_job(req.request_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _schedule_experiment_job(req, service, req.request_id)
+    return state
+
+
+@app.get("/api/v1/experiments/jobs/resumable", response_model=list[UUID])
+async def list_resumable_experiment_jobs(
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> list[UUID]:
+    """Discover stopped jobs after a refresh or API process restart."""
+    return [
+        experiment_id
+        for experiment_id in service.resumable_experiment_job_ids()
+        if experiment_id not in _experiment_jobs
+    ]
+
+
+@app.get("/api/v1/experiments/jobs/{experiment_id}", response_model=ExperimentJobState)
+async def get_experiment_job(
+    experiment_id: UUID,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> ExperimentJobState:
+    """Report persisted state; an orphaned running job is an interruption."""
+    state = service.get_experiment_job(experiment_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Experiment job not found")
+    if state.status in {"queued", "running"} and experiment_id not in _experiment_jobs:
+        return state.model_copy(update={"status": "interrupted"})
+    return state
+
+
+@app.post("/api/v1/experiments/jobs/{experiment_id}/{action}", response_model=ExperimentJobState)
+async def control_experiment_job(
+    experiment_id: UUID,
+    action: str,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> ExperimentJobState:
+    """Pause, cancel, or resume a job without changing completed Episode artifacts."""
+    if action == "resume":
+        state = service.get_experiment_job(experiment_id)
+        if state is None or state.status not in {"paused", "interrupted", "running"}:
+            raise HTTPException(status_code=409, detail="Job is not resumable")
+        if experiment_id in _experiment_jobs:
+            raise HTTPException(status_code=409, detail="Job is already active")
+        if not experiment_checkpoint_path(service.artifacts_dir, experiment_id).is_file():
+            raise HTTPException(status_code=409, detail="Experiment plan is unavailable")
+        queued = service.update_experiment_job(experiment_id, status="queued")
+        _schedule_experiment_job(None, service, experiment_id)
+        return queued
+    try:
+        return service.request_experiment_action(experiment_id, action)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get(

@@ -6,7 +6,9 @@
 
  M1 切片 A–E、V0.1 切片 F 与 Slice G UI 收口已签收，V0.1 的 18 项验收已通过。V0.2 独立 Handwritten/LangGraph Runtime、单变量对照 API/Web 已完成质量门禁、Fake 浏览器闭环与单模型真实小样本；整版尚未验收。ToolLab 单 Episode Checkpoint/Resume 已通过 Fake 跨进程、接口、浏览器及 MiniMax 单题真实中断恢复。BFCL/MCP 单 Episode 和 Experiment 计划恢复、故障注入、第二类固定 BFCL 来源及指标看板见 ADR-015 与 `docs/handoffs/current-state.md`；不能扩大为外部写工具的幂等保证。Slice G 的初次 Copilot 交付由 Codex 复核整改，问题与防错规则见 `docs/tasks/V0.1-slice-G-ui-refresh-copilot.md` 和 `.github/copilot-instructions.md`。Key 仅在本机环境/`.env` 配置，不入库、不入前端、不在聊天中传递。核心接口/Schema/评测口径变化先走 ADR，不得静默修改。
 
-课程 MCP 网络实验按 Accepted ADR-012 提前实施受控例外：固定文档任务的只读工具由独立 localhost Streamable HTTP 服务提供，API/Web 可选远程传输；Fake 双路径、断线 Trace 与单题真实模型探索均已实测。MCP 单 Episode 安全点恢复已按 ADR-015 接入并通过 Fake 新 Service 测试，真实模型中断恢复与本轮浏览器交互仍待验收。阅读 `docs/tasks/V0.2-mcp-network-pilot.md`、`docs/learning/V0.2-mcp-network-pilot.md` 和 current-state。
+Experiment 的本地单进程并行 Job、Episode 边界暂停/取消/恢复、失败 Episode 显式重跑与固定 Fake 套件回归见 Accepted ADR-016、`docs/learning/V0.2-experiment-control-regression.md` 和 current-state；真实模型与多 worker 并发未验收。
+
+课程 MCP 网络实验按 Accepted ADR-012 提前实施受控例外：固定文档任务的只读工具由独立 localhost Streamable HTTP 服务提供，API/Web 可选远程传输；Fake 双路径、断线 Trace 与单题真实模型探索均已实测。MCP 单 Episode 安全点恢复已按 ADR-015 接入，并通过 Fake 子进程退出后的恢复测试及2026-09-30 MiniMax/LangGraph 独立 HTTP 单题真实恢复。BFCL/Experiment 同日补真实小样本；四套 Fake 回归与 ADR-018 兼容历史看板见 `docs/learning/V0.2-reliability-closeout.md`，整版现场签收仍待完成。阅读 `docs/tasks/V0.2-mcp-network-pilot.md`、`docs/learning/V0.2-mcp-network-pilot.md` 和 current-state。
 
 - Domain 不依赖具体环境、Provider SDK、存储或外部 Agent 框架。
 - Application 通过 Domain Port 编排；Runtime 不包含订单业务；Evaluator 只读、不改状态。

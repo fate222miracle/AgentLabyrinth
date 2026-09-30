@@ -1,7 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { changedStateFields, groupTraceByStep, keyFields, stepOutcome, stepTitle } from './traceSteps';
 import { McpFlowReplay } from './McpFlowReplay';
-import { summarizeEpisode, type EpisodeHistorySummary } from './historySummary';
+import { summarizeEpisode, type EpisodeHistorySummary, type ExperimentDashboardItem } from './historySummary';
+import { ExperimentDashboard } from './ExperimentDashboard';
 import { readEpisodeStream } from './streamEpisode';
 
 interface ModelOption {
@@ -129,6 +130,12 @@ interface EpisodeArtifact {
     };
   };
   events: TraceEvent[];
+  reference_cost?: {
+    amount: string;
+    currency: string;
+    price_table_version: string;
+    is_known: boolean;
+  } | null;
 }
 
 interface PairComparison {
@@ -143,6 +150,7 @@ interface PairComparison {
   baseline_tokens: number;
   baseline_duration_ms: number;
   baseline_cost?: string | null;
+  baseline_reference_cost?: string | null;
   baseline_model_calls?: number | null;
   baseline_tool_calls?: number | null;
   baseline_tool_selection_accuracy?: number | null;
@@ -154,6 +162,7 @@ interface PairComparison {
   recovery_tokens: number;
   recovery_duration_ms: number;
   recovery_cost?: string | null;
+  recovery_reference_cost?: string | null;
   recovery_model_calls?: number | null;
   recovery_tool_calls?: number | null;
   recovery_tool_selection_accuracy?: number | null;
@@ -188,6 +197,9 @@ interface ExperimentAggregateMetrics {
   baseline_total_cost?: string | null;
   recovery_total_cost?: string | null;
   is_cost_known: boolean;
+  baseline_total_reference_cost?: string | null;
+  recovery_total_reference_cost?: string | null;
+  is_reference_cost_known?: boolean;
 }
 
 interface ExperimentArtifact {
@@ -201,21 +213,17 @@ interface ExperimentArtifact {
   metrics: ExperimentAggregateMetrics;
 }
 
-interface ExperimentDashboardItem {
+interface ExperimentJobState {
   experiment_id: string;
-  created_at: string;
-  environment_version: string;
-  comparison_axis: string;
-  total_pairs: number;
-  baseline_success_rate: number;
-  recovery_success_rate: number;
-  baseline_total_tokens: number;
-  recovery_total_tokens: number;
-  baseline_avg_duration_ms: number;
-  recovery_avg_duration_ms: number;
-  baseline_total_cost: string | null;
-  recovery_total_cost: string | null;
+  status: 'queued' | 'running' | 'paused' | 'cancelled' | 'completed' | 'failed' | 'interrupted';
+  requested_action: 'pause' | 'cancel' | null;
+  error_code: string | null;
 }
+
+const experimentJobLabels: Record<ExperimentJobState['status'], string> = {
+  queued: '排队中', running: '运行中', paused: '已暂停', cancelled: '已取消',
+  completed: '已完成', failed: '运行失败', interrupted: '进程中断',
+};
 
 function explainFailure(detail: string): string {
   const explanations: Record<string, string> = {
@@ -328,7 +336,7 @@ function experimentCsv(experiment: ExperimentArtifact): string {
   const headers = [
     'experiment_id', 'config_hash', 'comparison_axis', 'task_id', 'seed', 'repeat_index',
     'arm', 'episode_id', 'success', 'termination_reason', 'steps', 'model_calls',
-    'tool_calls', 'tokens', 'duration_ms', 'cost_usd', 'tool_selection_accuracy',
+    'tool_calls', 'tokens', 'duration_ms', 'cost_usd', 'official_reference_cost_usd', 'tool_selection_accuracy',
     'tool_argument_validity_rate', 'pair_retry_eligible', 'pair_recovered',
   ];
   const axis = typeof experiment.config.comparison_axis === 'string'
@@ -339,7 +347,7 @@ function experimentCsv(experiment: ExperimentArtifact): string {
       pair.baseline_episode_id, pair.baseline_success,
       pair.baseline_termination_reason, pair.baseline_steps, pair.baseline_model_calls,
       pair.baseline_tool_calls, pair.baseline_tokens, pair.baseline_duration_ms,
-      pair.baseline_cost, pair.baseline_tool_selection_accuracy,
+      pair.baseline_cost, pair.baseline_reference_cost, pair.baseline_tool_selection_accuracy,
       pair.baseline_tool_argument_validity_rate,
       axis === 'runtime_backend' ? null : pair.retry_eligible,
       axis === 'runtime_backend' ? null : pair.recovered],
@@ -348,7 +356,7 @@ function experimentCsv(experiment: ExperimentArtifact): string {
       pair.recovery_episode_id, pair.recovery_success,
       pair.recovery_termination_reason, pair.recovery_steps, pair.recovery_model_calls,
       pair.recovery_tool_calls, pair.recovery_tokens, pair.recovery_duration_ms,
-      pair.recovery_cost, pair.recovery_tool_selection_accuracy,
+      pair.recovery_cost, pair.recovery_reference_cost, pair.recovery_tool_selection_accuracy,
       pair.recovery_tool_argument_validity_rate,
       axis === 'runtime_backend' ? null : pair.retry_eligible,
       axis === 'runtime_backend' ? null : pair.recovered],
@@ -468,13 +476,21 @@ export default function App() {
   const [expSeedsText, setExpSeedsText] = useState<string>('1');
   const [expRepeatCount, setExpRepeatCount] = useState<number>(1);
   const [expTokenBudget, setExpTokenBudget] = useState<number | null>(8000);
+  const [expReferenceBudget, setExpReferenceBudget] = useState<string>('');
   const [singleTokenBudget, setSingleTokenBudget] = useState<number | null>(8000);
   const [experiment, setExperiment] = useState<ExperimentArtifact | null>(null);
   const [recentExpIds, setRecentExpIds] = useState<string[]>([]);
   const [resumableExpIds, setResumableExpIds] = useState<string[]>([]);
+  const [resumableJobIds, setResumableJobIds] = useState<string[]>([]);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [experimentJob, setExperimentJob] = useState<ExperimentJobState | null>(null);
+  const [jobWatchToken, setJobWatchToken] = useState(0);
   const [dashboardItems, setDashboardItems] = useState<ExperimentDashboardItem[]>([]);
   const [dashboardSkipped, setDashboardSkipped] = useState(0);
   const [dashboardError, setDashboardError] = useState(false);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const dashboardRequestRef = useRef<AbortController | null>(null);
+  useEffect(() => () => dashboardRequestRef.current?.abort(), []);
   const [inputExpId, setInputExpId] = useState<string>('');
 
   // Custom Model states
@@ -519,18 +535,77 @@ export default function App() {
     setLoadingMessage('');
   };
 
+  useEffect(() => {
+    if (!activeJobId) return;
+    let cancelled = false;
+    let timer = 0;
+    beginLoading('实验运行中；暂停与取消将在当前 Episode 结束后生效。');
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/v1/experiments/jobs/${encodeURIComponent(activeJobId)}`);
+        if (!response.ok) throw new Error(`实验状态读取失败 (${response.status})`);
+        const job = await response.json() as ExperimentJobState;
+        if (cancelled) return;
+        setExperimentJob(job);
+        if (job.status === 'completed') {
+          const result = await fetch(`/api/v1/experiments/${encodeURIComponent(activeJobId)}`);
+          if (!result.ok) throw new Error('实验已完成，但结果读取失败');
+          const data = await result.json() as { experiment: ExperimentArtifact };
+          if (cancelled) return;
+          setExperiment(data.experiment);
+          addRecentExpId(activeJobId);
+          setResumableJobIds((ids) => ids.filter((id) => id !== activeJobId));
+          refreshExperimentDashboard();
+          const url = new URL(window.location.href);
+          if (url.searchParams.get('experiment_job_id') === activeJobId) {
+            url.searchParams.set('experiment_id', activeJobId);
+            url.searchParams.delete('experiment_job_id');
+            window.history.replaceState({}, '', url.toString());
+          }
+          setActiveJobId(null);
+          finishLoading();
+        } else if (['paused', 'cancelled', 'failed', 'interrupted'].includes(job.status)) {
+          finishLoading();
+          if (job.status === 'paused' || job.status === 'interrupted' || job.status === 'failed') {
+            setResumableJobIds((ids) => ids.includes(activeJobId) ? ids : [activeJobId, ...ids]);
+          } else {
+            setResumableJobIds((ids) => ids.filter((id) => id !== activeJobId));
+          }
+          if (job.status === 'failed') setErrorMsg(job.error_code === 'REFERENCE_COST_BUDGET_EXCEEDED'
+            ? '已达到原厂标价参考预算；已完成的 Episode 已保存。若要提高预算，请创建新实验。'
+            : '实验执行失败，已完成的 Episode 仍保留；可检查后恢复。');
+        } else {
+          timer = window.setTimeout(poll, 900);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setErrorMsg(error instanceof Error ? error.message : '实验状态读取失败');
+          finishLoading();
+        }
+      }
+    };
+    void poll();
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [activeJobId, jobWatchToken]);
+
   const refreshExperimentDashboard = () => {
-    fetch('/api/v1/experiments')
+    dashboardRequestRef.current?.abort();
+    const controller = new AbortController();
+    dashboardRequestRef.current = controller;
+    setDashboardLoading(true);
+    fetch('/api/v1/experiments', { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error('dashboard unavailable');
         return res.json();
       })
       .then((data: { items: ExperimentDashboardItem[]; skipped_count: number }) => {
+        if (controller.signal.aborted) return;
         setDashboardItems(Array.isArray(data.items) ? data.items : []);
         setDashboardSkipped(data.skipped_count ?? 0);
         setDashboardError(false);
       })
-      .catch(() => setDashboardError(true));
+      .catch(() => { if (!controller.signal.aborted) setDashboardError(true); })
+      .finally(() => { if (!controller.signal.aborted) setDashboardLoading(false); });
   };
 
   const addCustomModel = (modelId: string, target: 'exp' | 'single') => {
@@ -561,6 +636,7 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const expId = params.get('experiment_id');
     const epId = params.get('episode_id');
+    const jobId = params.get('experiment_job_id');
 
     fetch('/api/v1/meta')
       .then((res) => {
@@ -591,6 +667,10 @@ export default function App() {
       .then((res) => res.ok ? res.json() : [])
       .then((ids: string[]) => setResumableExpIds(ids))
       .catch(() => setResumableExpIds([]));
+    fetch('/api/v1/experiments/jobs/resumable')
+      .then((res) => res.ok ? res.json() : [])
+      .then((ids: string[]) => setResumableJobIds(ids))
+      .catch(() => setResumableJobIds([]));
     refreshExperimentDashboard();
 
     // Load recent history from localStorage
@@ -606,7 +686,10 @@ export default function App() {
       // ignore storage error
     }
 
-    if (expId) {
+    if (jobId) {
+      setActiveTab('experiment');
+      setActiveJobId(jobId);
+    } else if (expId) {
       setActiveTab('experiment');
       loadExperimentById(expId, false);
     } else if (epId) {
@@ -618,13 +701,21 @@ export default function App() {
       const next = new URLSearchParams(window.location.search);
       const nextExpId = next.get('experiment_id');
       const nextEpId = next.get('episode_id');
-      if (nextExpId) {
+      const nextJobId = next.get('experiment_job_id');
+      if (nextJobId) {
+        setActiveTab('experiment');
+        setActiveJobId(nextJobId);
+        setJobWatchToken((value) => value + 1);
+      } else if (nextExpId) {
+        setActiveJobId(null);
         setActiveTab('experiment');
         loadExperimentById(nextExpId, false);
       } else if (nextEpId) {
+        setActiveJobId(null);
         setActiveTab('single');
         loadEpisodeById(nextEpId, false);
       } else {
+        setActiveJobId(null);
         historyRequestId.current += 1;
         setExperiment(null);
         setArtifact(null);
@@ -703,6 +794,7 @@ export default function App() {
   // Load an existing episode by ID
   const loadEpisodeById = async (id: string, updateUrl = true) => {
     if (!id || id.trim().length === 0) return;
+    setActiveJobId(null);
     const requestId = ++historyRequestId.current;
     setLiveRun(null);
     beginLoading('正在读取历史 Episode。');
@@ -724,6 +816,7 @@ export default function App() {
         const url = new URL(window.location.href);
         url.searchParams.set('episode_id', id.trim());
         url.searchParams.delete('experiment_id');
+        url.searchParams.delete('experiment_job_id');
         window.history.pushState({}, '', url.toString());
       }
     } catch (err: unknown) {
@@ -738,6 +831,7 @@ export default function App() {
   // Load an existing experiment by ID
   const loadExperimentById = async (id: string, updateUrl = true) => {
     if (!id || id.trim().length === 0) return;
+    setActiveJobId(null);
     const requestId = ++historyRequestId.current;
     setLiveRun(null);
     beginLoading('正在读取历史对照实验。');
@@ -759,6 +853,7 @@ export default function App() {
         const url = new URL(window.location.href);
         url.searchParams.set('experiment_id', id.trim());
         url.searchParams.delete('episode_id');
+        url.searchParams.delete('experiment_job_id');
         window.history.pushState({}, '', url.toString());
       }
     } catch (err: unknown) {
@@ -911,6 +1006,32 @@ export default function App() {
     }
   };
 
+  const handleRerunFailedEpisode = async () => {
+    if (!artifact || artifact.evaluation.success) return;
+    const sourceId = artifact.episode.episode_id;
+    beginLoading('正在按原始配置单独重跑失败 Episode。');
+    setErrorMsg(null);
+    try {
+      const response = await fetch(`/api/v1/episodes/${encodeURIComponent(sourceId)}/rerun`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `失败 Episode 重跑被拒绝 (${response.status})`);
+      const rerun = data.artifact as EpisodeArtifact;
+      setArtifact(rerun);
+      addRecentEpisodeId(rerun.episode.episode_id);
+      const url = new URL(window.location.href);
+      url.searchParams.set('episode_id', rerun.episode.episode_id);
+      url.searchParams.delete('experiment_id');
+      url.searchParams.delete('experiment_job_id');
+      window.history.pushState({}, '', url.toString());
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : '失败 Episode 重跑失败');
+    } finally {
+      finishLoading();
+    }
+  };
+
   const handleRunExperiment = async () => {
     if (expTasks.length === 0) {
       setErrorMsg('请至少选择一个评测任务');
@@ -921,9 +1042,14 @@ export default function App() {
       setErrorMsg('Seed 必须是 1–10 个不重复整数，用英文逗号分隔');
       return;
     }
+    if (expReferenceBudget !== '' && (!/^\d+(?:\.\d+)?$/.test(expReferenceBudget) || Number(expReferenceBudget) <= 0)) {
+      setErrorMsg('原厂标价参考预算必须是正数 USD，或留空');
+      return;
+    }
     const episodeCount = expTasks.length * seeds.length * expRepeatCount * 2;
     beginLoading(`正在串行执行${comparisonAxis === 'runtime_backend' ? 'Runtime' : '恢复策略'}对照，预计 ${episodeCount} 个 Episode。`);
     setErrorMsg(null);
+    let started = false;
     try {
       const currentModelObj = meta?.models.find((m) => m.id === expModel);
       const isFake = expModel === 'fake' || currentModelObj?.provider === 'fake';
@@ -936,13 +1062,14 @@ export default function App() {
         seeds,
         repeat_count: expRepeatCount,
         token_budget: isFake ? null : expTokenBudget,
+        max_reference_cost_usd: isFake || expReferenceBudget === '' ? null : expReferenceBudget,
         comparison_axis: comparisonAxis,
         runtime_backend: expRuntimeBackend,
         runtime_strategy: expRuntimeStrategy,
         fault_profile: isFake ? expFaultProfile : 'none',
       };
 
-      const res = await fetch('/api/v1/experiments', {
+      const res = await fetch('/api/v1/experiments/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -953,14 +1080,16 @@ export default function App() {
         throw new Error(errData.message || `对照实验执行失败 (${res.status})`);
       }
 
-      const data = await res.json();
-      const expArt = data.experiment as ExperimentArtifact;
-      setExperiment(expArt);
-      refreshExperimentDashboard();
-      addRecentExpId(expArt.experiment_id);
+      const job = await res.json() as ExperimentJobState;
+      started = true;
+      setExperiment(null);
+      setExperimentJob(job);
+      setActiveJobId(job.experiment_id);
+      setJobWatchToken((value) => value + 1);
 
       const url = new URL(window.location.href);
-      url.searchParams.set('experiment_id', expArt.experiment_id);
+      url.searchParams.set('experiment_job_id', job.experiment_id);
+      url.searchParams.delete('experiment_id');
       url.searchParams.delete('episode_id');
       window.history.pushState({}, '', url.toString());
     } catch (err: unknown) {
@@ -971,7 +1100,37 @@ export default function App() {
         .then((ids: string[]) => setResumableExpIds(ids))
         .catch(() => {});
     } finally {
-      finishLoading();
+      if (!started) finishLoading();
+    }
+  };
+
+  const handleControlExperimentJob = async (
+    action: 'pause' | 'cancel' | 'resume', targetId = activeJobId,
+  ) => {
+    if (!targetId) return;
+    setErrorMsg(null);
+    try {
+      const response = await fetch(
+        `/api/v1/experiments/jobs/${encodeURIComponent(targetId)}/${action}`,
+        { method: 'POST' },
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `实验控制失败 (${response.status})`);
+      setExperimentJob(data as ExperimentJobState);
+      if (action === 'resume') {
+        setActiveJobId(targetId);
+        setJobWatchToken((value) => value + 1);
+        setResumableJobIds((ids) => ids.filter((id) => id !== targetId));
+        const url = new URL(window.location.href);
+        url.searchParams.set('experiment_job_id', targetId);
+        url.searchParams.delete('experiment_id');
+        url.searchParams.delete('episode_id');
+        window.history.pushState({}, '', url.toString());
+      } else if (data.status === 'cancelled') {
+        setResumableJobIds((ids) => ids.filter((id) => id !== targetId));
+      }
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : '实验控制失败');
     }
   };
 
@@ -1239,34 +1398,9 @@ export default function App() {
               </div>
             )}
 
-            <section className="card experiment-dashboard" aria-labelledby="experiment-dashboard-title">
-              <div className="card-title" id="experiment-dashboard-title">实验指标看板</div>
-              <p className="card-desc">读取最近保存的实验；每张卡仅比较同一实验的两侧，不跨任务集或协议排名。</p>
-              {dashboardError && <p role="status">历史指标暂不可读取，单次实验结果仍可查看。</p>}
-              {dashboardSkipped > 0 && <p role="status">有 {dashboardSkipped} 份损坏或不匹配的历史文件未计入。</p>}
-              {!dashboardError && dashboardItems.length === 0 && <p className="metric-sub">暂无已完成实验。</p>}
-              <div className="experiment-dashboard-list">
-                {dashboardItems.slice(0, 8).map((item) => (
-                  <article className="experiment-dashboard-item" key={item.experiment_id}>
-                    <button className="dashboard-open" type="button"
-                      aria-current={experiment?.experiment_id === item.experiment_id ? 'true' : undefined}
-                      onClick={() => loadExperimentById(item.experiment_id)}>
-                      <strong>{item.comparison_axis === 'runtime_backend' ? 'Runtime 对照' : '恢复策略对照'}</strong>
-                      <span>{item.environment_version} · {item.total_pairs} 对 · {new Date(item.created_at).toLocaleString()}</span>
-                    </button>
-                    <div className="dashboard-bars" aria-label="两侧成功率">
-                      <label>左侧 {Math.round(item.baseline_success_rate * 100)}%
-                        <progress max="100" value={Math.round(item.baseline_success_rate * 100)} />
-                      </label>
-                      <label>右侧 {Math.round(item.recovery_success_rate * 100)}%
-                        <progress max="100" value={Math.round(item.recovery_success_rate * 100)} />
-                      </label>
-                    </div>
-                    <p className="metric-sub">Token {item.baseline_total_tokens} / {item.recovery_total_tokens} · 平均耗时 {Math.round(item.baseline_avg_duration_ms)} / {Math.round(item.recovery_avg_duration_ms)} ms · 费用 {item.baseline_total_cost ?? '未知'} / {item.recovery_total_cost ?? '未知'} USD</p>
-                  </article>
-                ))}
-              </div>
-            </section>
+            <ExperimentDashboard items={dashboardItems} loading={dashboardLoading} error={dashboardError}
+              skipped={dashboardSkipped} activeId={experiment?.experiment_id}
+              onRefresh={refreshExperimentDashboard} onOpen={loadExperimentById} />
 
             <div className="dashboard-grid">
               {/* Left Panel: Experiment Config */}
@@ -1509,6 +1643,17 @@ export default function App() {
                   </div>
                 )}
 
+                {expModel !== 'fake' && (
+                  <div className="form-group">
+                    <label htmlFor="exp-reference-budget">原厂标价参考预算（USD，可选）</label>
+                    <input id="exp-reference-budget" type="text" inputMode="decimal"
+                      value={expReferenceBudget} placeholder="留空不限制，例如 0.05"
+                      onChange={(e) => setExpReferenceBudget(e.target.value.trim())}
+                      disabled={isLoading} />
+                    <p className="metric-sub">按原厂官网未命中缓存价估算，达到阈值后不启动下一 Episode；这不是 AIHubMix 实付费用上限，也不能保证在途 Episode 不超额。</p>
+                  </div>
+                )}
+
                 <button
                   id="run-exp-button"
                   className="btn-primary"
@@ -1539,6 +1684,43 @@ export default function App() {
                   <p className="loading-note" role="status" aria-live="polite">
                     {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
                   </p>
+                )}
+
+                {activeJobId && experimentJob && (
+                  <div className="resumable-panel" role="status" aria-live="polite">
+                    <div className="card-title">实验任务：{experimentJobLabels[experimentJob.status]}</div>
+                    <p className="card-desc"><code>{activeJobId}</code> · 控制请求在当前 Episode 结束后生效。</p>
+                    <div className="resumable-list">
+                      {['queued', 'running'].includes(experimentJob.status) && !experimentJob.requested_action && (
+                        <>
+                          <button className="btn-secondary" onClick={() => handleControlExperimentJob('pause')}>暂停</button>
+                          <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消</button>
+                        </>
+                      )}
+                      {experimentJob.requested_action && <span>已请求{experimentJob.requested_action === 'pause' ? '暂停' : '取消'}，等待安全点。</span>}
+                      {['paused', 'interrupted'].includes(experimentJob.status) && (
+                        <>
+                          <button className="btn-secondary" onClick={() => handleControlExperimentJob('resume')}>从安全点恢复</button>
+                          <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消实验</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {resumableJobIds.some((id) => id !== activeJobId) && (
+                  <section className="resumable-panel" aria-labelledby="resumable-job-title">
+                    <div className="card-title" id="resumable-job-title">可恢复的实验任务</div>
+                    <p className="card-desc">原计划和已完成 Episode 均保留；继续运行可能重新发送中断中的模型请求。</p>
+                    <div className="resumable-list">
+                      {resumableJobIds.filter((id) => id !== activeJobId).map((id) => (
+                        <button key={id} className="btn-secondary" disabled={isLoading}
+                          onClick={() => handleControlExperimentJob('resume', id)}>
+                          恢复 Job <code>{id}</code>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
                 )}
 
                 {resumableExpIds.length > 0 && (
@@ -1715,7 +1897,9 @@ export default function App() {
                             {experiment.metrics.retry_recovery_count} 例
                           </div>
                           <div className="metric-sub">
-                            {experiment.metrics.retry_eligible_count !== null && experiment.metrics.retry_eligible_count !== undefined
+                            {experiment.metrics.retry_eligible_count === 0
+                              ? '本次没有可恢复的参数错误样本'
+                              : experiment.metrics.retry_eligible_count !== null && experiment.metrics.retry_eligible_count !== undefined
                               ? `转化率: ${((experiment.metrics.retry_recovery_rate ?? 0) * 100).toFixed(1)}% (${experiment.metrics.retry_recovery_count} / ${experiment.metrics.retry_eligible_count} 可恢复样本)`
                               : `转化率: ${((experiment.metrics.retry_recovery_rate ?? 0) * 100).toFixed(1)}% (${experiment.metrics.retry_recovery_count} 例，历史版本未统计可恢复基数)`}
                           </div>
@@ -1748,13 +1932,23 @@ export default function App() {
                             {experiment.metrics.baseline_avg_duration_ms} / {experiment.metrics.recovery_avg_duration_ms} ms
                           </div>
                           <div className="metric-sub">
-                            费用: {experiment.metrics.baseline_total_cost != null &&
+                            {experiment.config.provider === 'fake' ? '模拟费用' : '网关估算费用'}: {experiment.metrics.baseline_total_cost != null &&
                               experiment.metrics.recovery_total_cost != null
                               ? `$${experiment.metrics.baseline_total_cost} / $${experiment.metrics.recovery_total_cost}`
                               : experiment.metrics.is_cost_known
                                 ? '历史产物未统计'
                                 : '未知 (未验证)'}
                           </div>
+                        </div>
+
+                        <div className="metric-box">
+                          <div className="metric-label">原厂标价参考成本 ({armLeftLabel} / {armRightLabel})</div>
+                          <div className="metric-value" style={{ fontSize: '1.05rem' }}>
+                            {experiment.metrics.baseline_total_reference_cost != null && experiment.metrics.recovery_total_reference_cost != null
+                              ? `$${experiment.metrics.baseline_total_reference_cost} / $${experiment.metrics.recovery_total_reference_cost}`
+                              : '未知'}
+                          </div>
+                          <div className="metric-sub">USD · 按全部输入未命中缓存估算，非实际扣费</div>
                         </div>
 
                         {/* Tool Selection & Argument Validity Rates */}
@@ -1936,6 +2130,12 @@ export default function App() {
                     >
                       导出 JSON
                     </button>
+                    {!artifact.evaluation.success && (
+                      <button className="btn-secondary" disabled={isLoading}
+                        onClick={handleRerunFailedEpisode}>
+                        单独重跑失败 Episode
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -2382,7 +2582,7 @@ export default function App() {
 
                         {/* Cost: Strictly "未知" when is_known is False */}
                         <div className="metric-box">
-                          <div className="metric-label">预估费用</div>
+                          <div className="metric-label">{artifact.agent.model.provider === 'fake' ? '模拟费用' : '网关估算费用'}</div>
                           <div className="metric-value" id="metric-cost" style={{ color: artifact.episode.estimated_cost.is_known ? 'var(--text-primary)' : 'var(--warn-text)' }}>
                             {artifact.episode.estimated_cost.is_known
                               ? `$${artifact.episode.estimated_cost.amount} USD`
@@ -2391,6 +2591,11 @@ export default function App() {
                           <div className="metric-sub">
                             版本: {artifact.episode.estimated_cost.price_table_version}
                           </div>
+                        </div>
+                        <div className="metric-box">
+                          <div className="metric-label">原厂标价参考成本</div>
+                          <div className="metric-value">{artifact.reference_cost ? `$${artifact.reference_cost.amount} USD` : '未知'}</div>
+                          <div className="metric-sub">未命中缓存价 · 非实付费用{artifact.reference_cost ? ` · ${artifact.reference_cost.price_table_version}` : ''}</div>
                         </div>
                       </div>
                     </div>

@@ -1,0 +1,144 @@
+{
+  "schema_version": "1.2",
+  "experiment_id": "a5352126-9f42-496e-b953-0e87e72dd470",
+  "created_at": "2026-09-29T01:36:35.066116+00:00",
+  "config": {
+    "comparison_axis": "recovery_policy",
+    "arm_labels": {
+      "baseline": "Baseline Policy",
+      "recovery": "Recovery Policy"
+    },
+    "baseline_agent": {
+      "id": "b1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+      "name": "baseline-m0",
+      "version": "1.0.0",
+      "runtime_strategy": "handwritten",
+      "runtime_backend": "handwritten",
+      "runtime_version": "reference-v2",
+      "recovery_policy": "none"
+    },
+    "recovery_agent": {
+      "id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90",
+      "name": "recovery-m1",
+      "version": "1.0.0",
+      "runtime_strategy": "handwritten_recovery",
+      "runtime_backend": "handwritten",
+      "runtime_version": "reference-v2",
+      "recovery_policy": "invalid_arguments_once"
+    },
+    "model": {
+      "provider": "fake",
+      "model": "fake-model",
+      "temperature": 0.0,
+      "max_tokens": null
+    },
+    "prompt_version": "v1.0.0",
+    "tool_set_version": "v1.0.0",
+    "budget": {
+      "schema_version": "1.0",
+      "max_steps": 6,
+      "max_model_calls": 6,
+      "max_tool_calls": 5,
+      "max_prompt_tokens": 1000,
+      "max_completion_tokens": 1000,
+      "max_estimated_cost": "1"
+    },
+    "tasks": [
+      {
+        "id": "da6dcb41-d04e-42ea-8372-0e1b382f1ec6",
+        "name": "order-status-001",
+        "version": "1.0.0",
+        "max_steps": 6,
+        "token_budget": 1000,
+        "evaluator_config": {
+          "name": "order_status_v1",
+          "split": "development",
+          "origin": "native"
+        }
+      }
+    ],
+    "evaluator": "order_status_v1",
+    "environment_version": "tool-lab-m0-v1",
+    "seed": 1,
+    "seeds": [
+      1
+    ],
+    "repeat_count": 1,
+    "provider": "fake",
+    "requested_model": "fake-model",
+    "scenario": "success",
+    "token_budget": null,
+    "task_ids": [
+      "order-status-001"
+    ],
+    "baseline_strategy": "handwritten",
+    "recovery_strategy": "handwritten_recovery",
+    "baseline_backend": "handwritten",
+    "recovery_backend": "handwritten",
+    "fault_profile": "none"
+  },
+  "config_hash": "bec3325580d00416dac55b7ad200804dc77983dfa119648891604b38e56aecec",
+  "episode_ids": [
+    "db3b4fbd-e345-549b-9fb9-aa6a5ec8a44b",
+    "6c81a7f9-7eea-5a8b-b7b1-3f68543f8349"
+  ],
+  "pairs": [
+    {
+      "task_id": "order-status-001",
+      "task_name": "order-status-001",
+      "seed": 1,
+      "repeat_index": 1,
+      "baseline_episode_id": "db3b4fbd-e345-549b-9fb9-aa6a5ec8a44b",
+      "baseline_success": true,
+      "baseline_termination_reason": "SUCCESS",
+      "baseline_steps": 2,
+      "baseline_tokens": 120,
+      "baseline_duration_ms": 19,
+      "baseline_cost": "0.002",
+      "baseline_model_calls": 2,
+      "baseline_tool_calls": 2,
+      "baseline_tool_selection_accuracy": 1.0,
+      "baseline_tool_argument_validity_rate": 1.0,
+      "recovery_episode_id": "6c81a7f9-7eea-5a8b-b7b1-3f68543f8349",
+      "recovery_success": true,
+      "recovery_termination_reason": "SUCCESS",
+      "recovery_steps": 2,
+      "recovery_tokens": 120,
+      "recovery_duration_ms": 20,
+      "recovery_cost": "0.002",
+      "recovery_model_calls": 2,
+      "recovery_tool_calls": 2,
+      "recovery_tool_selection_accuracy": 1.0,
+      "recovery_tool_argument_validity_rate": 1.0,
+      "retry_eligible": false,
+      "recovered": false
+    }
+  ],
+  "metrics": {
+    "total_pairs": 1,
+    "baseline_success_count": 1,
+    "recovery_success_count": 1,
+    "baseline_success_rate": 1.0,
+    "recovery_success_rate": 1.0,
+    "retry_eligible_count": 0,
+    "retry_recovery_count": 0,
+    "retry_recovery_rate": 0.0,
+    "baseline_total_tokens": 120,
+    "recovery_total_tokens": 120,
+    "baseline_avg_steps": 2.0,
+    "recovery_avg_steps": 2.0,
+    "baseline_avg_model_calls": 2.0,
+    "recovery_avg_model_calls": 2.0,
+    "baseline_avg_tool_calls": 2.0,
+    "recovery_avg_tool_calls": 2.0,
+    "baseline_tool_selection_accuracy": 1.0,
+    "recovery_tool_selection_accuracy": 1.0,
+    "baseline_tool_argument_validity_rate": 1.0,
+    "recovery_tool_argument_validity_rate": 1.0,
+    "baseline_avg_duration_ms": 19.0,
+    "recovery_avg_duration_ms": 20.0,
+    "baseline_total_cost": "0.002",
+    "recovery_total_cost": "0.002",
+    "is_cost_known": true
+  }
+}
