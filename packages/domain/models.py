@@ -3,10 +3,19 @@
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 NonNegativeInt = Annotated[int, Field(ge=0)]
 PositiveInt = Annotated[int, Field(gt=0)]
@@ -22,7 +31,25 @@ class Contract(BaseModel):
 
 
 class Budget(Contract):
-    """M0 hard limits; time limits are deliberately deferred."""
+    """Episode hard limits; optional time limits preserve legacy configurations."""
+
+    schema_version: Literal["1.0", "1.1"] = "1.0"  # type: ignore[assignment]
+    max_execution_time_ms: PositiveInt | None = None
+
+    @model_validator(mode="after")
+    def validate_time_revision(self) -> Self:
+        """Require the additive revision when a total execution limit is supplied."""
+        if self.max_execution_time_ms is not None and self.schema_version != "1.1":
+            raise ValueError("Execution time limit requires Budget schema 1.1")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_budget(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        """Keep legacy serialized configurations and provenance hashes unchanged."""
+        result: dict[str, object] = handler(self)
+        if self.max_execution_time_ms is None:
+            result.pop("max_execution_time_ms", None)
+        return result
 
     max_steps: PositiveInt = 6
     max_model_calls: PositiveInt = 6
@@ -182,6 +209,7 @@ class TerminationReason(StrEnum):
     TOKEN_BUDGET_EXCEEDED = "TOKEN_BUDGET_EXCEEDED"
     COST_BUDGET_EXCEEDED = "COST_BUDGET_EXCEEDED"
     RUNTIME_ERROR = "RUNTIME_ERROR"
+    TIME_BUDGET_EXCEEDED = "TIME_BUDGET_EXCEEDED"
 
 
 class EventType(StrEnum):

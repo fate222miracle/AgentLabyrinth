@@ -121,6 +121,7 @@ interface EpisodeArtifact {
   };
   run_config: { runtime_version?: string | null; environment_version?: string };
   agent: {
+    budget?: { max_execution_time_ms?: number };
     name?: string;
     runtime_strategy?: string;
     runtime_backend?: string;
@@ -238,6 +239,8 @@ function explainFailure(detail: string): string {
     OUTPUT_TRUNCATED: '模型输出达到单次上限，未形成完整行动。',
     INVALID_ARGUMENTS: '工具参数不符合 schema；Baseline 会终止，Recovery 最多纠错一次。',
     task_token_budget_exceeded: '累计输入与输出超出任务 Token 预算，可在运行前显式调整。',
+    max_execution_time_exceeded: '本次运行已达到总时限，停止后续调用并保留已完成状态。',
+    upstream_usage_unknown: '本次运行已达到总时限；在途模型请求的最终用量未知，不会自动重试。',
     missing_submission: '模型只返回文本，未调用工具完成提交。',
   };
   const parts = detail.split(': ');
@@ -478,6 +481,9 @@ export default function App() {
   const [expTokenBudget, setExpTokenBudget] = useState<number | null>(8000);
   const [expReferenceBudget, setExpReferenceBudget] = useState<string>('');
   const [singleTokenBudget, setSingleTokenBudget] = useState<number | null>(8000);
+  const [executionSeconds, setExecutionSeconds] = useState(300);
+  const [expExecutionSeconds, setExpExecutionSeconds] = useState(300);
+  const [loadingActivity, setLoadingActivity] = useState<'run' | 'history'>('run');
   const [experiment, setExperiment] = useState<ExperimentArtifact | null>(null);
   const [recentExpIds, setRecentExpIds] = useState<string[]>([]);
   const [resumableExpIds, setResumableExpIds] = useState<string[]>([]);
@@ -525,7 +531,8 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [isLoading]);
 
-  const beginLoading = (message: string) => {
+  const beginLoading = (message: string, activity: 'run' | 'history' = 'run') => {
+    setLoadingActivity(activity);
     setLoadingMessage(message);
     setIsLoading(true);
   };
@@ -797,9 +804,16 @@ export default function App() {
     setActiveJobId(null);
     const requestId = ++historyRequestId.current;
     setLiveRun(null);
-    beginLoading('正在读取历史 Episode。');
+    beginLoading('正在读取历史 Episode。', 'history');
     setErrorMsg(null);
-    if (!updateUrl) setArtifact(null);
+    setArtifact(null);
+    if (updateUrl) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('episode_id', id.trim());
+      url.searchParams.delete('experiment_id');
+      url.searchParams.delete('experiment_job_id');
+      window.history.pushState({}, '', url.toString());
+    }
     try {
       const res = await fetch(`/api/v1/episodes/${encodeURIComponent(id.trim())}`);
       if (!res.ok) {
@@ -812,13 +826,6 @@ export default function App() {
       setArtifact(data.artifact);
       addRecentEpisodeId(id.trim());
 
-      if (updateUrl) {
-        const url = new URL(window.location.href);
-        url.searchParams.set('episode_id', id.trim());
-        url.searchParams.delete('experiment_id');
-        url.searchParams.delete('experiment_job_id');
-        window.history.pushState({}, '', url.toString());
-      }
     } catch (err: unknown) {
       if (requestId !== historyRequestId.current) return;
       const message = err instanceof Error ? err.message : '加载失败';
@@ -834,9 +841,16 @@ export default function App() {
     setActiveJobId(null);
     const requestId = ++historyRequestId.current;
     setLiveRun(null);
-    beginLoading('正在读取历史对照实验。');
+    beginLoading('正在读取历史对照实验。', 'history');
     setErrorMsg(null);
-    if (!updateUrl) setExperiment(null);
+    setExperiment(null);
+    if (updateUrl) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('experiment_id', id.trim());
+      url.searchParams.delete('episode_id');
+      url.searchParams.delete('experiment_job_id');
+      window.history.pushState({}, '', url.toString());
+    }
     try {
       const res = await fetch(`/api/v1/experiments/${encodeURIComponent(id.trim())}`);
       if (!res.ok) {
@@ -849,13 +863,6 @@ export default function App() {
       setExperiment(data.experiment);
       addRecentExpId(id.trim());
 
-      if (updateUrl) {
-        const url = new URL(window.location.href);
-        url.searchParams.set('experiment_id', id.trim());
-        url.searchParams.delete('episode_id');
-        url.searchParams.delete('experiment_job_id');
-        window.history.pushState({}, '', url.toString());
-      }
     } catch (err: unknown) {
       if (requestId !== historyRequestId.current) return;
       const message = err instanceof Error ? err.message : '加载实验失败';
@@ -890,6 +897,7 @@ export default function App() {
         task_id: selectedSingleTask,
         suite: selectedSuite,
         max_steps: maxSteps,
+        max_execution_time_ms: executionSeconds * 1000,
         token_budget: isFake ? null : singleTokenBudget,
         runtime_backend: singleRuntimeBackend,
         runtime_strategy: singleRuntimeStrategy,
@@ -1062,6 +1070,7 @@ export default function App() {
         seeds,
         repeat_count: expRepeatCount,
         token_budget: isFake ? null : expTokenBudget,
+        max_execution_time_ms: expExecutionSeconds * 1000,
         max_reference_cost_usd: isFake || expReferenceBudget === '' ? null : expReferenceBudget,
         comparison_axis: comparisonAxis,
         runtime_backend: expRuntimeBackend,
@@ -1160,6 +1169,7 @@ export default function App() {
     singleRuntimeStrategy !== 'handwritten',
     singleToolTransport === 'mcp' && Boolean(selectedSingleTaskMeta?.supports_mcp),
     maxSteps !== defaultSingleMaxSteps,
+    executionSeconds !== 300,
     selectedModel === 'fake' && selectedScenario !== 'success',
     selectedModel === 'fake' && singleFaultProfile !== 'none',
     selectedModel !== 'fake' && singleTokenBudget !== 8000,
@@ -1398,9 +1408,12 @@ export default function App() {
               </div>
             )}
 
+            <details className="history-disclosure">
+              <summary>实验历史与趋势 <span>{dashboardLoading ? '读取中' : `${dashboardItems.length} 条记录`}</span></summary>
             <ExperimentDashboard items={dashboardItems} loading={dashboardLoading} error={dashboardError}
               skipped={dashboardSkipped} activeId={experiment?.experiment_id}
               onRefresh={refreshExperimentDashboard} onOpen={loadExperimentById} />
+            </details>
 
             <div className="dashboard-grid">
               {/* Left Panel: Experiment Config */}
@@ -1634,7 +1647,7 @@ export default function App() {
 
                 {expModel !== 'fake' && (
                   <div className="form-group">
-                    <label htmlFor="exp-token-budget">总 Token 预算（输入 + 输出）</label>
+                    <label htmlFor="exp-token-budget">每次运行 Token 预算（输入 + 输出）</label>
                     <input id="exp-token-budget" type="number" min={100} max={20000}
                       value={expTokenBudget ?? ''} placeholder="留空使用任务原预算"
                       onChange={(e) => setExpTokenBudget(e.target.value === '' ? null : Number(e.target.value))}
@@ -1643,6 +1656,13 @@ export default function App() {
                   </div>
                 )}
 
+                <div className="form-group">
+                  <label htmlFor="exp-time-limit">每次运行时限（秒）</label>
+                  <input id="exp-time-limit" className="form-input" type="number" min={1} max={3600}
+                    value={expExecutionSeconds} disabled={isLoading}
+                    onChange={(event) => setExpExecutionSeconds(Math.max(1, Math.min(3600, Math.floor(Number(event.target.value)) || 1)))} />
+                  <p className="metric-sub">两侧使用相同时限；恢复继承已用时间，已开始的工具先保存结果再停止。</p>
+                </div>
                 {expModel !== 'fake' && (
                   <div className="form-group">
                     <label htmlFor="exp-reference-budget">原厂标价参考预算（USD，可选）</label>
@@ -1672,7 +1692,7 @@ export default function App() {
                   {isLoading ? (
                     <>
                       <div className="spinner" />
-                      <span>正在串行执行成对评测...</span>
+                      <span>{loadingActivity === 'history' ? '正在读取历史记录…' : '正在执行实验…'}</span>
                     </>
                   ) : (
                     <>
@@ -1809,6 +1829,11 @@ export default function App() {
                           <div>
                             <strong>每个 Seed 重复：</strong>{' '}
                             {String(experiment.config.repeat_count ?? 1)} 次
+                          </div>
+                          <div>
+                            <strong>每次运行时限：</strong>{' '}
+                            {isRecord(experiment.config.budget) && typeof experiment.config.budget.max_execution_time_ms === 'number'
+                              ? `${experiment.config.budget.max_execution_time_ms / 1000} 秒` : '历史配置未设置'}
                           </div>
                           <div>
                             <strong>数据来源：</strong>{' '}
@@ -2191,7 +2216,7 @@ export default function App() {
                       <button id="run-button" className="btn-primary"
                         onClick={handleRunEpisode} disabled={!isSingleRunReady}
                         title={!meta ? '元数据尚未就绪' : !selectedSingleTaskMeta ? '请选择一个可见任务后再运行' : undefined}>
-                        {isLoading ? <><div className="spinner" /><span>正在运行 Episode...</span></>
+                        {isLoading ? <><div className="spinner" /><span>{loadingActivity === 'history' ? '正在读取历史记录…' : '正在运行 Episode…'}</span></>
                           : <span>开始运行 Episode</span>}
                       </button>
                       {isLoading && (
@@ -2476,7 +2501,7 @@ export default function App() {
                   </div>
                   {selectedModel !== 'fake' && (
                     <div className="form-group">
-                      <label htmlFor="single-token-budget" className="form-label">总 Token 预算（输入 + 输出）</label>
+                      <label htmlFor="single-token-budget" className="form-label">本次运行 Token 预算（输入 + 输出）</label>
                       <input id="single-token-budget" className="form-input" type="number" min={100} max={20000}
                         value={singleTokenBudget ?? ''} placeholder="留空使用任务原预算"
                         onChange={(e) => setSingleTokenBudget(e.target.value === '' ? null : Number(e.target.value))}
@@ -2484,6 +2509,13 @@ export default function App() {
                       <p className="metric-sub">真实多轮建议 8000；两种策略使用相同预算。免费通道仍可能遇到账户限额。</p>
                     </div>
                   )}
+                  <div className="form-group">
+                    <label htmlFor="single-time-limit" className="form-label">本次运行时限（秒）</label>
+                    <input id="single-time-limit" className="form-input" type="number" min={1} max={3600}
+                      value={executionSeconds} disabled={isLoading}
+                      onChange={(event) => setExecutionSeconds(Math.max(1, Math.min(3600, Math.floor(Number(event.target.value)) || 1)))} />
+                    <p className="metric-sub">恢复继承已用时间；已开始的工具先保存结果再停止。</p>
+                  </div>
                 </details>
 
                     </section>
@@ -2577,7 +2609,8 @@ export default function App() {
                           <div className="metric-value" id="metric-duration">
                             {artifact.episode.duration_ms} ms
                           </div>
-                          <div className="metric-sub">运行耗时</div>
+                          <div className="metric-sub">运行耗时 · 保存的时限：{artifact.agent.budget?.max_execution_time_ms
+                            ? `${artifact.agent.budget.max_execution_time_ms / 1000} 秒` : '历史配置未设置'}</div>
                         </div>
 
                         {/* Cost: Strictly "未知" when is_known is False */}

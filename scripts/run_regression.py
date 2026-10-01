@@ -96,6 +96,7 @@ def preflight(
     agent_path = DEFAULT_FAKE_AGENT if request.provider == "fake" else DEFAULT_AIHUBMIX_AGENT
     agent = AgentSpec.model_validate_json(agent_path.read_text(encoding="utf-8"))
     agent = service._agent_with_token_budget(agent, request.token_budget)
+    agent = service._agent_with_time_budget(agent, request.max_execution_time_ms)
     saved_model = config["model"]
     if not isinstance(saved_model, dict):
         raise ValueError("Regression model provenance is unavailable")

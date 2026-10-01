@@ -384,6 +384,40 @@ def test_explicit_budget_is_saved_for_both_agents(client: TestClient) -> None:
     assert invalid.status_code == 422
 
 
+def test_execution_time_is_saved_and_read_back(client: TestClient) -> None:
+    """Both public creation surfaces bind time limits to immutable Agent provenance."""
+    payload = {
+        "provider": "fake",
+        "model": "fake-model",
+        "scenario": "success",
+        "max_execution_time_ms": 300000,
+    }
+    response = client.post("/api/v1/episodes", json=payload)
+    assert response.status_code == 201
+    artifact = response.json()["artifact"]
+    assert artifact["agent"]["budget"]["schema_version"] == "1.1"
+    assert artifact["agent"]["budget"]["max_execution_time_ms"] == 300000
+    saved = client.get(f"/api/v1/episodes/{artifact['episode']['episode_id']}")
+    assert saved.json()["artifact"] == artifact
+    response = client.post(
+        "/api/v1/experiments",
+        json={**payload, "task_ids": ["order-status-001"], "comparison_axis": "runtime_backend"},
+    )
+    assert response.status_code == 201
+    experiment = response.json()["experiment"]
+    assert experiment["config"]["budget"]["max_execution_time_ms"] == 300000
+    for episode_id in experiment["episode_ids"]:
+        saved = client.get(f"/api/v1/episodes/{episode_id}").json()["artifact"]
+        assert saved["agent"]["budget"]["max_execution_time_ms"] == 300000
+    for invalid in (0, -1, 3600001, 1.5, True):
+        assert (
+            client.post(
+                "/api/v1/episodes", json={**payload, "max_execution_time_ms": invalid}
+            ).status_code
+            == 422
+        )
+
+
 def test_bfcl_episode_whitelist_and_readback_do_not_recall_model(
     tmp_path: Path,
 ) -> None:

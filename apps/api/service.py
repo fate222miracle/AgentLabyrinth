@@ -288,6 +288,19 @@ class EpisodeService:
             }
         )
 
+    @staticmethod
+    def _agent_with_time_budget(agent: AgentSpec, limit: int | None) -> AgentSpec:
+        """Bind an opt-in total time limit without altering historical configurations."""
+        if limit is None:
+            return agent
+        return agent.model_copy(
+            update={
+                "budget": agent.budget.model_copy(
+                    update={"schema_version": "1.1", "max_execution_time_ms": limit}
+                )
+            }
+        )
+
     def _load_all_tasks(self) -> list[TaskSpec]:
         """Load all TaskSpecs from tasks directory in sorted order."""
         tasks: list[TaskSpec] = []
@@ -429,6 +442,7 @@ class EpisodeService:
             )
 
         # 2. Load Task
+        agent = self._agent_with_time_budget(agent, req.max_execution_time_ms)
         bfcl_case = None
         if req.suite in ("bfcl_adapted", "bfcl_java_adapted"):
             adapter = self.bfcl if req.suite == "bfcl_adapted" else self.bfcl_java
@@ -774,6 +788,8 @@ class EpisodeService:
         # 3. Run paired experiment
         baseline_agent = self._agent_with_token_budget(baseline_agent, req.token_budget)
         recovery_agent = self._agent_with_token_budget(recovery_agent, req.token_budget)
+        baseline_agent = self._agent_with_time_budget(baseline_agent, req.max_execution_time_ms)
+        recovery_agent = self._agent_with_time_budget(recovery_agent, req.max_execution_time_ms)
         if req.comparison_axis == "runtime_backend":
             baseline_agent = baseline_agent.model_copy(
                 update={

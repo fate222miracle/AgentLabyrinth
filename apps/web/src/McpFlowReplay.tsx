@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Background, BaseEdge, Controls, Handle, Position, ReactFlow, getBezierPath,
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { Background, BaseEdge, Controls, Handle, Position, ReactFlow, getBezierPath, getNodesBounds, getViewportForBounds, useReactFlow,
   type Edge, type EdgeProps, type Node, type NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { flowFrames, type FlowFrame } from './flowFrames';
@@ -39,6 +39,28 @@ function PacketEdge(props: EdgeProps<VisualEdge>) {
 const nodeTypes = { visual: VisualCard };
 const edgeTypes = { packet: PacketEdge };
 
+function FitCanvas({ canvas, padding }: { canvas: RefObject<HTMLDivElement | null>; padding: number }) {
+  const { getNodes, setViewport, viewportInitialized } = useReactFlow();
+  useEffect(() => {
+    if (!viewportInitialized || !canvas.current) return;
+    let pending = 0;
+    const resize = () => {
+      cancelAnimationFrame(pending);
+      pending = requestAnimationFrame(() => {
+        const target = canvas.current;
+        const nodes = getNodes();
+        if (!target || !nodes.length) return;
+        void setViewport(getViewportForBounds(getNodesBounds(nodes), target.clientWidth, target.clientHeight, 0.3, 1.4, padding));
+      });
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(canvas.current);
+    resize();
+    return () => { observer.disconnect(); cancelAnimationFrame(pending); };
+  }, [canvas, viewportInitialized, getNodes, setViewport, padding]);
+  return null;
+}
+
 function savedRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : {};
@@ -53,6 +75,30 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [duration, setDuration] = useState(1400);
+  const section = useRef<HTMLElement>(null);
+  const canvas = useRef<HTMLDivElement>(null);
+  const focusButton = useRef<HTMLButtonElement>(null);
+  const [focused, setFocused] = useState(false);
+  const [focusError, setFocusError] = useState('');
+  useEffect(() => {
+    const update = () => {
+      const active = document.fullscreenElement === section.current;
+      setFocused(active);
+      if (active && section.current) section.current.scrollTop = 0;
+      else focusButton.current?.focus({ preventScroll: true });
+    };
+    document.addEventListener('fullscreenchange', update);
+    return () => document.removeEventListener('fullscreenchange', update);
+  }, []);
+  const toggleFocus = async () => {
+    setFocusError('');
+    try {
+      if (document.fullscreenElement === section.current) await document.exitFullscreen();
+      else await section.current?.requestFullscreen();
+    } catch {
+      setFocusError('浏览器未允许全屏；仍可在当前区域播放。');
+    }
+  };
   const [compact, setCompact] = useState(() => window.innerWidth < 640);
   const frame = frames[live ? frames.length - 1 : Math.min(index, Math.max(0, frames.length - 1))];
   const isBfcl = environmentVersion.startsWith('bfcl-adapted');
@@ -91,9 +137,9 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
   const activeNode = frame?.phase === 'observe' || frame?.phase === 'choose' || frame?.phase === 'finish'
     ? 'model' : frame?.phase === 'reject' ? 'gateway' : `tool:${frame?.tool}`;
   const nodes: VisualNode[] = [
-    { id: 'model', position: { x: 0, y: 140 }, type: 'visual', data: { title: '模型', subtitle: model, kind: 'model', active: activeNode === 'model', failed: Boolean(frame?.failed && activeNode === 'model') } },
-    { id: 'gateway', position: { x: 260, y: 140 }, type: 'visual', data: { title: isBfcl ? '调用校验' : '工具调度', subtitle: isBfcl ? '函数名与参数' : frame?.transport === 'mcp' ? 'MCP · HTTP' : frame?.transport === 'local' ? '本地执行' : '校验与路由', kind: 'gateway', active: activeNode === 'gateway', failed: Boolean(frame?.failed && activeNode === 'gateway') } },
-    ...displayTools.map((tool, i): VisualNode => ({ id: `tool:${tool}`, position: { x: 540, y: i * 145 }, type: 'visual',
+    { id: 'model', position: { x: 0, y: 140 }, width: 180, height: 116, type: 'visual', data: { title: '模型', subtitle: model, kind: 'model', active: activeNode === 'model', failed: Boolean(frame?.failed && activeNode === 'model') } },
+    { id: 'gateway', position: { x: 260, y: 140 }, width: 180, height: 116, type: 'visual', data: { title: isBfcl ? '调用校验' : '工具调度', subtitle: isBfcl ? '函数名与参数' : frame?.transport === 'mcp' ? 'MCP · HTTP' : frame?.transport === 'local' ? '本地执行' : '校验与路由', kind: 'gateway', active: activeNode === 'gateway', failed: Boolean(frame?.failed && activeNode === 'gateway') } },
+    ...displayTools.map((tool, i): VisualNode => ({ id: `tool:${tool}`, position: { x: 540, y: i * 145 }, width: 180, height: 116, type: 'visual',
       data: { title: toolLabels[tool] ?? tool, subtitle: `${frames.some((beat) => beat.tool === tool && beat.transport === 'mcp') ? 'MCP · ' : ''}${tool}`, kind: tool, active: activeNode === `tool:${tool}`, failed: Boolean(frame?.failed && frame.tool === tool) } })),
   ];
   if (compact) nodes.forEach((node, i) => { node.position = { x: 0, y: i * 180 }; });
@@ -105,10 +151,16 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
     edge(`invoke:${tool}`, 'gateway', `tool:${tool}`), edge(`return:${tool}`, `tool:${tool}`, 'model'),
   ])];
   if (!frame) return <p>{live ? '正在等待第一条可视化事件…' : '没有可回放的工具记录。'}</p>;
-  return <section className={`flow-replay ${compact ? 'compact' : ''}`} aria-label={live ? '实时工具调用流程' : '工具调用动画回放'}>
+  return <section ref={section} className={`flow-replay ${compact ? 'compact' : ''}`} aria-label={live ? '实时工具调用流程' : '工具调用动画回放'}
+    onKeyDown={(event) => { if (event.key === 'Escape' && document.fullscreenElement === section.current) { event.preventDefault(); void toggleFocus(); } }}>
     <div className="flow-caption"><span className="flow-replay-label">{live ? termination === '连接中断' ? '连接中断 · 已收到的轨迹' : '实时轨迹 · 记录中' : '已保存轨迹 · 动画回放'}</span>
       <strong aria-live="polite">{isBfcl && frame.phase === 'execute' ? '记录函数调用' : isBfcl && frame.phase === 'return' ? '调用已接收' : phaseLabels[frame.phase]}{frame.tool ? ` · ${toolLabels[frame.tool] ?? frame.tool}` : ''}</strong>
-      <span className={frame.failed ? 'flow-failure' : ''}>{frame.failed ? '失败' : frame.transport === 'mcp' ? 'MCP HTTP' : frame.transport === 'local' ? '本地' : `Step ${frame.step}`}</span></div>
+      <span className={frame.failed ? 'flow-failure' : ''}>{frame.failed ? '失败' : frame.transport === 'mcp' ? 'MCP HTTP' : frame.transport === 'local' ? '本地' : `Step ${frame.step}`}</span>
+      {document.fullscreenEnabled && <button ref={focusButton} type="button" className="btn-secondary" aria-pressed={focused}
+        onClick={toggleFocus}>{focused ? '退出专注查看' : '专注查看'}</button>}
+      {focused && <span>Esc 返回</span>}
+      {focusError && <span role="status">{focusError}</span>}
+    </div>
     {isMcp && <div className="mcp-network" aria-label="MCP 网络链路">
       <div className="mcp-network-heading"><strong>MCP 网络链路</strong><span aria-live="polite">{remoteFrame
         ? `${frame.tool} · ${frame.phase === 'execute' ? '远程调用开始' : frame.failed ? '远程调用失败' : '远程结果已返回'}`
@@ -127,13 +179,14 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
         {inputContext.length > 0 && <div className="flow-input-context">{inputContext.map((item) => <span key={item.label}>{item.label}<strong>{item.value}</strong></span>)}</div>}
       </div>
     </div>
-    <div className="flow-canvas">
-      <ReactFlow key={compact ? 'mobile' : 'desktop'} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
-        fitView fitViewOptions={{ padding: compact ? 0.08 : 0.2 }} minZoom={0.3} maxZoom={1.4}
+    <div className="flow-canvas" ref={canvas}>
+      <ReactFlow key={`${compact ? 'mobile' : 'desktop'}-${focused}`} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+        minZoom={0.3} maxZoom={1.4}
         nodesDraggable={false} nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null} panOnDrag={false}
         zoomOnScroll={false} panOnScroll={false} preventScrolling={false}
         onNodeClick={(_, node) => { if (live) return; const next = frames.findIndex((beat) => node.id === `tool:${beat.tool}`);
           if (next >= 0) { setPlaying(false); setIndex(next); } }}>
+        <FitCanvas canvas={canvas} padding={compact || focused ? 0.08 : 0.2} />
         <Background gap={22} size={1} color="#d5d0c7" /><Controls showInteractive={false} />
       </ReactFlow>
     </div>

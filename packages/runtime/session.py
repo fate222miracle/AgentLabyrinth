@@ -172,6 +172,25 @@ class EpisodeSession:
         self.termination_reason, self.detail = reason, detail
         return "end"
 
+    def remaining_seconds(self) -> float | None:
+        """Return remaining active time, including time inherited from a safe point."""
+        limit = self.agent.budget.max_execution_time_ms
+        return None if limit is None else limit / 1000 - (perf_counter() - self.started)
+
+    def time_exceeded(self) -> bool:
+        """Check total time without altering counters or the environment."""
+        remaining = self.remaining_seconds()
+        return remaining is not None and remaining <= 0
+
+    def stop_for_time(self, *, usage_unknown: bool = False) -> NextNode:
+        """Identify a deadline stop and distinguish an unaccounted upstream request."""
+        detail = "max_execution_time_exceeded"
+        if usage_unknown:
+            detail += ": upstream_usage_unknown"
+            # Preserve reported tokens, but never imply a known total invoice.
+            self.budget.mark_unknown_cost()
+        return self.stop(TerminationReason.TIME_BUDGET_EXCEEDED, detail)
+
     def observe(self) -> NextNode:
         """Reset the environment and build only the public model context."""
         obs = self.environment.reset(self.task, self.recorder.run_config.seed)
@@ -195,17 +214,27 @@ class EpisodeSession:
 
     async def call_model(self) -> NextNode:
         """Check limits, call the provider once, and account for its full response."""
+        if self.time_exceeded():
+            return self.stop_for_time()
         allowed, reason, detail = self.budget.can_call_model()
         if not allowed:
             return self.stop(reason or TerminationReason.MAX_STEPS, detail or "max_steps_exceeded")
         self.budget.model_call_count += 1
         self.budget.step_count += 1
         self.record(EventType.MODEL_REQUESTED, {"messages_count": len(self.messages)})
+        deadline = asyncio.timeout(self.remaining_seconds())
         try:
-            response = await self.provider.generate(
-                self.messages, self.environment.available_tools(), self.agent.model
-            )
+            async with deadline:
+                response = await self.provider.generate(
+                    self.messages, self.environment.available_tools(), self.agent.model
+                )
+        except TimeoutError:
+            if not deadline.expired():
+                return self.stop(TerminationReason.RUNTIME_ERROR, "provider_error")
+            return self.stop_for_time(usage_unknown=True)
         except ModelProviderError as exc:
+            if self.time_exceeded():
+                return self.stop_for_time(usage_unknown=True)
             return self.stop(TerminationReason.RUNTIME_ERROR, f"provider_error: {exc.code}")
         except Exception:
             return self.stop(TerminationReason.RUNTIME_ERROR, "provider_error")
@@ -219,6 +248,8 @@ class EpisodeSession:
             token_usage=response.token_usage,
             estimated_cost=response.estimated_cost,
         )
+        if self.time_exceeded():
+            return self.stop_for_time()
         if not allowed:
             return self.stop(
                 reason or TerminationReason.TOKEN_BUDGET_EXCEEDED, detail or "token_budget_exceeded"
@@ -244,6 +275,8 @@ class EpisodeSession:
 
     def validate(self) -> NextNode:
         """Reject unsafe actions; only one permitted argument error can re-enter model."""
+        if self.time_exceeded():
+            return self.stop_for_time()
         action = self.action
         if action is None:
             raise RuntimeError("No tool action to validate")
@@ -304,6 +337,8 @@ class EpisodeSession:
 
     async def execute(self) -> NextNode:
         """Run one validated tool through Environment/Executor, then append its feedback."""
+        if self.time_exceeded():
+            return self.stop_for_time()
         action = self.action
         if action is None:
             raise RuntimeError("No tool action to execute")
@@ -329,12 +364,16 @@ class EpisodeSession:
                 EventType.TOOL_FAILED,
                 {"call_id": action.call_id, "error_code": "ENVIRONMENT_ERROR"},
             )
+            if self.time_exceeded():
+                return self.stop_for_time()
             return self.stop(TerminationReason.RUNTIME_ERROR, "environment_error")
         if step.error is not None:
             self.record(
                 EventType.TOOL_FAILED,
                 {"call_id": action.call_id, "error": step.error.model_dump()},
             )
+            if self.time_exceeded():
+                return self.stop_for_time()
             return self.stop(TerminationReason.FAILED, f"tool_failed: {step.error.code}")
         self.record(
             EventType.TOOL_SUCCEEDED,
@@ -345,6 +384,8 @@ class EpisodeSession:
         self.messages.append(
             Message(role="tool", content=step.observation.content, tool_call_id=action.call_id)
         )
+        if self.time_exceeded():
+            return self.stop_for_time()
         if step.done:
             return self.stop(TerminationReason.SUCCESS, "submitted")
         return "model"

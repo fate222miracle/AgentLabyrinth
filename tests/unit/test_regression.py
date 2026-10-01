@@ -50,6 +50,8 @@ def test_preflight_rejects_task_or_model_change_before_execution(tmp_path: Path)
         provider="fake", model="fake-model", scenario="success", task_ids=["order-status-001"]
     )
     preflight(baseline, request, service)
+    with pytest.raises(ValueError, match="agent or evaluation protocol"):
+        preflight(baseline, request.model_copy(update={"max_execution_time_ms": 1000}), service)
     with pytest.raises(ValueError, match="pinned baseline"):
         preflight(baseline, request.model_copy(update={"model": "other"}), service)
     changed_config = {

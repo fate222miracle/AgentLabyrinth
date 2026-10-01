@@ -159,6 +159,10 @@ class BudgetTracker:
             simulated=simulated,
         )
 
+    def mark_unknown_cost(self) -> None:
+        """Retain reported consumption while marking an unanswered request unpriced."""
+        self._has_unknown_cost = True
+
     def total_estimated_cost(self) -> EstimatedCost:
         """Return total aggregated cost model."""
         return EstimatedCost(

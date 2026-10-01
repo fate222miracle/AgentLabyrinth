@@ -1,6 +1,69 @@
 # Current state
 
-更新：2026-09-30。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+更新：2026-10-01。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+
+## 2026-10-01 UI 复验与课程案例固化（最新）
+
+按负责人接续授权完成固定 Fake 演示生成器 `scripts/course_demo.py`：正式 EpisodeService 跑成功、一次参数纠错对照、40ms 总时限/250ms 人为等待、真实子进程安全点退出后同 ID 恢复，以及独立 localhost MCP HTTP 本地/远程一致性与固定断线。八个 Episode、一个 Experiment；校验终态与独立评分，失败非零退出、旧目录拒绝覆盖，输出仅诊断索引不新增核心契约。`--preview` 一条命令启动隔离 API/Web，拒绝已有占用端口、只停止自己启动的进程；演示 API 只展示 Fake 并在创建 Provider 前拒绝真实请求，不读取 Key。生成时 MCP 服务 finally 停止，回放只 GET。
+
+完整实跑产物目录 `artifacts/course-demo/verified-20261001`、索引 `demo-index.json` 标记 `mcp_http_verified=true`。实验 `fb6d1263-3f4f-4d84-a87d-a8aacad55cfe` 基线0/1、恢复1/1；时间终止 `267b3e72-0b21-4322-b158-557fae931fe3` 0工具、未知费用；同ID恢复 `c49d6348-bc4a-437e-a063-594a6a37ac72` 查询一次/提交一次/18事件；MCP成功 `9ac57a59-9572-4014-b6d9-59c8f61a54a4`、断线失败 `0caaf54e-4881-455d-b92e-5534b8a3b7a1`。首轮误认为本地 submit 保存 transport=local 的验收断言已按实际字段省略修正，部分产物保留，没有改变 Trace Schema。
+
+浏览器复现并修复历史读取404后残留旧成功：两类历史请求发起时清空对应产物并先更新请求URL；迟到响应序号防护保留。Episode/Experiment失败均无旧动画/表格/通过率；5轮模式切换、连续后退/前进后URL与产物一致。统一辅助色到#625f59，修正选中浅色背景的文字对比度；任务类别/说明/限制14px、流程工具ID/署名12px。单次/对照/失败/技术视图计算色组合扫描最低抽样4.69:1，无低于普通文字4.5:1发现，不是完整WCAG认证。390/768/1440px页面无横向溢出，任务Tab可见焦点、专注查看/Esc、恢复事件筛选实测可用。截图 `artifacts/ui-freeze-20261001/mcp-focus.jpg`、`mcp-mobile.jpg`。真实200%与Windows系统减少动画工具未能控制，仍未验；跨电脑说明已写但没有第二台新机器实装，三分钟视频未录制。
+
+最终 Ruff format/lint、mypy **86文件**、pytest **225 passed**（1条既有Starlette/AnyIO警告）、Web **195 modules**、Node **11/11**通过。四套Fake固定回归沿用本日上一收尾的2/8/8/4 cells零退化证据；本轮没有修改Runtime评分或新增真实模型调用，没有提交/推送。新MCP轨迹全程播放到11/11，预览日志只有GET；验收后关闭本轮临时浏览器页、重置视口并停止自己启动的预览，8000/5173/8765均无监听。换电脑/启动/三分钟讲解与案例结果见 [课程交接](V0.2-course-demo-20261001.md)，源码顺序/调用链/状态/失败边界见 [阅读指南](../learning/V0.2-course-demo-freeze.md)，执行范围见 [任务卡](../tasks/V0.2-demo-freeze-20261001.md)。全局Token、最终免费模型、剩余实机检查和负责人现场签收继续待办；数据库仍待新ADR，V0.2没有整版签收。
+
+## 2026-10-01 产品收尾实现（上一轮）
+
+负责人明确延期全局 Token 预算与最终免费模型选择，授权推进其余收尾。按 Accepted [ADR-019](../adr/ADR-019-episode-time-budget.md) 已新增可选 Episode 总时限（Budget 1.1、Episode 请求 1.2、Experiment 请求 1.3）；共同 Session 用单调时钟检查并限制模型等待，两种 Runtime 同规则。恢复继承安全点已用时间、排除暂停/进程停机；已开始的同步工具先完成并保存结果，再停止后续动作，不能宣称毫秒级强制取消。未收到模型响应时详情标明上游用量未知，费用总额保持未知，不自动重试。旧未配置时限的 Budget 序列化/哈希不变，旧客户端、CLI、固定回归和历史产物兼容。
+
+Web 新运行默认 300 秒，保存配置与下次草稿分离；历史读取按钮准确显示读取状态；历史看板默认折叠，配置组附 Seed/重复/短键；Token 标签如实改为每次运行，未补全局拦截。动画增加浏览器全屏专注查看，桌面输入/输出并排，实际容器尺寸驱动画布缩放，窄屏可滚动；保留播放/逐帧/速度/可选记录，不虚构协议报文。
+
+实际验证：Ruff format/lint、mypy **84 文件**，pytest **221 passed**（1 条既有 Starlette/AnyIO 弃用警告）；Web **195 modules**，Node **11/11**。四套 Fake 回归 2/8/8/4 cells、0 regressions，报告 ID：`a1353459-3e1e-46f9-abe9-dd2a1d9e471f`、`ec27e907-0f21-4e83-bad1-821812c548a0`、`baf4ee0b-6d25-4e93-b8f6-2b39873c957d`、`7ba2f1d4-720d-4c6b-8058-e7e0c95b81ae`，位于本机忽略目录 `artifacts/closeout-20261001`。Node 在受限环境因 spawn EPERM 未启动，允许子进程的环境复跑通过。
+
+浏览器 Fake 一题对照 `7560ad79-cd43-4341-b139-5bd8fa03de17`：人为每请求延迟 0.5 秒、总时限 1 秒，Baseline 参数错误失败，Recovery `TIME_BUDGET_EXCEEDED`、0 次工具，两侧均未通过，配置回读为 1 秒；历史看板默认折叠且可展开。已有 MCP Episode `0e14e216-ffbf-4165-a4e0-2af8cfdcf97b` 回读通过，11 帧、输入/输出/证据、专注查看/按钮退出/Esc 返回、390×844 无横向溢出和逐帧操作已抽查；最终桌面截图 `artifacts/ui-closeout-20261001/mcp-focus-desktop.jpg`。回放不需要启动 MCP Server 或模型请求。验收结束已关闭临时页并停止本轮启动的 API/Web，人工延迟没有留在运行服务中。
+
+源码阅读顺序、调用链、状态/失败路径、时限边界与后续数据库候选见 [本轮学习交接](../learning/V0.2-product-closeout-20261001.md)，执行范围见 [任务卡](../tasks/V0.2-product-closeout-20261001.md)。数据库只记录为后续 ADR 候选，未建空模块或做数据迁移。本轮没有新增真实模型调用、没有改模型目录/价格表、没有提交/推送。整版仍待全局 Token 实现、最终模型与近期验证入口收口、UI 全矩阵及负责人现场签收；不将本轮通过扩大成整版签收。
+
+## 2026-10-01 产品验收复核快照（收尾实现前）
+
+按负责人要求以产品验收者身份从需求反查源码和实机，完整结论见 [V0.2 产品验收复核](V0.2-product-audit-20261001.md)。V0.2 主要受控工程能力具备，但**尚不能整版签收，并非只差现场签字**：FR-08 的全局 Token 预算没有跨 Episode 累计拦截，§13.3 的 Episode 总执行时限仍缺失。离线 Fake 实验 `1c06b074-86c7-4aaa-af40-3251e1280ef8` 用 `token_budget=200` 完成 2 对/4 Episode，全部成功、累计 480 tokens；现有字段实际是每个 Episode 的预算。Budget Schema 仍无时间字段，单请求网络超时不能替代总时限。补实现前先走 ADR，保留旧字段/产物语义，明确部分 Pair、预算终态、恢复累计和未知用量边界。
+
+本机启动页面后默认为 MiMo V2.6、12 任务/24 Episode；此前新 Key 此型号两次 429，已通过完整双任务的是 GLM 5.3。公共模型目录不能证明 Key 权限；最终免费模型确定后统一配置/页面默认与带日期的真实验证状态。实机历史读取时运行按钮暂显示“正在串行执行”，需与历史 GET 状态分开；MCP Fake 历史动画 11 帧、输入/最终输出、对照历史和明确 404 抽查可用。首屏历史看板占据主视区，推荐后续收拢；系统减少动画、全量对比度/快速切换与本机实际 200% 缩放仍待补验。
+
+本轮新复跑 Ruff format/lint、mypy 83 文件、pytest **203 passed**（1 条既有警告）、Web 195 modules、Node **11/11**，四套 Fake 回归 2/8/8/4 单元均 0 退化。报告 ID 与权限复跑记录见产品审查；现有测试通过不能证明上述缺失要求已实现。没有新增真实模型调用，没有修改业务代码/Schema/模型目录/价格表，没有提交或推送。接续顺序：预算 ADR/实验 → 全局 Token 与总时限实现 → 最终模型入口 → UI/证据收尾 → 负责人现场签收。
+
+## 2026-10-01 新 Key 的四模型最小真实调用（最新）
+
+用户在 AIHubMix 控制台新建 Key，截图所示允许模型为 `xiaomi-mimo-v2.6-pro-free`、`coding-glm-5.3-flash-free`、`coding-glm-5.3-free`、`minimax-m3-free`。本机 `.env` 仅有一条 Key 配置，进程环境变量没有覆盖；本轮未输出、保存或提交 Key。对上述**精确 ID** 串行发送真实 `POST /v1/chat/completions`，不以公共 `GET /v1/models` 判定权限：
+
+| 模型 | 最小文本请求 | 单工具请求 | 项目内固定任务 |
+| --- | --- | --- | --- |
+| `xiaomi-mimo-v2.6-pro-free` | 两次 HTTP 429，错误类别 `rate_limit` | 未跑 | 未跑；本轮不能判定可用 |
+| `coding-glm-5.3-flash-free` | HTTP 200，有内容，87 tokens | 两次 HTTP 200，返回 `report_status` 工具调用；复查参数严格匹配 `{"status":"ready"}`，213 tokens | 未跑；当前不在项目模型目录 |
+| `coding-glm-5.3-free` | HTTP 200，有内容，130 tokens | HTTP 200，返回 `report_status` 工具调用，216 tokens | BFCL `bfcl-simple_python_0` 成功，Episode `71f95f63-a92f-492a-9178-bf0b410e97b8`，1 次模型/1 次工具，295/88 输入/输出 tokens；ToolLab `order-status-001` 成功，Episode `35a14662-2a84-43fa-b1a1-bff34a9f9334`，2 次模型/2 次工具，2081/109 tokens |
+| `minimax-m3-free` | 三次 HTTP 400，错误码 `no_available_channel`；其中一次省略 `max_tokens` 后仍相同 | 未跑 | 未跑；当前上游无可用通道 |
+
+最小探针位于被 Git 忽略的 `artifacts/diagnostics/model_range_probe_20261001.py`，只打印状态与结构化元数据；GLM 项目内双任务结果位于忽略的 `artifacts/selected-model-results-20261001-newkey-glm.json`，真实 Episode 已持久化。上述结果仅证明此刻的新 Key 可调用两个 GLM，其中只有现有目录内的 GLM 5.3 完成项目闭环；不代表长期配额、所有任务或 V0.2 整版通过。`benchmarks/tool_lab_core/models.json` 仍以不在此 Key 允许范围的 `coding-minimax-m2.7-free` 为默认，且缺少 Flash/M3；在调整目录与默认模型前，网页默认真实模式不能据此判为可用。后续先按需求和 ADR 流程确定模型目录迁移，再对新增模型跑固定 BFCL/ToolLab，复核原厂参考价映射与 UI 展示；本轮没有改核心 Schema、Provider、模型目录或费用口径。
+
+## 2026-10-01 API Key 401 进一步诊断（最新）
+
+用户确认 `.env` 内为 AIHubMix 平台 Key。本机只输出布尔检查：仅有一条 `AIHUBMIX_API_KEY` 赋值，进程环境变量未覆盖；文件值无引号、`Bearer` 前缀或空白。使用同一值向正式 `POST https://aihubmix.com/v1/chat/completions` 发送**无工具、8 token 上限**的最小请求，仍为 HTTP 401；只读取脱敏后的错误类别 `key_invalid`，不保存或输出原始响应、Key。此前两个不同模型、两个固定任务的四次 401 因此不是 Tool Schema 触发。按官方 HTTP 错误表，401 指缺少凭据或 token 无效/过期；模型/IP 限制通常返回 403，余额不足也为 403。项目请求头为 `Authorization: Bearer`，与官方开发者说明一致。结论：当前 Key 在 Chat Completions 鉴权没有通过；应在 AIHubMix 控制台核查当前 Key 状态并重新复制或新建 Key，仍只更新本机 `.env`，然后重跑一条最小真实调用。此次没有成功模型输出，也没有修改 Provider/Schema/评测代码。
+
+## 2026-09-30 新填 API Key 的真实调用检查（最新）
+
+项目根目录的本机 `.env` 已有 `AIHUBMIX_API_KEY`，代码实际读取的是该文件值（进程环境变量未覆盖）；Key 未输出、未入库。当前 Key 外形无引号、Bearer 前缀或空白误填。对 `coding-minimax-m2.7-free` 和 `coding-glm-5.3-free` 分别执行固定 BFCL `bfcl-simple_python_0` 与 ToolLab `order-status-001`，四次上游 Chat Completions 请求均返回 `401`，落地 Episode `31d160dd-1f6b-4aac-9243-615877121a8b`、`1c9195ab-a9be-420e-a4e4-42ef5e32cf98`、`581b5d45-4237-402a-a452-801db1513ac0`、`9b403490-887c-4d56-b3ea-133e7c00762f`，均为 `provider_error: AUTHENTICATION_FAILED`、无模型输出/Token。结果保存在被忽略的 `artifacts/selected-model-results-20260930-keycheck*.json`。脚本退出码为 0 只表示探针运行完成，不能当作模型成功。
+
+`GET https://aihubmix.com/v1/models` 对当前 Key 和故意无效的 Key 都返回 200，因此公共目录中看到四个免费模型**不能证明当前 Key 有调用权限**；旧页面的目录状态会产生误导。官方开发者文档仍要求 `POST /v1/chat/completions` 使用 `Authorization: Bearer`，与当前 Provider 一致。优先由负责人在 AIHubMix 控制台确认 Key 来源、启用状态、到期日、IP/CIDR、允许模型及消费上限，然后只在本机 `.env` 替换/修正并重跑一题；不要在聊天里发送 Key。此前其他电脑/Key 的真实成功证据不能证明新 Key 可用。
+
+## 2026-09-30 本机课程演示与 UI 复验（最新）
+
+当前 HEAD `038a3fa`；本轮改动尚未提交或推送。可直接操作的本机 URL、暂停/恢复/取消 Job ID、截图、复现方法与剩余签收项见 [课程演示交接](V0.2-course-demo-20260930.md)。本机新建 Fake 恢复对照 `23e7dd24-26e5-45ac-bcbd-b97453f60b1e`（Baseline 0/1、Recovery 1/1）和 Fake + 独立 localhost MCP HTTP Episode `ee367faf-5353-41a6-a6ba-a89f09cfb27a`（SUCCESS、24 事件、3 工具）。MCP 传输实跑，模型为 Fake；本轮没有新的真实模型请求。
+
+为实机操作 Job 控制，临时延时 Fake API 创建 `0849fc41-4e10-4e6e-9efa-545d92a6f6c9`（暂停，可恢复）、`bc9e594e-1bee-4100-af93-a0991117f143`（暂停后恢复完成）、`d8cb8f69-d0ce-46c7-8e7b-c682bc343412`（取消）。延时服务已停止、普通 API 已恢复；重启后 GET 状态分别为 paused/completed/cancelled，完成实验 GET 200。延时仅为演示手动控制，不作为性能样本。
+
+本机浏览器检查 390/768/1280/1440 CSS px 均无页面级横向溢出；键盘打开历史、复制 ID 与反馈可用；不存在的 UUID 有明确 404。采样发现任务说明 11.2px、对比度 3.95:1，已在 `apps/web/src/index.css` 调整至 13px 和约 4.98:1。Replay 快速切帧时节点曾短暂隐藏；`McpFlowReplay.tsx` 固定图卡尺寸后，11 帧连续键盘切换均保持五节点可见。UI 规范 §7.1 已修正为 ADR-014 真实 Episode SSE 与 Job 状态的准确边界；`scripts/check.ps1` 已纳入 `apps/api` Ruff 范围。全量对比度、跨模式快速连续切换、真实浏览器 200% 与 Windows 系统级减少动画在本机这轮未完成，历史 Edge/媒体模拟证据见下文，不写成当前 OS 验收。V0.2 整版仍待课程现场观看与负责人签收。
+
+本机质量：BFCL Java 固定缓存初缺导致首轮 pytest 2 失败，执行 `uv run python scripts/import_bfcl_subset.py --suite java` 后哈希匹配 manifest，复跑 **203 passed**、1 条既有依赖弃用警告。四套 Fake 回归 2/8/8/4 单元 0 regressions，报告 ID 为 `8047e69d-cc60-4782-ae11-149be346cf25`、`ea800927-bc88-4b5e-8094-070279e1ba25`、`523db946-9970-4f75-8436-7802fcb5438e`、`93cdf8a9-9f58-4520-b08b-2a8cb22a948e`。本轮 CSS/演示脚本改动后，Ruff format/lint（含 `apps/api`）、mypy **83 文件**、Web 构建 195 modules、Node **11/11** 与 `git diff --check` 再次通过；受限进程内构建和 Node worker 遇 `spawn EPERM`，改用普通进程运行通过。Node 22.21.1 不接受旧 `--test-isolation` 参数，已在验收记录中改为显式四文件命令。此前本机缺少另一台机器的真实产物/截图，不宣称本轮再次查看它们。
 
 ## 2026-09-30 Codex 复核 Copilot 补验与提交授权
 

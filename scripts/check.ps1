@@ -4,9 +4,9 @@ try {
     New-Item -ItemType Directory -Force artifacts | Out-Null
     uv --cache-dir .uv-cache sync --locked
     if ($LASTEXITCODE -ne 0) { throw 'Dependency synchronization failed' }
-    uv --cache-dir .uv-cache run --locked ruff format --check packages tests scripts
+    uv --cache-dir .uv-cache run --locked ruff format --check packages tests scripts apps/api
     if ($LASTEXITCODE -ne 0) { throw 'Formatting failed' }
-    uv --cache-dir .uv-cache run --locked ruff check packages tests scripts
+    uv --cache-dir .uv-cache run --locked ruff check packages tests scripts apps/api
     if ($LASTEXITCODE -ne 0) { throw 'Lint failed' }
     uv --cache-dir .uv-cache run --locked mypy
     if ($LASTEXITCODE -ne 0) { throw 'Type checking failed' }

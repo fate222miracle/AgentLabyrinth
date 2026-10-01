@@ -3,8 +3,8 @@
   --color-surface: #fcfbf8;
   --color-surface-secondary: #f1eee8;
   --text-primary: #292724;
-  --text-secondary: #706d67;
-  --text-muted: #827d74;
+  --text-secondary: #625f59;
+  --text-muted: #625f59;
   --text-disabled: #bbb7b0;
   --brand-primary: #c96442;
   --brand-hover: #b95839;
@@ -1056,7 +1056,7 @@ button:focus-visible,
 }
 
 .task-meta {
-  font-size: 0.7rem;
+  font-size: 0.8125rem;
   color: var(--text-muted);
 }
 
@@ -1508,7 +1508,7 @@ button:focus-visible,
 
 .suite-choice-options small {
   color: var(--text-secondary);
-  font-size: 0.72rem;
+  font-size: 0.875rem;
 }
 
 .suite-choice-options label[aria-disabled="true"] {
@@ -1596,15 +1596,15 @@ button:focus-visible,
   padding: 0.12rem 0.4rem;
   border-radius: var(--radius-full);
   background: var(--color-surface-secondary);
-  color: var(--text-secondary);
-  font-size: 0.67rem;
+  color: var(--brand-action);
+  font-size: 0.875rem;
 }
 
 .task-option-description {
   display: -webkit-box;
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 0.78rem;
+  font-size: 0.875rem;
   line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -1613,7 +1613,7 @@ button:focus-visible,
 .task-option-foot {
   margin-top: auto;
   color: var(--text-secondary);
-  font-size: 0.72rem;
+  font-size: 0.875rem;
 }
 
 .task-list-message {
@@ -1985,3 +1985,7 @@ button:focus-visible,
     flex-direction: column;
   }
 }
+.history-disclosure { margin-bottom: 1.5rem; border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--color-surface); }
+.history-disclosure > summary { padding: 1rem 1.25rem; cursor: pointer; font-weight: 600; }
+.history-disclosure > summary span { margin-left: 0.8rem; font-size: 0.8rem; color: var(--text-secondary); font-weight: 400; }
+.history-disclosure > summary:focus-visible { outline: 2px solid var(--brand-action); outline-offset: 2px; }

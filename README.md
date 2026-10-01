@@ -2,7 +2,9 @@
 
 面向 AI Agent 的可复现实验平台。唯一权威需求：`docs/product/requirements.md` **V0.6**。
 
-**V0.1 已完成 18 项验收。V0.2 当前受控范围已补齐实验控制、恢复、固定回归与同配置历史看板；ToolLab/BFCL/只读 MCP/Experiment 均有单模型真实安全点恢复证据。整版技术复核通过，现场演示与用户签收待完成；准确边界见 [验收矩阵](docs/handoffs/V0.2-acceptance-review-20260930.md) 与 `docs/handoffs/current-state.md`。**
+2026-10-01 收尾：Episode/对照 API 支持可选 `max_execution_time_ms`，Web 新运行默认 300 秒；恢复累计安全点活动耗时，已开始的工具先完成再停止。历史看板默认折叠，动画支持“专注查看”。源码/实验与限制见 [学习交接](docs/learning/V0.2-product-closeout-20261001.md)。全局 Token 预算、最终免费模型选择与整版现场签收仍待完成，数据库为后续 ADR 方向。
+
+**V0.1 已完成 18 项验收。V0.2 当前受控范围已补齐实验控制、恢复、固定回归与同配置历史看板；ToolLab/BFCL/只读 MCP/Experiment 均有单模型真实安全点恢复证据。全局 Token、最终模型收口、剩余 UI 实机检查与负责人签收待完成；准确边界见 [验收矩阵](docs/handoffs/V0.2-acceptance-review-20260930.md) 与 `docs/handoffs/current-state.md`。**
 
 课程演示 M1 推进：
 - 切片 A：完成 AIHubMix 真实 ToolLab 闭环。
@@ -15,6 +17,18 @@
 
 Codex 负责 Domain 契约、预算与评测审查；Antigravity 负责内部实现（`HandwrittenRuntime` 容错重试分支、`run_experiment` 串行编排、4 条原生 TaskSpec、FastAPI 实验端点与 Web 对照视图）。
 
+## 固定课程演示（2026-10-01）
+
+依赖准备：`uv sync --locked`、`npm.cmd --prefix apps/web ci`。从项目根目录生成新案例，再一条命令启动隔离 API/Web：
+
+```powershell
+$demoPath = Join-Path (Get-Location) ('artifacts/course-demo/' + [guid]::NewGuid().ToString())
+uv --cache-dir .uv-cache run --locked python -m scripts.course_demo --artifacts-dir $demoPath
+uv --cache-dir .uv-cache run --locked python -m scripts.course_demo --preview --artifacts-dir $demoPath
+```
+
+完成索引 `demo-index.json` 提供当前机器的链接；Ctrl+C 停止预览。固定成功、参数纠错、时间终止、子进程中断恢复和真实 localhost MCP HTTP/断线案例自动核验，模型全部 Fake、不读取 Key。拒绝覆盖旧目录或接管占用端口。只有生成退出码 0 才通过；`--skip-mcp` 不算网络验收。换电脑与三分钟讲解见 [演示交接](docs/handoffs/V0.2-course-demo-20261001.md)，调用链/失败路径见 [阅读指南](docs/learning/V0.2-course-demo-freeze.md)。另一电脑需取得包含该脚本的新提交后才能使用；未实测第二台全新机器安装。
+
 ## 启动与检查
 
 需要 Python 3.12 和 uv。在项目根目录运行一键检查脚本：
@@ -23,7 +37,7 @@ Codex 负责 Domain 契约、预算与评测审查；Antigravity 负责内部实
 ./scripts/check.ps1
 ```
 
-脚本锁定同步依赖，依次运行 Ruff 格式、Lint、mypy、pytest 和四套固定 Fake 跨版本回归（单题、四类任务、Runtime 对照、超时预期失败），失败立即停止。回归 JSON 报告写入 `artifacts/regression/regression-reports/`。2026-09-30 后端203测试、回归22单元无退化；Web11项检查与生产构建通过。需要先安装 `uv` 并让终端能找到它。
+脚本锁定同步依赖，依次运行 Ruff 格式、Lint、mypy、pytest 和四套固定 Fake 跨版本回归（单题、四类任务、Runtime 对照、超时预期失败），失败立即停止。回归 JSON 报告写入 `artifacts/regression/regression-reports/`。2026-10-01 最终后端225测试、mypy/Ruff86文件、Web11项检查与生产构建通过；四套回归22单元无退化来自同日上一收尾验证。需要先安装 `uv` 并让终端能找到它。
 
 也可单独执行固定回归；Manifest 锁定模型、任务、Seed 和基线产物，成功变失败会返回非零退出码。真实模型回归需另备真实基线并显式使用 `--allow-live`：
 

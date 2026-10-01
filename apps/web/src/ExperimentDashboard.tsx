@@ -40,7 +40,7 @@ export function ExperimentDashboard({ items, loading, error, skipped, activeId, 
           <option value="">全部历史 · 不汇总排名</option>
           {groups.map((item, index) => (
             <option key={item.comparison_key} value={item.comparison_key!}>
-              配置组 {index + 1} · {item.model_id ?? '模型未记录'} · {axisLabel(item)} · {item.task_ids?.length ?? 0} 题 · {scenarioLabel(item)} · {faultLabel(item.fault_profile)}
+              配置组 {index + 1} · {item.model_id ?? '模型未记录'} · {axisLabel(item)} · {item.task_ids?.length ?? 0} 题 · Seed {item.seeds?.join('/') || '未记录'} · 重复 {item.repeat_count ?? '未记录'} · {scenarioLabel(item)} · {faultLabel(item.fault_profile)} · {item.comparison_key?.slice(0, 6)}
             </option>
           ))}
         </select>

@@ -84,7 +84,7 @@ class CreateEpisodeRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0", "1.1"] = "1.1"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
     request_id: UUID = Field(default_factory=uuid4)
     provider: Literal["fake", "aihubmix"]
     model: str
@@ -95,6 +95,7 @@ class CreateEpisodeRequest(BaseModel):
     task_id: str = "order-status-001"
     suite: Literal["tool_lab_core", "bfcl_adapted", "bfcl_java_adapted"] = "tool_lab_core"
     max_steps: int | None = Field(default=None, ge=1, le=20)
+    max_execution_time_ms: int | None = Field(default=None, ge=1, le=3600000, strict=True)
     token_budget: int | None = Field(default=None, ge=100, le=20000)
     runtime_backend: RuntimeBackend = "handwritten"
     runtime_strategy: RuntimeStrategy = "handwritten"
@@ -117,7 +118,7 @@ class CreateExperimentRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.3"
     request_id: UUID = Field(default_factory=uuid4)
     provider: Literal["fake", "aihubmix"]
     model: str
@@ -143,6 +144,7 @@ class CreateExperimentRequest(BaseModel):
     seed: int = 1
     seeds: list[int] | None = Field(default=None, min_length=1, max_length=10)
     repeat_count: int = Field(default=1, ge=1, le=10)
+    max_execution_time_ms: int | None = Field(default=None, ge=1, le=3600000, strict=True)
     token_budget: int | None = Field(default=None, ge=100, le=20000)
     max_reference_cost_usd: Decimal | None = Field(default=None, gt=0, allow_inf_nan=False)
     comparison_axis: ComparisonAxis = "recovery_policy"
