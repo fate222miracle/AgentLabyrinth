@@ -499,13 +499,6 @@ export default function App() {
   useEffect(() => () => dashboardRequestRef.current?.abort(), []);
   const [inputExpId, setInputExpId] = useState<string>('');
 
-  // Custom Model states
-  const [customModels, setCustomModels] = useState<string[]>([]);
-  const [showCustomModelInputExp, setShowCustomModelInputExp] = useState<boolean>(false);
-  const [customModelTextExp, setCustomModelTextExp] = useState<string>('');
-  const [showCustomModelInputSingle, setShowCustomModelInputSingle] = useState<boolean>(false);
-  const [customModelTextSingle, setCustomModelTextSingle] = useState<string>('');
-
   // Global loading & error
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
@@ -542,6 +535,26 @@ export default function App() {
     setLoadingMessage('');
   };
 
+  const switchTab = (next: 'single' | 'experiment') => {
+    if (next === activeTab || (isLoading && loadingActivity === 'run' && !activeJobId)) return;
+    historyRequestId.current += 1;
+    if (loadingActivity === 'history') finishLoading();
+    setErrorMsg(null);
+    setActiveTab(next);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('episode_id');
+    url.searchParams.delete('experiment_id');
+    url.searchParams.delete('experiment_job_id');
+    url.searchParams.delete('mode');
+    if (next === 'single' && artifact) url.searchParams.set('episode_id', artifact.episode.episode_id);
+    else if (next === 'single') url.searchParams.set('mode', 'single');
+    if (next === 'experiment') {
+      if (activeJobId) url.searchParams.set('experiment_job_id', activeJobId);
+      else if (experiment) url.searchParams.set('experiment_id', experiment.experiment_id);
+    }
+    window.history.pushState({}, '', url.toString());
+  };
+
   useEffect(() => {
     if (!activeJobId) return;
     let cancelled = false;
@@ -567,6 +580,7 @@ export default function App() {
           if (url.searchParams.get('experiment_job_id') === activeJobId) {
             url.searchParams.set('experiment_id', activeJobId);
             url.searchParams.delete('experiment_job_id');
+            url.searchParams.delete('mode');
             window.history.replaceState({}, '', url.toString());
           }
           setActiveJobId(null);
@@ -613,29 +627,6 @@ export default function App() {
       })
       .catch(() => { if (!controller.signal.aborted) setDashboardError(true); })
       .finally(() => { if (!controller.signal.aborted) setDashboardLoading(false); });
-  };
-
-  const addCustomModel = (modelId: string, target: 'exp' | 'single') => {
-    const cleanId = modelId.trim();
-    if (!cleanId) return;
-    setCustomModels((prev) => {
-      const next = prev.includes(cleanId) ? prev : [...prev, cleanId];
-      try {
-        localStorage.setItem('al_custom_models', JSON.stringify(next));
-      } catch {
-        // ignore
-      }
-      return next;
-    });
-    if (target === 'exp') {
-      setExpModel(cleanId);
-      setShowCustomModelInputExp(false);
-      setCustomModelTextExp('');
-    } else {
-      setSelectedModel(cleanId);
-      setShowCustomModelInputSingle(false);
-      setCustomModelTextSingle('');
-    }
   };
 
   // 1. Fetch Metadata and parse initial query parameters
@@ -688,7 +679,6 @@ export default function App() {
       };
       setRecentEpisodeIds(readList('al_recent_episodes').slice(0, 5));
       setRecentExpIds(readList('al_recent_experiments').slice(0, 5));
-      setCustomModels(readList('al_custom_models'));
     } catch {
       // ignore storage error
     }
@@ -702,6 +692,8 @@ export default function App() {
     } else if (epId) {
       setActiveTab('single');
       loadEpisodeById(epId, false);
+    } else if (params.get('mode') === 'single') {
+      setActiveTab('single');
     }
 
     const handlePopState = () => {
@@ -710,8 +702,10 @@ export default function App() {
       const nextEpId = next.get('episode_id');
       const nextJobId = next.get('experiment_job_id');
       if (nextJobId) {
+        historyRequestId.current += 1;
         setActiveTab('experiment');
         setActiveJobId(nextJobId);
+        setExperiment(null);
         setJobWatchToken((value) => value + 1);
       } else if (nextExpId) {
         setActiveJobId(null);
@@ -723,6 +717,7 @@ export default function App() {
         loadEpisodeById(nextEpId, false);
       } else {
         setActiveJobId(null);
+        setActiveTab(next.get('mode') === 'single' ? 'single' : 'experiment');
         historyRequestId.current += 1;
         setExperiment(null);
         setArtifact(null);
@@ -810,6 +805,7 @@ export default function App() {
     if (updateUrl) {
       const url = new URL(window.location.href);
       url.searchParams.set('episode_id', id.trim());
+      url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
       url.searchParams.delete('experiment_job_id');
       window.history.pushState({}, '', url.toString());
@@ -847,6 +843,7 @@ export default function App() {
     if (updateUrl) {
       const url = new URL(window.location.href);
       url.searchParams.set('experiment_id', id.trim());
+      url.searchParams.delete('mode');
       url.searchParams.delete('episode_id');
       url.searchParams.delete('experiment_job_id');
       window.history.pushState({}, '', url.toString());
@@ -943,6 +940,7 @@ export default function App() {
 
       const url = new URL(window.location.href);
       url.searchParams.set('episode_id', newArtifact.episode.episode_id);
+      url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
       window.history.replaceState({}, '', url.toString());
     } catch (err: unknown) {
@@ -960,6 +958,7 @@ export default function App() {
   };
 
   const handleResumeEpisode = async (id: string) => {
+    const requestId = ++historyRequestId.current;
     setLiveRun(null);
     beginLoading('正在从最近存档恢复 Episode。');
     setErrorMsg(null);
@@ -972,22 +971,26 @@ export default function App() {
         throw new Error(data.message || `恢复失败 (${res.status})`);
       }
       const data = await res.json();
+      if (requestId !== historyRequestId.current) return;
       setArtifact(data.artifact as EpisodeArtifact);
       setResumableEpisodeIds((previous) => previous.filter((item) => item !== id));
       addRecentEpisodeId(id);
       const url = new URL(window.location.href);
       url.searchParams.set('episode_id', id);
+      url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
       window.history.pushState({}, '', url.toString());
     } catch (err: unknown) {
+      if (requestId !== historyRequestId.current) return;
       setErrorMsg(err instanceof Error ? err.message : '恢复失败');
     } finally {
-      finishLoading();
+      if (requestId === historyRequestId.current) finishLoading();
     }
   };
 
   // Execute paired experiment
   const handleResumeExperiment = async (id: string) => {
+    const requestId = ++historyRequestId.current;
     beginLoading('正在恢复原实验，已完成的 Episode 会直接复用。');
     setErrorMsg(null);
     try {
@@ -999,23 +1002,27 @@ export default function App() {
         throw new Error(data.message || `实验恢复失败 (${res.status})`);
       }
       const data = await res.json();
+      if (requestId !== historyRequestId.current) return;
       setExperiment(data.experiment as ExperimentArtifact);
       refreshExperimentDashboard();
       setResumableExpIds((previous) => previous.filter((item) => item !== id));
       addRecentExpId(id);
       const url = new URL(window.location.href);
       url.searchParams.set('experiment_id', id);
+      url.searchParams.delete('mode');
       url.searchParams.delete('episode_id');
       window.history.pushState({}, '', url.toString());
     } catch (err: unknown) {
+      if (requestId !== historyRequestId.current) return;
       setErrorMsg(err instanceof Error ? err.message : '实验恢复失败');
     } finally {
-      finishLoading();
+      if (requestId === historyRequestId.current) finishLoading();
     }
   };
 
   const handleRerunFailedEpisode = async () => {
     if (!artifact || artifact.evaluation.success) return;
+    const requestId = ++historyRequestId.current;
     const sourceId = artifact.episode.episode_id;
     beginLoading('正在按原始配置单独重跑失败 Episode。');
     setErrorMsg(null);
@@ -1025,18 +1032,21 @@ export default function App() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `失败 Episode 重跑被拒绝 (${response.status})`);
+      if (requestId !== historyRequestId.current) return;
       const rerun = data.artifact as EpisodeArtifact;
       setArtifact(rerun);
       addRecentEpisodeId(rerun.episode.episode_id);
       const url = new URL(window.location.href);
       url.searchParams.set('episode_id', rerun.episode.episode_id);
+      url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
       url.searchParams.delete('experiment_job_id');
       window.history.pushState({}, '', url.toString());
     } catch (error) {
+      if (requestId !== historyRequestId.current) return;
       setErrorMsg(error instanceof Error ? error.message : '失败 Episode 重跑失败');
     } finally {
-      finishLoading();
+      if (requestId === historyRequestId.current) finishLoading();
     }
   };
 
@@ -1098,6 +1108,7 @@ export default function App() {
 
       const url = new URL(window.location.href);
       url.searchParams.set('experiment_job_id', job.experiment_id);
+      url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
       url.searchParams.delete('episode_id');
       window.history.pushState({}, '', url.toString());
@@ -1132,6 +1143,7 @@ export default function App() {
         setResumableJobIds((ids) => ids.filter((id) => id !== targetId));
         const url = new URL(window.location.href);
         url.searchParams.set('experiment_job_id', targetId);
+        url.searchParams.delete('mode');
         url.searchParams.delete('experiment_id');
         url.searchParams.delete('episode_id');
         window.history.pushState({}, '', url.toString());
@@ -1287,14 +1299,16 @@ export default function App() {
               <button
                 id="tab-experiment"
                 className={`nav-tab ${activeTab === 'experiment' ? 'active' : ''}`}
-                onClick={() => setActiveTab('experiment')}
+                onClick={() => switchTab('experiment')}
+                disabled={isLoading && loadingActivity === 'run' && !activeJobId}
               >
                 对照实验 <span className="nav-english">Agent Comparison</span>
               </button>
               <button
                 id="tab-single"
                 className={`nav-tab ${activeTab === 'single' ? 'active' : ''}`}
-                onClick={() => setActiveTab('single')}
+                onClick={() => switchTab('single')}
+                disabled={isLoading && loadingActivity === 'run' && !activeJobId}
               >
                 单次运行 <span className="nav-english">Single Episode</span>
               </button>
@@ -1333,7 +1347,12 @@ export default function App() {
         {meta?.model_catalog_status === 'unavailable' && (
           <div className="alert-box alert-error" role="status">
             <span className="alert-label">模型目录暂不可用</span>
-            <div>无法确认 AIHubMix 当前 Key 可访问的模型，已暂时隐藏真实模型；可先用 Fake 离线场景。</div>
+            <div>无法读取 AIHubMix 模型目录，已暂时隐藏真实模型；可先用 Fake 离线场景。</div>
+          </div>
+        )}
+        {meta?.model_catalog_status === 'live' && meta.models.some((model) => model.provider === 'aihubmix') && (
+          <div className="model-catalog-caution" role="note">
+            网关目录仅表示模型 ID 可见，不能验证当前 Key 的调用权限、额度或通道。真实可用性以实际运行结果为准。
           </div>
         )}
 
@@ -1474,36 +1493,7 @@ export default function App() {
 
                 {/* Model Selector */}
                 <div className="form-group">
-                  <div className="inline-header">
                   <label htmlFor="exp-model-select" className="form-label">评测模型</label>
-                  <button
-                    type="button"
-                    className="btn-secondary btn-xs"
-                    onClick={() => setShowCustomModelInputExp(!showCustomModelInputExp)}
-                  >
-                    {showCustomModelInputExp ? '取消' : '+ 自定义模型'}
-                  </button>
-                  </div>
-
-                  {showCustomModelInputExp && (
-                  <div className="compact-inline">
-                    <input
-                      className="form-input compact-input"
-                      placeholder="输入新免费模型 ID (例如: coding-glm-5.2-free)"
-                      value={customModelTextExp}
-                      onChange={(e) => setCustomModelTextExp(e.target.value)}
-                    />
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        onClick={() => addCustomModel(customModelTextExp, 'exp')}
-                        disabled={!customModelTextExp.trim()}
-                      >
-                        确定
-                      </button>
-                    </div>
-                  )}
-
                   <select
                     id="exp-model-select"
                     className="form-select"
@@ -1513,16 +1503,9 @@ export default function App() {
                   >
                     {meta?.models.map((m) => (
                       <option key={m.id} value={m.id}>
-                        {m.name} {m.is_default ? '· 默认推荐' : ''} {m.is_experimental ? '· 实验性' : ''}
+                        {m.name} {m.is_default ? '· 目录默认' : ''} {m.is_experimental ? '· 实验性' : ''}
                       </option>
                     ))}
-                    {customModels
-                      .filter((cid) => !meta?.models.some((m) => m.id === cid))
-                      .map((cid) => (
-                        <option key={cid} value={cid}>
-                          {cid} (自定义免费模型)
-                        </option>
-                      ))}
                   </select>
                 </div>
 
@@ -1532,7 +1515,7 @@ export default function App() {
                     <strong>说明：</strong>{' '}
                     {currentExpModelMeta
                       ? currentExpModelMeta.notes
-                      : `自定义免费模型 (${expModel})，将使用 AIHubMix 接口发起真实测试。`}
+                      : '模型元数据未就绪；请刷新目录后选择已列出的模型。'}
                   </div>
                 </div>
 
@@ -2343,36 +2326,7 @@ export default function App() {
                       </div>
 
                 <div className="form-group">
-                  <div className="model-select-heading">
                     <label htmlFor="model-select" className="form-label">评测模型</label>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => setShowCustomModelInputSingle(!showCustomModelInputSingle)}
-                    >
-                      {showCustomModelInputSingle ? '取消' : '+ 自定义模型'}
-                    </button>
-                  </div>
-
-                  {showCustomModelInputSingle && (
-                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                      <input
-                        className="form-input"
-                        style={{ fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
-                        placeholder="输入新免费模型 ID (例如: coding-glm-5.2-free)"
-                        value={customModelTextSingle}
-                        onChange={(e) => setCustomModelTextSingle(e.target.value)}
-                      />
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        onClick={() => addCustomModel(customModelTextSingle, 'single')}
-                        disabled={!customModelTextSingle.trim()}
-                      >
-                        确定
-                      </button>
-                    </div>
-                  )}
 
                   <select
                     id="model-select"
@@ -2383,16 +2337,9 @@ export default function App() {
                   >
                     {meta?.models.map((m) => (
                       <option key={m.id} value={m.id}>
-                        {m.name} {m.is_default ? '· 默认推荐' : ''} {m.is_experimental ? '· 实验性' : ''}
+                        {m.name} {m.is_default ? '· 目录默认' : ''} {m.is_experimental ? '· 实验性' : ''}
                       </option>
                     ))}
-                    {customModels
-                      .filter((cid) => !meta?.models.some((m) => m.id === cid))
-                      .map((cid) => (
-                        <option key={cid} value={cid}>
-                          {cid} (自定义免费模型)
-                        </option>
-                      ))}
                   </select>
                 </div>
 
@@ -2404,7 +2351,7 @@ export default function App() {
                       <strong>说明：</strong>{' '}
                       {currentSingleModelMeta
                         ? currentSingleModelMeta.notes
-                        : `自定义免费模型 (${selectedModel})，将使用 AIHubMix 接口发起真实测试。`}
+                        : '模型元数据未就绪；请刷新目录后选择已列出的模型。'}
                     </div>
                   </details>
                 </div>

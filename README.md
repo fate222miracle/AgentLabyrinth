@@ -87,7 +87,7 @@ uv run python -m packages.environments.tool_lab.mcp
 - 失败 Episode 可从结果页显式“单独重跑”，或调用 `POST /api/v1/episodes/{id}/rerun`；新运行有新 ID 与来源记录，原产物不被覆盖。旧 Fake 单次产物若缺保存的模拟场景，会拒绝重跑。
 - Trace Replay：按事件类型筛选，使用前后按钮或 Step 下拉定位，左侧查看截至当前事件最近的 Environment Snapshot；历史旧产物缺少中间快照时仍可浏览事件。
 
-真实免费模型必须在本机后端环境配置 `AIHUBMIX_API_KEY` 后验证，Key 不写入仓库、前端或聊天。页面模型目录从 `benchmarks/tool_lab_core/models.json` 的已验证候选中筛选当前 Key `/v1/models` 可见项，目录缓存 5 分钟；模型上游仍可能临时限流或不可用。默认复测 MiniMax M2.7 与 MiMo V2.5 Pro；`--all-catalog` 会串行复测候选表中的 AIHubMix 模型，每个模型各跑一条 BFCL 和一条 ToolLab，并把真实结果增量保存到 `artifacts/selected-model-results.json`：
+真实免费模型必须在本机后端环境配置 `AIHUBMIX_API_KEY` 后用真实 POST 验证，Key 不写入仓库、前端或聊天。页面从 `benchmarks/tool_lab_core/models.json` 候选中筛选 `/v1/models` 可见项，目录缓存 5 分钟；该目录即使使用无效 Key 也可能返回 200，**不能证明当前 Key 的权限、额度或通道**。当前目录默认 MiniMax M2.7 属于历史配置；2026-10-01 新 Key 的已知小样本仅 GLM 5.3 项目内闭环成功，最终免费模型名单仍待确定。默认复测 MiniMax M2.7 与 MiMo V2.5 Pro；`--all-catalog` 会串行复测候选表中的 AIHubMix 模型，每个模型各跑一条 BFCL 和一条 ToolLab，并把真实结果增量保存到 `artifacts/selected-model-results.json`：
 
 ```powershell
 uv run python -m scripts.verify_selected_models

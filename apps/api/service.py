@@ -1,6 +1,8 @@
 """Application service for running and retrieving ToolLab episodes and experiments."""
 
+import asyncio
 import json
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -88,6 +90,7 @@ class EpisodeService:
         self._live_model_ids: set[str] = set()
         self._model_catalog_expires_at = 0.0
         self._model_catalog_status = "static"
+        self._model_catalog_lock = threading.Lock()
         self.bfcl = BFCLAdapter()
         self.bfcl_java = BFCLAdapter(
             BFCL_ROOT / "benchmarks/bfcl_java_adapted/dataset_manifest.json",
@@ -196,21 +199,21 @@ class EpisodeService:
             raise ExperimentJobStopped(state.requested_action)
 
     def _get_live_model_ids(self) -> set[str]:
-        """Cache the API-key-scoped model catalog briefly to keep metadata responsive."""
+        """Cache visible IDs; the catalog does not prove invocation permission."""
         if not self.live_model_catalog:
             return set()
-        now = monotonic()
-        if now < self._model_catalog_expires_at:
+        with self._model_catalog_lock:
+            now = monotonic()
+            if now >= self._model_catalog_expires_at:
+                try:
+                    self._live_model_ids = list_available_model_ids()
+                    self._model_catalog_status = "live"
+                    self._model_catalog_expires_at = now + 300
+                except Exception:
+                    self._live_model_ids = set()
+                    self._model_catalog_status = "unavailable"
+                    self._model_catalog_expires_at = now + 30
             return self._live_model_ids
-        try:
-            self._live_model_ids = list_available_model_ids()
-            self._model_catalog_status = "live"
-            self._model_catalog_expires_at = now + 300
-        except Exception:
-            self._live_model_ids = set()
-            self._model_catalog_status = "unavailable"
-            self._model_catalog_expires_at = now + 30
-        return self._live_model_ids
 
     def _configured_model_ids(self) -> set[str]:
         """Read the curated free-model shortlist from the single catalog file."""
@@ -400,9 +403,9 @@ class EpisodeService:
         )
 
     def _require_live_model(self, model_id: str) -> None:
-        """Reject real model IDs absent from the current user's live catalog."""
+        """Reject IDs absent from the visible catalog; invocation remains unverified."""
         if self.live_model_catalog and model_id not in self._get_live_model_ids():
-            raise ValueError("Model is not currently available in this AIHubMix API key catalog")
+            raise ValueError("Model is not visible in the current AIHubMix catalog")
 
     async def execute_episode(
         self,
@@ -414,7 +417,7 @@ class EpisodeService:
         if req.provider == "aihubmix":
             if not is_model_permitted(req.model, self._configured_model_ids()):
                 raise ValueError(f"Model '{req.model}' is not in the allowed free model whitelist")
-            self._require_live_model(req.model)
+            await asyncio.to_thread(self._require_live_model, req.model)
             provider: ModelProvider = AIHubMixModelProvider(min_request_interval=13.0)
             agent_text = DEFAULT_AIHUBMIX_AGENT.read_text(encoding="utf-8")
             agent = AgentSpec.model_validate_json(agent_text)
@@ -578,7 +581,7 @@ class EpisodeService:
             model_id = checkpoint.agent.model.model
             if not is_model_permitted(model_id, self._configured_model_ids()):
                 raise ValueError("Saved model is no longer permitted")
-            self._require_live_model(model_id)
+            await asyncio.to_thread(self._require_live_model, model_id)
             provider = AIHubMixModelProvider(min_request_interval=13.0)
         environment, validator, evaluator = self._saved_environment(
             checkpoint.task, checkpoint.run_config.environment_version
@@ -671,7 +674,7 @@ class EpisodeService:
         else:
             if not is_model_permitted(model.model, self._configured_model_ids()):
                 raise ValueError("Saved model is no longer permitted")
-            self._require_live_model(model.model)
+            await asyncio.to_thread(self._require_live_model, model.model)
             scenario = None
             provider = AIHubMixModelProvider(min_request_interval=13.0)
         environment, validator, evaluator = self._saved_environment(
@@ -734,7 +737,7 @@ class EpisodeService:
         if req.provider == "aihubmix":
             if not is_model_permitted(req.model, self._configured_model_ids()):
                 raise ValueError(f"Model '{req.model}' is not in the allowed free model whitelist")
-            self._require_live_model(req.model)
+            await asyncio.to_thread(self._require_live_model, req.model)
             base_text = DEFAULT_AIHUBMIX_AGENT.read_text(encoding="utf-8")
             baseline_agent = AgentSpec.model_validate_json(base_text)
             baseline_agent = baseline_agent.model_copy(
@@ -998,7 +1001,7 @@ class EpisodeService:
                     reference_price_version(model.model) != saved_price_version
                 ):
                     raise ValueError("Saved Experiment reference price version changed")
-                self._require_live_model(model.model)
+                await asyncio.to_thread(self._require_live_model, model.model)
 
                 def provider_factory() -> ModelProvider:
                     return AIHubMixModelProvider(min_request_interval=13.0)

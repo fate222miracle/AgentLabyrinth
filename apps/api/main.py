@@ -1,14 +1,14 @@
 """FastAPI entrypoint and routing for AgentLabyrinth M1 Slice B."""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from apps.api.schemas import (
     CreateEpisodeRequest,
@@ -30,14 +30,36 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Enable CORS for local Vite development
+LOCAL_BROWSER_ORIGINS = [
+    f"http://{host}:{port}"
+    for host in ("127.0.0.1", "localhost", "[::1]")
+    for port in (5173, 4173, 8000)
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=LOCAL_BROWSER_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
+
+
+@app.middleware("http")
+async def require_local_browser_origin(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Reject foreign browser requests before reads or credential-bearing execution."""
+    origin = request.headers.get("origin")
+    if origin is not None and origin not in LOCAL_BROWSER_ORIGINS:
+        error = ErrorResponse(
+            request_id=uuid4(),
+            error_code="ORIGIN_NOT_ALLOWED",
+            message="Use the local AgentLabyrinth frontend to access this API.",
+        )
+        return JSONResponse(status_code=403, content=error.model_dump(mode="json"))
+    return await call_next(request)
+
 
 _default_service = EpisodeService(live_model_catalog=True)
 _stream_runs: set[asyncio.Task[None]] = set()

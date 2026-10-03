@@ -39,7 +39,7 @@ function PacketEdge(props: EdgeProps<VisualEdge>) {
 const nodeTypes = { visual: VisualCard };
 const edgeTypes = { packet: PacketEdge };
 
-function FitCanvas({ canvas, padding }: { canvas: RefObject<HTMLDivElement | null>; padding: number }) {
+function FitCanvas({ canvas, padding, nodeCount }: { canvas: RefObject<HTMLDivElement | null>; padding: number; nodeCount: number }) {
   const { getNodes, setViewport, viewportInitialized } = useReactFlow();
   useEffect(() => {
     if (!viewportInitialized || !canvas.current) return;
@@ -57,7 +57,7 @@ function FitCanvas({ canvas, padding }: { canvas: RefObject<HTMLDivElement | nul
     observer.observe(canvas.current);
     resize();
     return () => { observer.disconnect(); cancelAnimationFrame(pending); };
-  }, [canvas, viewportInitialized, getNodes, setViewport, padding]);
+  }, [canvas, viewportInitialized, getNodes, setViewport, padding, nodeCount]);
   return null;
 }
 
@@ -186,7 +186,7 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
         zoomOnScroll={false} panOnScroll={false} preventScrolling={false}
         onNodeClick={(_, node) => { if (live) return; const next = frames.findIndex((beat) => node.id === `tool:${beat.tool}`);
           if (next >= 0) { setPlaying(false); setIndex(next); } }}>
-        <FitCanvas canvas={canvas} padding={compact || focused ? 0.08 : 0.2} />
+        <FitCanvas canvas={canvas} padding={compact || focused ? 0.08 : 0.2} nodeCount={nodes.length} />
         <Background gap={22} size={1} color="#d5d0c7" /><Controls showInteractive={false} />
       </ReactFlow>
     </div>
@@ -198,7 +198,7 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
       <span className="flow-position">{index + 1}/{frames.length}</span>
       <select aria-label="动画速度" value={duration} onChange={(event) => setDuration(Number(event.target.value))}><option value={2800}>0.5×</option><option value={1400}>1×</option><option value={700}>2×</option></select>
     </div>}
-    <div className={`flow-bookend output ${frame.phase === 'finish' ? 'current' : ''} ${termination === 'FAILED' ? 'failed' : ''}`} aria-label="最终输出">
+    <div className={`flow-bookend output ${frame.phase === 'finish' ? 'current' : ''} ${!live && termination !== 'SUCCESS' ? 'failed' : ''}`} aria-label="最终输出">
       <span className="flow-bookend-icon" aria-hidden="true">↗</span>
       <div><span className="flow-bookend-label">{live ? '等待最终产物' : isBfcl ? '函数调用提议 · 已保存' : '最终输出 · 已保存'}</span>
         <p>{live ? termination === '连接中断' ? '请稍后按 Episode ID 回读最终产物' : '运行完成后显示评测结果' : isBfcl ? proposedName ?? '未保存函数调用提议' : answer ?? '未保存已提交的答案'}</p>

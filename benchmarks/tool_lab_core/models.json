@@ -8,7 +8,7 @@
       "provider": "aihubmix",
       "is_default": true,
       "is_experimental": false,
-      "notes": "2026-09-23：当前 API Key 的 /v1/models 返回此模型；2026-09-21 两个真实工具任务通过。可用性会受账号配额和上游波动影响。"
+      "notes": "2026-09-21 旧 Key 的两条真实工具任务通过；2026-10-01 新 Key 允许范围未包含此型号。目录默认只供候选展示，不能证明当前 Key 可调用。"
     },
     {
       "id": "xiaomi-mimo-v2.6-pro-free",
@@ -16,7 +16,7 @@
       "provider": "aihubmix",
       "is_default": false,
       "is_experimental": true,
-      "notes": "2026-09-23：当前 API Key 可见，真实 BFCL 与 ToolLab 各 1 题通过。仅为小样本；免费上游可用性和配额仍可能波动。"
+      "notes": "2026-09-23 旧 Key 的 BFCL 与 ToolLab 各一题通过；2026-10-01 新 Key 两次最小请求均返回 429。当前可见不等于可调用。"
     },
     {
       "id": "coding-glm-5.3-free",
@@ -24,7 +24,7 @@
       "provider": "aihubmix",
       "is_default": false,
       "is_experimental": true,
-      "notes": "2026-09-23：当前 API Key 可见，真实 BFCL 与 ToolLab 各 1 题通过。仅为小样本；免费上游可用性和配额仍可能波动。"
+      "notes": "2026-10-01 新 Key 的 BFCL 与 ToolLab 各一题真实通过；仅是带日期的小样本，不代表持续可用或长期额度。"
     },
     {
       "id": "xiaomi-mimo-v2.5-pro-free",
@@ -32,7 +32,7 @@
       "provider": "aihubmix",
       "is_default": false,
       "is_experimental": true,
-      "notes": "2026-09-23：当前 API Key 的 /v1/models 返回此模型；AIHubMix 已公告 2026-10-21 退役，迁移目标为 xiaomi-mimo-v2.6-pro-free。迁移目标已在当前 Key 的模型列表中。"
+      "notes": "2026-09-23 旧 Key 目录曾列出此模型；2026-10-01 新 Key 允许范围未包含它。历史目录记录不能证明当前调用权限。"
     },
     {
       "id": "fake",
