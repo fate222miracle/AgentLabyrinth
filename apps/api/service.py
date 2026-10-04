@@ -24,16 +24,20 @@ from apps.api.schemas import (
 )
 from packages.application.checkpoint import (
     CheckpointStore,
+    read_completed_episode,
     resume_checkpointed_episode,
     run_checkpointed_episode,
 )
 from packages.application.experiment import (
     ExperimentArtifact,
+    ExperimentCheckpoint,
     compute_config_hash,
+    create_experiment_plan,
     experiment_checkpoint_path,
     read_experiment,
     read_experiment_checkpoint,
     run_experiment,
+    write_experiment_checkpoint,
 )
 from packages.application.reference_pricing import reference_price_version
 from packages.application.regression import fixed_config
@@ -124,6 +128,11 @@ class EpisodeService:
                     continue
                 if not experiment_checkpoint_path(self.artifacts_dir, experiment_id).is_file():
                     continue
+                plan = read_experiment_checkpoint(
+                    experiment_checkpoint_path(self.artifacts_dir, experiment_id)
+                )
+                if plan.experiment_id != experiment_id:
+                    continue
                 try:
                     final = self.get_experiment(experiment_id)
                 except ValueError:
@@ -140,14 +149,23 @@ class EpisodeService:
         )
         return state
 
-    def reserve_experiment_job(self, experiment_id: UUID) -> ExperimentJobState:
-        """Claim a new ID before queueing any work or invoking a model."""
+    def reserve_experiment_job(
+        self, experiment_id: UUID, plan: ExperimentCheckpoint | None = None
+    ) -> ExperimentJobState:
+        """Claim a new ID, saving its fixed plan before a Job can be accepted."""
         if (
             self._job_path(experiment_id).exists()
             or experiment_checkpoint_path(self.artifacts_dir, experiment_id).exists()
             or (self.artifacts_dir / "experiments" / f"{experiment_id}.json").exists()
         ):
             raise ValueError("Experiment ID already exists")
+        if plan is not None:
+            plan.verify()
+            if plan.experiment_id != experiment_id:
+                raise ValueError("Experiment plan ID mismatch")
+            write_experiment_checkpoint(
+                experiment_checkpoint_path(self.artifacts_dir, experiment_id), plan
+            )
         return self._save_job(
             ExperimentJobState(
                 experiment_id=experiment_id,
@@ -533,7 +551,10 @@ class EpisodeService:
         target_file = self.artifacts_dir / f"{episode_id}.json"
         if not target_file.is_file():
             return None
-        return read_artifact(target_file)
+        artifact = read_artifact(target_file)
+        if artifact.episode.episode_id != episode_id:
+            raise ValueError("Episode file ID mismatch")
+        return artifact
 
     def resumable_episode_ids(self) -> list[UUID]:
         """Show only unfinished checkpoints saved before this API instance started."""
@@ -542,14 +563,16 @@ class EpisodeService:
         for path in store.directory.glob("*.json"):
             try:
                 episode_id = UUID(path.stem)
+                store.load(episode_id)
                 final_path = self.artifacts_dir / f"{episode_id}.json"
                 if final_path.is_file():
                     try:
-                        read_artifact(final_path)
+                        completed = read_completed_episode(episode_id, self.artifacts_dir)
                     except ValueError:
                         pass
                     else:
-                        continue
+                        if completed is not None:
+                            continue
                 if path.stat().st_mtime_ns < self._started_ns and episode_id not in self._resuming:
                     result.append(episode_id)
             except (ValueError, OSError):
@@ -707,10 +730,10 @@ class EpisodeService:
         )
         return artifact
 
-    async def execute_experiment(
-        self, req: CreateExperimentRequest, *, job_id: UUID | None = None
-    ) -> ExperimentArtifact:
-        """Run a paired policy or runtime comparison and persist its artifact."""
+    async def prepare_experiment(
+        self, req: CreateExperimentRequest, *, experiment_id: UUID | None = None
+    ) -> ExperimentCheckpoint:
+        """Resolve immutable inputs without invoking a model or writing files."""
         if not req.task_ids:
             raise ValueError("Experiment requires at least one task ID")
         resolved_seeds = req.seeds if req.seeds is not None else [req.seed]
@@ -756,9 +779,6 @@ class EpisodeService:
                 }
             )
 
-            def provider_factory() -> ModelProvider:
-                return AIHubMixModelProvider(min_request_interval=13.0)
-
             resolved_scenario: str | None = None
 
         elif req.provider == "fake":
@@ -779,9 +799,6 @@ class EpisodeService:
                 recovery_agent = recovery_agent.model_copy(
                     update={"model": recovery_agent.model.model_copy(update={"model": req.model})}
                 )
-
-            def provider_factory() -> ModelProvider:
-                return FakeModelProvider(scenario=scenario)
 
             resolved_scenario = scenario
 
@@ -844,27 +861,44 @@ class EpisodeService:
             ),
         }
 
-        return await run_experiment(
-            baseline_agent=baseline_agent,
-            recovery_agent=recovery_agent,
-            tasks=tasks,
-            provider_factory=provider_factory,
-            seed=resolved_seeds[0],
-            seeds=resolved_seeds,
-            repeat_count=req.repeat_count,
-            artifacts_dir=self.artifacts_dir,
-            config_metadata=config_metadata,
-            comparison_axis=req.comparison_axis,
-            experiment_id=job_id,
-            before_arm=(lambda: self._check_experiment_action(job_id)) if job_id else None,
+        return create_experiment_plan(
+            baseline_agent,
+            recovery_agent,
+            tasks,
+            resolved_seeds,
+            req.repeat_count,
+            req.comparison_axis,
+            config_metadata,
+            experiment_id,
         )
+
+    async def execute_experiment(
+        self, req: CreateExperimentRequest, *, job_id: UUID | None = None
+    ) -> ExperimentArtifact:
+        """Persist a fixed plan and execute through the same path used by recovery."""
+        plan = await self.prepare_experiment(req, experiment_id=job_id)
+        path = experiment_checkpoint_path(self.artifacts_dir, plan.experiment_id)
+        if (
+            path.exists()
+            or (self.artifacts_dir / "experiments" / f"{plan.experiment_id}.json").exists()
+        ):
+            raise ValueError("Experiment ID already exists")
+        write_experiment_checkpoint(path, plan)
+        return await self._resume_experiment_once(plan.experiment_id, controlled=job_id is not None)
 
     def get_experiment(self, experiment_id: UUID) -> ExperimentArtifact | None:
         """Strictly read previously saved ExperimentArtifact from disk without invoking models."""
         target_file = self.artifacts_dir / "experiments" / f"{experiment_id}.json"
         if not target_file.is_file():
             return None
-        return read_experiment(target_file)
+        artifact = read_experiment(target_file)
+        if artifact.experiment_id != experiment_id:
+            raise ValueError("Experiment file ID mismatch")
+        if compute_config_hash(artifact.config) != artifact.config_hash:
+            raise ValueError("Experiment configuration hash mismatch")
+        if artifact.metrics.total_pairs != len(artifact.pairs):
+            raise ValueError("Experiment pair count mismatch")
+        return artifact
 
     def experiment_dashboard(self) -> ExperimentDashboardResponse:
         """Summarize saved comparisons without invoking models or mixing score protocols."""

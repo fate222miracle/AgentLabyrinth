@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 from packages.application.experiment import ExperimentArtifact, PairComparison, compute_config_hash
+from packages.domain.models import ContextPolicy
 
 FIXED_FIELDS = (
     "comparison_axis",
@@ -70,7 +71,12 @@ def fixed_config(artifact: ExperimentArtifact) -> dict[str, Any]:
         agent = config.get(arm)
         if not isinstance(agent, dict) or any(key not in agent for key in ARM_FIELDS):
             raise ValueError("Experiment lacks arm configuration")
-        result[arm] = {key: agent[key] for key in ARM_FIELDS}
+        arm_config = {key: agent[key] for key in ARM_FIELDS}
+        if agent.get("context_policy") is not None:
+            arm_config["context_policy"] = ContextPolicy.model_validate(
+                agent["context_policy"]
+            ).model_dump(mode="json")
+        result[arm] = arm_config
     return result
 
 

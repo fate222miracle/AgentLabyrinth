@@ -62,8 +62,10 @@
 .flow-input-context strong { color: var(--text-primary); font-weight: 500; overflow-wrap: anywhere; min-width: 0; }
 .flow-detail pre { max-height: 240px; overflow: auto; margin-top: 0.75rem; }
 .view-switch.flow-switch { max-width: 420px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.25rem; }
-.view-switch.flow-switch::before { display: none; }
-.flow-switch button.active { background: var(--color-surface); border-radius: var(--radius-sm); }
+.view-switch.flow-switch::before { width: calc((100% - 1rem) / 3); display: block; }
+.flow-switch[data-active="story"]::before { transform: translateX(calc(100% + 0.25rem)); }
+.flow-switch[data-active="events"]::before { transform: translateX(calc(200% + 0.5rem)); }
+.flow-switch button.active { background: transparent; border-radius: var(--radius-sm); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (max-width: 640px) { .flow-caption { padding: 0.8rem; } .flow-caption strong { flex-basis: 100%; order: 2; } .mcp-network-path { flex-direction: column; } .mcp-network-path > span { transform: rotate(90deg); line-height: 1; } .flow-player { flex-wrap: wrap; padding: 0.7rem; } .flow-scrubber { order: 2; flex-basis: 75%; } .flow-canvas { height: 560px; } }
 @media (prefers-reduced-motion: reduce) { .flow-packet { display: none; } }

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-labelledby="title">
+  <title id="title">AgentLabyrinth Wayfinder 动态标志</title>
+  <style>
+    .ring { animation: reveal 900ms cubic-bezier(.2,.7,.2,1) both; }
+    .route { animation: reveal 760ms cubic-bezier(.2,.7,.2,1) 560ms both; }
+    .exit { transform-box: fill-box; transform-origin: center; animation: arrive 520ms cubic-bezier(.2,.7,.2,1) 1100ms both; }
+    @keyframes reveal { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+    @keyframes arrive { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: translateX(0); } }
+    @media (prefers-reduced-motion: reduce) { .ring, .route, .exit { animation: none; } }
+  </style>
+  <g stroke="#C96442" stroke-width="6.5" stroke-linecap="butt" stroke-linejoin="round">
+    <path class="ring" pathLength="1" stroke-dasharray="1" d="M9.78 26.05A23 23 0 0 1 50.84 18.81" />
+    <path class="ring" pathLength="1" stroke-dasharray="1" d="M50.84 45.19A23 23 0 0 1 11.16 41.72" />
+    <path class="route" pathLength="1" stroke-dasharray="1" d="M9 36.5H20.5V29H32V21.5H39.5L46 28" />
+  </g>
+  <path class="exit" d="M50 24.5L61 32L50 39.5Z" fill="#C96442" />
+</svg>

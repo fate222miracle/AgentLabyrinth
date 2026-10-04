@@ -151,6 +151,38 @@ async def run_checkpointed_episode(
     return artifact
 
 
+def read_completed_episode(episode_id: UUID, artifacts_dir: Path) -> EpisodeArtifact | None:
+    """Reuse complete owned results; reject conflicts with a saved safe point."""
+    artifact_path = artifacts_dir / f"{episode_id}.json"
+    if not artifact_path.is_file():
+        return None
+    try:
+        artifact = read_artifact(artifact_path)
+    except ValueError:
+        return None  # Only malformed results may be rebuilt from a valid safe point.
+    if artifact.episode.episode_id != episode_id or any(
+        event.episode_id != episode_id for event in artifact.events
+    ):
+        raise ValueError("Completed episode identity mismatch")
+    store = CheckpointStore(artifacts_dir / "checkpoints")
+    if store.path(episode_id).is_file():
+        checkpoint = store.load(episode_id)
+        expected = {
+            "agent": content_hash(artifact.agent),
+            "task": content_hash(artifact.task),
+            "run_config": content_hash(artifact.run_config),
+        }
+        if (
+            artifact.agent != checkpoint.agent
+            or artifact.task != checkpoint.task
+            or artifact.run_config != checkpoint.run_config
+            or artifact.config_hashes != expected
+            or artifact.config_hashes != checkpoint.config_hashes
+        ):
+            raise ValueError("Completed episode provenance mismatch")
+    return artifact
+
+
 async def resume_checkpointed_episode(
     episode_id: UUID,
     runtime: AgentRuntime,
@@ -160,11 +192,9 @@ async def resume_checkpointed_episode(
 ) -> EpisodeArtifact:
     """Continue one unfinished run, or return its existing final artifact."""
     artifact_path = artifacts_dir / f"{episode_id}.json"
-    if artifact_path.is_file():
-        try:
-            return read_artifact(artifact_path)
-        except ValueError:
-            pass  # A legacy partial final file may be rebuilt from a valid checkpoint.
+    completed = read_completed_episode(episode_id, artifacts_dir)
+    if completed is not None:
+        return completed
     store = CheckpointStore(artifacts_dir / "checkpoints")
     checkpoint = store.load(episode_id)
     recorder = checkpoint.validated_recorder()

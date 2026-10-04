@@ -1,6 +1,7 @@
 """Stop a BFCL or MCP Fake episode after a durable safe point."""
 
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -39,6 +40,56 @@ def main() -> None:
     """Persist state and terminate without running the normal cleanup path."""
     suite, directory = sys.argv[1], Path(sys.argv[2])
     service = EpisodeService(artifacts_dir=directory)
+    if suite == "queued":
+        import httpx
+
+        from apps.api.main import app, get_episode_service
+
+        two_started = asyncio.Event()
+        calls = 0
+
+        async def blocked(
+            provider: FakeModelProvider,
+            messages: list[Message],
+            tools: list[ToolSchema],
+            config: ModelConfig,
+        ) -> ModelResponse:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                two_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("Blocked provider unexpectedly returned")
+
+        async def queue_and_exit() -> None:
+            app.dependency_overrides[get_episode_service] = lambda: service
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                ids = []
+                for seed in (1, 2, 3):
+                    response = await client.post(
+                        "/api/v1/experiments/jobs",
+                        json={
+                            "provider": "fake",
+                            "model": "fake-model",
+                            "scenario": "success",
+                            "task_ids": ["order-status-001"],
+                            "seeds": [seed],
+                            "repeat_count": 2,
+                        },
+                    )
+                    assert response.status_code == 202, response.text
+                    ids.append(response.json()["experiment_id"])
+                await asyncio.wait_for(two_started.wait(), 3)
+                state = (await client.get(f"/api/v1/experiments/jobs/{ids[2]}")).json()
+                assert state["status"] == "queued"
+                (directory / "queued_ids.json").write_text(json.dumps(ids), encoding="utf-8")
+                os._exit(0)
+
+        with patch.object(FakeModelProvider, "generate", blocked):
+            asyncio.run(queue_and_exit())
+        raise AssertionError("Queued worker did not exit")
     if suite == "experiment":
         request = CreateExperimentRequest(
             provider="fake", model="fake-model", scenario="success", task_ids=["order-status-001"]

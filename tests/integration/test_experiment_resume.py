@@ -1,9 +1,10 @@
 """A paired experiment resumes its original matrix after a process interruption."""
 
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import patch
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,7 +17,8 @@ from packages.domain.models import Message, ModelConfig, ModelResponse, ToolSche
 from packages.providers.fake import FakeModelProvider
 
 
-def test_experiment_resume_reuses_completed_arm(tmp_path: Path) -> None:
+@pytest.mark.parametrize("damage", ["none", "broken-json", "foreign-id"])
+def test_experiment_resume_reuses_completed_arm(tmp_path: Path, damage: str) -> None:
     """The second arm may restart; the completed first arm must stay byte-identical."""
     service = EpisodeService(artifacts_dir=tmp_path)
     original = FakeModelProvider.generate
@@ -48,6 +50,13 @@ def test_experiment_resume_reuses_completed_arm(tmp_path: Path) -> None:
     baseline_id = uuid5(experiment_id, "0:baseline")
     baseline_path = tmp_path / f"{baseline_id}.json"
     baseline_bytes = baseline_path.read_bytes()
+    recovery_id = uuid5(experiment_id, "0:recovery")
+    if damage == "broken-json":
+        (tmp_path / f"{recovery_id}.json").write_text("{", encoding="utf-8")
+    elif damage == "foreign-id":
+        foreign = json.loads(baseline_bytes)
+        foreign["episode"]["episode_id"] = str(uuid4())
+        baseline_path.write_text(json.dumps(foreign), encoding="utf-8")
     (tmp_path / "experiments" / f"{experiment_id}.json").write_text("{", encoding="utf-8")
 
     restarted = EpisodeService(artifacts_dir=tmp_path)
@@ -55,11 +64,20 @@ def test_experiment_resume_reuses_completed_arm(tmp_path: Path) -> None:
     try:
         with TestClient(app) as client:
             assert str(experiment_id) in client.get("/api/v1/experiments/resumable").json()
+            if damage == "foreign-id":
+                before = baseline_path.read_bytes()
+                with patch.object(FakeModelProvider, "generate") as model:
+                    response = client.post(f"/api/v1/experiments/{experiment_id}/resume")
+                    assert response.status_code == 400
+                    model.assert_not_called()
+                assert baseline_path.read_bytes() == before and plans[0].exists()
+                return
             response = client.post(f"/api/v1/experiments/{experiment_id}/resume")
             assert response.status_code == 200, response.text
             result = response.json()["experiment"]
             assert result["experiment_id"] == str(experiment_id)
             assert result["episode_ids"][0] == str(baseline_id)
+            assert result["episode_ids"][1] == str(recovery_id)
             assert result["metrics"]["total_pairs"] == 1
             assert client.get("/api/v1/experiments/resumable").json() == []
     finally:

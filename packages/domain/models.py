@@ -68,11 +68,25 @@ class ModelConfig(Contract):
     max_tokens: PositiveInt | None = None
 
 
+class ContextPolicy(Contract):
+    """Select a versioned model-input projection, never a storage retention policy."""
+
+    algorithm_version: Literal["tool-round-window-v1"] = "tool-round-window-v1"
+    mode: Literal["full", "recent_tool_rounds"] = "full"
+    max_tool_rounds: Annotated[int, Field(ge=1, le=100)] | None = None
+
+    @model_validator(mode="after")
+    def validate_window(self) -> Self:
+        """Reject missing windows and meaningless parameters on full history."""
+        if (self.mode == "recent_tool_rounds") != (self.max_tool_rounds is not None):
+            raise ValueError("Only recent_tool_rounds requires max_tool_rounds")
+        return self
+
+
 class AgentSpec(Contract):
     """Versioned, validated agent configuration."""
 
-    # This contract alone accepts the additive v1.1 revision; other contracts stay v1.0.
-    schema_version: Literal["1.0", "1.1"] = "1.1"  # type: ignore[assignment]
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.1"  # type: ignore[assignment]
     id: UUID
     name: str
     version: str
@@ -83,6 +97,22 @@ class AgentSpec(Contract):
     runtime_backend: RuntimeBackend = "handwritten"
     runtime_strategy: RuntimeStrategy = "handwritten"
     budget: Budget = Field(default_factory=Budget)
+    context_policy: ContextPolicy | None = None
+
+    @model_validator(mode="after")
+    def validate_context_revision(self) -> Self:
+        """An explicit projection requires the additive Agent revision."""
+        if self.context_policy is not None and self.schema_version != "1.2":
+            raise ValueError("Context policy requires AgentSpec schema 1.2")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_agent(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        """Preserve existing configuration hashes when no policy was specified."""
+        result: dict[str, object] = handler(self)
+        if self.context_policy is None:
+            result.pop("context_policy", None)
+        return result
 
     @property
     def recovery_policy(self) -> Literal["none", "invalid_arguments_once"]:

@@ -1,31 +1,17 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { changedStateFields, groupTraceByStep, keyFields, stepOutcome, stepTitle } from './traceSteps';
 import { McpFlowReplay } from './McpFlowReplay';
 import { summarizeEpisode, type EpisodeHistorySummary, type ExperimentDashboardItem } from './historySummary';
 import { ExperimentDashboard } from './ExperimentDashboard';
 import { readEpisodeStream } from './streamEpisode';
-
-interface ModelOption {
-  id: string;
-  name: string;
-  provider: 'fake' | 'aihubmix';
-  is_default: boolean;
-  is_experimental: boolean;
-  notes: string;
-  scenarios: string[];
-}
-
-interface TaskOption {
-  id: string;
-  name: string;
-  category: string;
-  description: string;
-  max_steps: number;
-  token_budget: number;
-  suite: 'tool_lab_core' | 'bfcl_adapted' | 'bfcl_java_adapted';
-  split: string;
-  supports_mcp: boolean;
-}
+import { RequestGeneration } from './requestGeneration';
+import { useContentMotion } from './useContentMotion';
+import { HistoryReader } from './HistoryReader';
+import { EpisodeSummary } from './EpisodeSummary';
+import { metaSchema, dashboardSchema, resumableIdsSchema,
+  type TaskOption, type MetaResponse, type TraceEvent, type EpisodeArtifact,
+  type PairComparison, type ExperimentArtifact, type ExperimentJobState } from './apiContracts';
+import { readApi, readEpisode, readExperiment, readJob, requireOk } from './apiClient';
 
 const bfclDescriptions: Record<string, string> = {
   'bfcl-simple_python_0': '求底边长为 10、高为 5 的三角形面积。',
@@ -53,172 +39,6 @@ const taskCategoryLabels: Record<string, string> = {
 
 function taskDescription(task: TaskOption): string {
   return task.suite !== 'tool_lab_core' ? bfclDescriptions[task.id] ?? task.description : task.description;
-}
-
-interface MetaResponse {
-  schema_version: string;
-  request_id: string;
-  models: ModelOption[];
-  tasks: TaskOption[];
-  default_model: string;
-  default_task: string;
-  model_catalog_status: 'live' | 'unavailable' | 'static';
-}
-
-interface TraceEvent {
-  event_id: string;
-  episode_id: string;
-  step_index: number;
-  event_type: string;
-  timestamp: string;
-  duration_ms: number;
-  payload: Record<string, unknown>;
-  token_usage: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    simulated: boolean;
-  };
-  estimated_cost: {
-    amount: string;
-    currency: string;
-    price_table_version: string;
-    is_known: boolean;
-  };
-}
-
-interface EpisodeArtifact {
-  schema_version: string;
-  task: {
-    name: string;
-    max_steps: number;
-    evaluator_config: Record<string, unknown>;
-  };
-  episode: {
-    episode_id: string;
-    termination_reason: string;
-    detail: string;
-    step_count: number;
-    model_call_count: number;
-    tool_call_count: number;
-    duration_ms: number;
-    token_usage: {
-      prompt_tokens: number;
-      completion_tokens: number;
-      simulated: boolean;
-    };
-    estimated_cost: {
-      amount: string;
-      currency: string;
-      price_table_version: string;
-      is_known: boolean;
-    };
-    final_state: Record<string, unknown>;
-  };
-  evaluation: {
-    success: boolean;
-    reason: string;
-    metrics: Record<string, unknown>;
-  };
-  run_config: { runtime_version?: string | null; environment_version?: string };
-  agent: {
-    budget?: { max_execution_time_ms?: number };
-    name?: string;
-    runtime_strategy?: string;
-    runtime_backend?: string;
-    model: {
-      provider: string;
-      model: string;
-    };
-  };
-  events: TraceEvent[];
-  reference_cost?: {
-    amount: string;
-    currency: string;
-    price_table_version: string;
-    is_known: boolean;
-  } | null;
-}
-
-interface PairComparison {
-  task_id: string;
-  task_name: string;
-  seed: number;
-  repeat_index?: number;
-  baseline_episode_id: string;
-  baseline_success: boolean;
-  baseline_termination_reason: string;
-  baseline_steps: number;
-  baseline_tokens: number;
-  baseline_duration_ms: number;
-  baseline_cost?: string | null;
-  baseline_reference_cost?: string | null;
-  baseline_model_calls?: number | null;
-  baseline_tool_calls?: number | null;
-  baseline_tool_selection_accuracy?: number | null;
-  baseline_tool_argument_validity_rate?: number | null;
-  recovery_episode_id: string;
-  recovery_success: boolean;
-  recovery_termination_reason: string;
-  recovery_steps: number;
-  recovery_tokens: number;
-  recovery_duration_ms: number;
-  recovery_cost?: string | null;
-  recovery_reference_cost?: string | null;
-  recovery_model_calls?: number | null;
-  recovery_tool_calls?: number | null;
-  recovery_tool_selection_accuracy?: number | null;
-  recovery_tool_argument_validity_rate?: number | null;
-  retry_eligible?: boolean | null;
-  recovered: boolean;
-}
-
-interface ExperimentAggregateMetrics {
-  total_pairs: number;
-  baseline_success_count: number;
-  recovery_success_count: number;
-  baseline_success_rate: number;
-  recovery_success_rate: number;
-  retry_eligible_count?: number | null;
-  retry_recovery_count: number | null;
-  retry_recovery_rate?: number | null;
-  baseline_total_tokens: number;
-  recovery_total_tokens: number;
-  baseline_avg_steps: number;
-  recovery_avg_steps: number;
-  baseline_avg_model_calls?: number | null;
-  recovery_avg_model_calls?: number | null;
-  baseline_avg_tool_calls?: number | null;
-  recovery_avg_tool_calls?: number | null;
-  baseline_tool_selection_accuracy?: number | null;
-  recovery_tool_selection_accuracy?: number | null;
-  baseline_tool_argument_validity_rate?: number | null;
-  recovery_tool_argument_validity_rate?: number | null;
-  baseline_avg_duration_ms: number;
-  recovery_avg_duration_ms: number;
-  baseline_total_cost?: string | null;
-  recovery_total_cost?: string | null;
-  is_cost_known: boolean;
-  baseline_total_reference_cost?: string | null;
-  recovery_total_reference_cost?: string | null;
-  is_reference_cost_known?: boolean;
-}
-
-interface ExperimentArtifact {
-  schema_version: string;
-  experiment_id: string;
-  created_at: string;
-  config: Record<string, unknown>;
-  config_hash: string;
-  episode_ids: string[];
-  pairs: PairComparison[];
-  metrics: ExperimentAggregateMetrics;
-}
-
-interface ExperimentJobState {
-  experiment_id: string;
-  status: 'queued' | 'running' | 'paused' | 'cancelled' | 'completed' | 'failed' | 'interrupted';
-  requested_action: 'pause' | 'cancel' | null;
-  error_code: string | null;
 }
 
 const experimentJobLabels: Record<ExperimentJobState['status'], string> = {
@@ -455,6 +275,7 @@ export default function App() {
     Record<string, EpisodeHistorySummary>
   >({});
   const [resumableEpisodeIds, setResumableEpisodeIds] = useState<string[]>([]);
+  const [recoveryListError, setRecoveryListError] = useState(false);
   const [inputEpisodeId, setInputEpisodeId] = useState<string>('');
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
   const [eventTypeFilter, setEventTypeFilter] = useState<string>('ALL');
@@ -462,8 +283,14 @@ export default function App() {
   const [replayPlaying, setReplayPlaying] = useState<boolean>(false);
   const [replaySpeedMs, setReplaySpeedMs] = useState<number>(1000);
   const [replayView, setReplayView] = useState<'flow' | 'story' | 'events'>('flow');
+  const mainMotionRef = useRef<HTMLElement>(null);
+  const tracePanelRef = useRef<HTMLElement>(null);
+  const replayMotionRef = useRef<HTMLDivElement>(null);
+  useContentMotion(mainMotionRef, activeTab, activeTab === 'single' ? 1 : 0);
+  useContentMotion(replayMotionRef,
+    activeTab === 'single' ? `${artifact?.episode.episode_id ?? ''}:${replayView}` : '',
+    replayView === 'flow' ? 0 : replayView === 'story' ? 1 : 2);
   const storyStageRef = useRef<HTMLDivElement>(null);
-  const previousStoryIndex = useRef(0);
 
   // Experiment states
   const [expModel, setExpModel] = useState<string>('');
@@ -505,7 +332,8 @@ export default function App() {
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
-  const historyRequestId = useRef(0);
+  const pageRequests = useRef(new RequestGeneration());
+  const jobControlRequests = useRef(new RequestGeneration());
 
   useEffect(() => {
     if (!copyNotice) return;
@@ -537,7 +365,7 @@ export default function App() {
 
   const switchTab = (next: 'single' | 'experiment') => {
     if (next === activeTab || (isLoading && loadingActivity === 'run' && !activeJobId)) return;
-    historyRequestId.current += 1;
+    pageRequests.current.begin();
     if (loadingActivity === 'history') finishLoading();
     setErrorMsg(null);
     setActiveTab(next);
@@ -563,14 +391,12 @@ export default function App() {
     const poll = async () => {
       try {
         const response = await fetch(`/api/v1/experiments/jobs/${encodeURIComponent(activeJobId)}`);
-        if (!response.ok) throw new Error(`实验状态读取失败 (${response.status})`);
-        const job = await response.json() as ExperimentJobState;
+        const job = await readJob(response, activeJobId);
         if (cancelled) return;
         setExperimentJob(job);
         if (job.status === 'completed') {
           const result = await fetch(`/api/v1/experiments/${encodeURIComponent(activeJobId)}`);
-          if (!result.ok) throw new Error('实验已完成，但结果读取失败');
-          const data = await result.json() as { experiment: ExperimentArtifact };
+          const data = await readExperiment(result, activeJobId);
           if (cancelled) return;
           setExperiment(data.experiment);
           addRecentExpId(activeJobId);
@@ -587,14 +413,14 @@ export default function App() {
           finishLoading();
         } else if (['paused', 'cancelled', 'failed', 'interrupted'].includes(job.status)) {
           finishLoading();
-          if (job.status === 'paused' || job.status === 'interrupted' || job.status === 'failed') {
+          if (job.status === 'paused' || job.status === 'interrupted') {
             setResumableJobIds((ids) => ids.includes(activeJobId) ? ids : [activeJobId, ...ids]);
           } else {
             setResumableJobIds((ids) => ids.filter((id) => id !== activeJobId));
           }
           if (job.status === 'failed') setErrorMsg(job.error_code === 'REFERENCE_COST_BUDGET_EXCEEDED'
             ? '已达到原厂标价参考预算；已完成的 Episode 已保存。若要提高预算，请创建新实验。'
-            : '实验执行失败，已完成的 Episode 仍保留；可检查后恢复。');
+            : '实验执行失败，已完成的 Episode 仍保留；请检查错误后创建新实验。');
         } else {
           timer = window.setTimeout(poll, 900);
         }
@@ -616,13 +442,12 @@ export default function App() {
     setDashboardLoading(true);
     fetch('/api/v1/experiments', { signal: controller.signal })
       .then((res) => {
-        if (!res.ok) throw new Error('dashboard unavailable');
-        return res.json();
+        return readApi(res, dashboardSchema);
       })
-      .then((data: { items: ExperimentDashboardItem[]; skipped_count: number }) => {
+      .then((data) => {
         if (controller.signal.aborted) return;
-        setDashboardItems(Array.isArray(data.items) ? data.items : []);
-        setDashboardSkipped(data.skipped_count ?? 0);
+        setDashboardItems(data.items);
+        setDashboardSkipped(data.skipped_count);
         setDashboardError(false);
       })
       .catch(() => { if (!controller.signal.aborted) setDashboardError(true); })
@@ -638,8 +463,7 @@ export default function App() {
 
     fetch('/api/v1/meta')
       .then((res) => {
-        if (!res.ok) throw new Error('无法连接后端配置元数据');
-        return res.json();
+        return readApi(res, metaSchema);
       })
       .then((data: MetaResponse) => {
         setMeta(data);
@@ -658,17 +482,17 @@ export default function App() {
         setErrorMsg(`API 连通性错误: ${err.message}`);
       });
     fetch('/api/v1/episodes/resumable')
-      .then((res) => res.ok ? res.json() : [])
+      .then((res) => readApi(res, resumableIdsSchema))
       .then((ids: string[]) => setResumableEpisodeIds(ids))
-      .catch(() => setResumableEpisodeIds([]));
+      .catch(() => { setResumableEpisodeIds([]); setRecoveryListError(true); });
     fetch('/api/v1/experiments/resumable')
-      .then((res) => res.ok ? res.json() : [])
+      .then((res) => readApi(res, resumableIdsSchema))
       .then((ids: string[]) => setResumableExpIds(ids))
-      .catch(() => setResumableExpIds([]));
+      .catch(() => { setResumableExpIds([]); setRecoveryListError(true); });
     fetch('/api/v1/experiments/jobs/resumable')
-      .then((res) => res.ok ? res.json() : [])
+      .then((res) => readApi(res, resumableIdsSchema))
       .then((ids: string[]) => setResumableJobIds(ids))
-      .catch(() => setResumableJobIds([]));
+      .catch(() => { setResumableJobIds([]); setRecoveryListError(true); });
     refreshExperimentDashboard();
 
     // Load recent history from localStorage
@@ -702,7 +526,7 @@ export default function App() {
       const nextEpId = next.get('episode_id');
       const nextJobId = next.get('experiment_job_id');
       if (nextJobId) {
-        historyRequestId.current += 1;
+        pageRequests.current.begin();
         setActiveTab('experiment');
         setActiveJobId(nextJobId);
         setExperiment(null);
@@ -718,7 +542,7 @@ export default function App() {
       } else {
         setActiveJobId(null);
         setActiveTab(next.get('mode') === 'single' ? 'single' : 'experiment');
-        historyRequestId.current += 1;
+        pageRequests.current.begin();
         setExperiment(null);
         setArtifact(null);
         setLiveRun(null);
@@ -750,10 +574,8 @@ export default function App() {
         }
         try {
           const response = await fetch(`/api/v1/episodes/${encodeURIComponent(id)}`);
-          if (!response.ok) return [id, { status: 'error' } satisfies EpisodeHistorySummary] as const;
-          const data = await response.json() as { artifact?: Partial<EpisodeArtifact> };
-          return [id, data.artifact ? summarizeEpisode(data.artifact)
-            : { status: 'error' } satisfies EpisodeHistorySummary] as const;
+          const data = await readEpisode(response, id);
+          return [id, summarizeEpisode(data.artifact)] as const;
         } catch {
           return [id, { status: 'error' } satisfies EpisodeHistorySummary] as const;
         }
@@ -797,7 +619,7 @@ export default function App() {
   const loadEpisodeById = async (id: string, updateUrl = true) => {
     if (!id || id.trim().length === 0) return;
     setActiveJobId(null);
-    const requestId = ++historyRequestId.current;
+    const requestId = pageRequests.current.begin();
     setLiveRun(null);
     beginLoading('正在读取历史 Episode。', 'history');
     setErrorMsg(null);
@@ -812,22 +634,17 @@ export default function App() {
     }
     try {
       const res = await fetch(`/api/v1/episodes/${encodeURIComponent(id.trim())}`);
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(res.status === 404
-          ? `未能找到 Episode ${id.trim()}` : errData.message || `读取 Episode 失败 (${res.status})`);
-      }
-      const data = await res.json();
-      if (requestId !== historyRequestId.current) return;
+      const data = await readEpisode(res, id);
+      if (!pageRequests.current.isCurrent(requestId)) return;
       setArtifact(data.artifact);
       addRecentEpisodeId(id.trim());
 
     } catch (err: unknown) {
-      if (requestId !== historyRequestId.current) return;
+      if (!pageRequests.current.isCurrent(requestId)) return;
       const message = err instanceof Error ? err.message : '加载失败';
       setErrorMsg(message);
     } finally {
-      if (requestId === historyRequestId.current) finishLoading();
+      if (pageRequests.current.isCurrent(requestId)) finishLoading();
     }
   };
 
@@ -835,7 +652,7 @@ export default function App() {
   const loadExperimentById = async (id: string, updateUrl = true) => {
     if (!id || id.trim().length === 0) return;
     setActiveJobId(null);
-    const requestId = ++historyRequestId.current;
+    const requestId = pageRequests.current.begin();
     setLiveRun(null);
     beginLoading('正在读取历史对照实验。', 'history');
     setErrorMsg(null);
@@ -850,28 +667,23 @@ export default function App() {
     }
     try {
       const res = await fetch(`/api/v1/experiments/${encodeURIComponent(id.trim())}`);
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(res.status === 404
-          ? `未能找到 Experiment ${id.trim()}` : errData.message || `读取 Experiment 失败 (${res.status})`);
-      }
-      const data = await res.json();
-      if (requestId !== historyRequestId.current) return;
+      const data = await readExperiment(res, id);
+      if (!pageRequests.current.isCurrent(requestId)) return;
       setExperiment(data.experiment);
       addRecentExpId(id.trim());
 
     } catch (err: unknown) {
-      if (requestId !== historyRequestId.current) return;
+      if (!pageRequests.current.isCurrent(requestId)) return;
       const message = err instanceof Error ? err.message : '加载实验失败';
       setErrorMsg(message);
     } finally {
-      if (requestId === historyRequestId.current) finishLoading();
+      if (pageRequests.current.isCurrent(requestId)) finishLoading();
     }
   };
 
   // Execute single episode
   const handleRunEpisode = async () => {
-    const requestId = ++historyRequestId.current;
+    const requestId = pageRequests.current.begin();
     beginLoading('正在运行，Trace 节点会随事件出现。');
     setErrorMsg(null);
     setArtifact(null);
@@ -913,27 +725,14 @@ export default function App() {
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.message || `执行失败 (${res.status})`);
-      }
-
-      const data = await readEpisodeStream(res, (value) => {
-        if (requestId !== historyRequestId.current) return;
-        if (!value || typeof value !== 'object' || !('event_id' in value)
-          || typeof value.event_id !== 'string' || !('episode_id' in value)
-          || typeof value.episode_id !== 'string' || !('event_type' in value)
-          || typeof value.event_type !== 'string' || !('payload' in value)
-          || !value.payload || typeof value.payload !== 'object') {
-          throw new Error('实时 Trace 格式无效。');
-        }
-        const event = value as TraceEvent;
+      await requireOk(res);
+      const data = await readEpisodeStream(res, (event) => {
+        if (!pageRequests.current.isCurrent(requestId)) return;
         setLiveRun((current) => current ? { ...current, episodeId: event.episode_id,
           events: [...current.events, event] } : current);
-      }) as { artifact?: EpisodeArtifact };
-      if (requestId !== historyRequestId.current) return;
-      if (!data?.artifact?.episode?.episode_id) throw new Error('完成事件缺少 Episode 产物。');
-      const newArtifact = data.artifact as EpisodeArtifact;
+      });
+      if (!pageRequests.current.isCurrent(requestId)) return;
+      const newArtifact = data.artifact;
       setArtifact(newArtifact);
       setLiveRun(null);
       addRecentEpisodeId(newArtifact.episode.episode_id);
@@ -944,21 +743,21 @@ export default function App() {
       url.searchParams.delete('experiment_id');
       window.history.replaceState({}, '', url.toString());
     } catch (err: unknown) {
-      if (requestId !== historyRequestId.current) return;
+      if (!pageRequests.current.isCurrent(requestId)) return;
       const message = err instanceof Error ? err.message : '运行失败';
       setErrorMsg(message);
       setLiveRun((current) => current ? { ...current, status: 'interrupted' } : current);
       fetch('/api/v1/episodes/resumable')
-        .then((res) => res.ok ? res.json() : [])
+        .then((res) => readApi(res, resumableIdsSchema))
         .then((ids: string[]) => setResumableEpisodeIds(ids))
-        .catch(() => {});
+        .catch(() => setRecoveryListError(true));
     } finally {
-      if (requestId === historyRequestId.current) finishLoading();
+      if (pageRequests.current.isCurrent(requestId)) finishLoading();
     }
   };
 
   const handleResumeEpisode = async (id: string) => {
-    const requestId = ++historyRequestId.current;
+    const requestId = pageRequests.current.begin();
     setLiveRun(null);
     beginLoading('正在从最近存档恢复 Episode。');
     setErrorMsg(null);
@@ -966,13 +765,9 @@ export default function App() {
       const res = await fetch(`/api/v1/episodes/${encodeURIComponent(id)}/resume`, {
         method: 'POST',
       });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || `恢复失败 (${res.status})`);
-      }
-      const data = await res.json();
-      if (requestId !== historyRequestId.current) return;
-      setArtifact(data.artifact as EpisodeArtifact);
+      const data = await readEpisode(res, id);
+      if (!pageRequests.current.isCurrent(requestId)) return;
+      setArtifact(data.artifact);
       setResumableEpisodeIds((previous) => previous.filter((item) => item !== id));
       addRecentEpisodeId(id);
       const url = new URL(window.location.href);
@@ -981,29 +776,25 @@ export default function App() {
       url.searchParams.delete('experiment_id');
       window.history.pushState({}, '', url.toString());
     } catch (err: unknown) {
-      if (requestId !== historyRequestId.current) return;
+      if (!pageRequests.current.isCurrent(requestId)) return;
       setErrorMsg(err instanceof Error ? err.message : '恢复失败');
     } finally {
-      if (requestId === historyRequestId.current) finishLoading();
+      if (pageRequests.current.isCurrent(requestId)) finishLoading();
     }
   };
 
   // Execute paired experiment
   const handleResumeExperiment = async (id: string) => {
-    const requestId = ++historyRequestId.current;
+    const requestId = pageRequests.current.begin();
     beginLoading('正在恢复原实验，已完成的 Episode 会直接复用。');
     setErrorMsg(null);
     try {
       const res = await fetch(`/api/v1/experiments/${encodeURIComponent(id)}/resume`, {
         method: 'POST',
       });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || `实验恢复失败 (${res.status})`);
-      }
-      const data = await res.json();
-      if (requestId !== historyRequestId.current) return;
-      setExperiment(data.experiment as ExperimentArtifact);
+      const data = await readExperiment(res, id);
+      if (!pageRequests.current.isCurrent(requestId)) return;
+      setExperiment(data.experiment);
       refreshExperimentDashboard();
       setResumableExpIds((previous) => previous.filter((item) => item !== id));
       addRecentExpId(id);
@@ -1013,16 +804,16 @@ export default function App() {
       url.searchParams.delete('episode_id');
       window.history.pushState({}, '', url.toString());
     } catch (err: unknown) {
-      if (requestId !== historyRequestId.current) return;
+      if (!pageRequests.current.isCurrent(requestId)) return;
       setErrorMsg(err instanceof Error ? err.message : '实验恢复失败');
     } finally {
-      if (requestId === historyRequestId.current) finishLoading();
+      if (pageRequests.current.isCurrent(requestId)) finishLoading();
     }
   };
 
   const handleRerunFailedEpisode = async () => {
     if (!artifact || artifact.evaluation.success) return;
-    const requestId = ++historyRequestId.current;
+    const requestId = pageRequests.current.begin();
     const sourceId = artifact.episode.episode_id;
     beginLoading('正在按原始配置单独重跑失败 Episode。');
     setErrorMsg(null);
@@ -1030,10 +821,9 @@ export default function App() {
       const response = await fetch(`/api/v1/episodes/${encodeURIComponent(sourceId)}/rerun`, {
         method: 'POST',
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || `失败 Episode 重跑被拒绝 (${response.status})`);
-      if (requestId !== historyRequestId.current) return;
-      const rerun = data.artifact as EpisodeArtifact;
+      const data = await readEpisode(response);
+      if (!pageRequests.current.isCurrent(requestId)) return;
+      const rerun = data.artifact;
       setArtifact(rerun);
       addRecentEpisodeId(rerun.episode.episode_id);
       const url = new URL(window.location.href);
@@ -1043,10 +833,10 @@ export default function App() {
       url.searchParams.delete('experiment_job_id');
       window.history.pushState({}, '', url.toString());
     } catch (error) {
-      if (requestId !== historyRequestId.current) return;
+      if (!pageRequests.current.isCurrent(requestId)) return;
       setErrorMsg(error instanceof Error ? error.message : '失败 Episode 重跑失败');
     } finally {
-      if (requestId === historyRequestId.current) finishLoading();
+      if (pageRequests.current.isCurrent(requestId)) finishLoading();
     }
   };
 
@@ -1065,6 +855,10 @@ export default function App() {
       return;
     }
     const episodeCount = expTasks.length * seeds.length * expRepeatCount * 2;
+    const requestId = pageRequests.current.begin();
+    setActiveJobId(null);
+    setExperimentJob(null);
+    setExperiment(null);
     beginLoading(`正在串行执行${comparisonAxis === 'runtime_backend' ? 'Runtime' : '恢复策略'}对照，预计 ${episodeCount} 个 Episode。`);
     setErrorMsg(null);
     let started = false;
@@ -1094,12 +888,8 @@ export default function App() {
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.message || `对照实验执行失败 (${res.status})`);
-      }
-
-      const job = await res.json() as ExperimentJobState;
+      const job = await readJob(res);
+      if (!pageRequests.current.isCurrent(requestId)) return;
       started = true;
       setExperiment(null);
       setExperimentJob(job);
@@ -1113,14 +903,15 @@ export default function App() {
       url.searchParams.delete('episode_id');
       window.history.pushState({}, '', url.toString());
     } catch (err: unknown) {
+      if (!pageRequests.current.isCurrent(requestId)) return;
       const message = err instanceof Error ? err.message : '对照实验运行失败';
       setErrorMsg(message);
       fetch('/api/v1/experiments/resumable')
-        .then((res) => res.ok ? res.json() : [])
+        .then((res) => readApi(res, resumableIdsSchema))
         .then((ids: string[]) => setResumableExpIds(ids))
-        .catch(() => {});
+        .catch(() => setRecoveryListError(true));
     } finally {
-      if (!started) finishLoading();
+      if (!started && pageRequests.current.isCurrent(requestId)) finishLoading();
     }
   };
 
@@ -1128,16 +919,29 @@ export default function App() {
     action: 'pause' | 'cancel' | 'resume', targetId = activeJobId,
   ) => {
     if (!targetId) return;
+    const requestId = action === 'resume'
+      ? pageRequests.current.begin() : pageRequests.current.capture();
+    const controlId = jobControlRequests.current.begin();
+    const ownsPage = () => pageRequests.current.isCurrent(requestId)
+      && jobControlRequests.current.isCurrent(controlId);
+    let resumed = false;
+    if (action === 'resume') {
+      setActiveJobId(null);
+      setExperimentJob(null);
+      beginLoading('正在恢复实验 Job。');
+    }
     setErrorMsg(null);
     try {
       const response = await fetch(
         `/api/v1/experiments/jobs/${encodeURIComponent(targetId)}/${action}`,
         { method: 'POST' },
       );
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || `实验控制失败 (${response.status})`);
-      setExperimentJob(data as ExperimentJobState);
+      const data = await readJob(response, targetId);
+      if (!ownsPage()) return;
+      setExperimentJob(data);
       if (action === 'resume') {
+        resumed = true;
+        setExperiment(null);
         setActiveJobId(targetId);
         setJobWatchToken((value) => value + 1);
         setResumableJobIds((ids) => ids.filter((id) => id !== targetId));
@@ -1151,7 +955,10 @@ export default function App() {
         setResumableJobIds((ids) => ids.filter((id) => id !== targetId));
       }
     } catch (error) {
+      if (!ownsPage()) return;
       setErrorMsg(error instanceof Error ? error.message : '实验控制失败');
+    } finally {
+      if (action === 'resume' && !resumed && ownsPage()) finishLoading();
     }
   };
 
@@ -1241,18 +1048,10 @@ export default function App() {
     ? keyFields(initialObservation.payload.observation, ['description', 'question', 'target_order_id', 'document_query'])
     : keyFields(finishedEvent?.payload ?? {}, ['termination_reason', 'detail']);
   const replaySteps = Array.from(new Set(visibleEvents.map((event) => event.step_index)));
-  useLayoutEffect(() => {
-    if (replayView !== 'story' || !activeStep) return;
-    const node = storyStageRef.current;
-    if (!node || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const direction = safeReplayIndex < previousStoryIndex.current ? -1 : 1;
-    previousStoryIndex.current = safeReplayIndex;
-    const animation = node.animate([
-      { opacity: 0.5, transform: `translateY(${direction * 8}px)` },
-      { opacity: 1, transform: 'translateY(0)' },
-    ], { duration: 240, easing: 'cubic-bezier(.2,.8,.2,1)' });
-    return () => animation.cancel();
-  }, [replayView, activeReplayEvent?.event_id, artifact?.episode.episode_id]);
+  useContentMotion(storyStageRef,
+    activeTab === 'single' && replayView === 'story'
+      ? `${artifact?.episode.episode_id ?? ''}:${activeReplayEvent?.event_id ?? ''}` : '',
+    safeReplayIndex);
   useEffect(() => {
     if (!replayPlaying || visibleEvents.length < 2) return;
     const timer = window.setInterval(
@@ -1280,25 +1079,43 @@ export default function App() {
   const isExperimentRunReady = Boolean(meta) && Boolean(expModel) && expTasks.length > 0 &&
     parsedExpSeeds !== null && expRepeatCount >= 1 && expRepeatCount <= 10 && !isLoading;
   const isSingleRunReady = Boolean(meta) && Boolean(selectedModel) && Boolean(selectedSingleTaskMeta) && !isLoading;
+  const singleRunHint = !meta ? '正在读取任务与模型目录，完成后即可配置运行。'
+    : !selectedModel ? '请先选择评测模型。' : !selectedSingleTaskMeta ? '请先选择一个任务。'
+      : isLoading ? loadingMessage : null;
+  const experimentRunHint = !meta ? '正在读取任务与模型目录，完成后即可配置运行。'
+    : !expModel ? '请先选择评测模型。' : expTasks.length === 0 ? '至少选择一个任务后才能运行。'
+      : parsedExpSeeds === null ? '请展开种子与预算设置，输入 1–10 个不重复整数 Seed。'
+        : expRepeatCount < 1 || expRepeatCount > 10 ? '请展开种子与预算设置，将重复次数设为 1–10。'
+          : isLoading ? loadingMessage : null;
 
   return (
     <div>
+      <a className="skip-link" href="#main-content" onClick={(event) => {
+        if (!mainMotionRef.current) return;
+        event.preventDefault();
+        mainMotionRef.current.focus({ preventScroll: true });
+        mainMotionRef.current.scrollIntoView({ block: 'start' });
+      }}>跳至工作区</a>
       {/* Header */}
       <header className="app-header">
         <div className="header-container">
-          <div className="brand">
-            <span className="brand-mark" aria-hidden="true">AL</span>
+          <a className="brand" href="/brand/preview.html" target="_blank" rel="noopener noreferrer"
+            aria-label="AgentLabyrinth · 查看标志动态展示">
+            <span className="brand-mark" aria-hidden="true">
+              <img src="/brand/wayfinder-motion.svg" width="36" height="36" alt="" />
+            </span>
             <div>
               <div className="brand-title">AgentLabyrinth</div>
               <div className="brand-subtitle">可复现 Agent 实验平台</div>
             </div>
-          </div>
+          </a>
 
           <div className="header-actions">
-            <div className="nav-tabs" data-active={activeTab}>
+            <nav className="nav-tabs" data-active={activeTab} aria-label="工作区模式">
               <button
                 id="tab-experiment"
                 className={`nav-tab ${activeTab === 'experiment' ? 'active' : ''}`}
+                aria-pressed={activeTab === 'experiment'}
                 onClick={() => switchTab('experiment')}
                 disabled={isLoading && loadingActivity === 'run' && !activeJobId}
               >
@@ -1307,19 +1124,21 @@ export default function App() {
               <button
                 id="tab-single"
                 className={`nav-tab ${activeTab === 'single' ? 'active' : ''}`}
+                aria-pressed={activeTab === 'single'}
                 onClick={() => switchTab('single')}
                 disabled={isLoading && loadingActivity === 'run' && !activeJobId}
               >
                 单次运行 <span className="nav-english">Single Episode</span>
               </button>
-            </div>
+            </nav>
 
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="main-container">
+      <main id="main-content" tabIndex={-1}
+        className={`main-container ${activeTab === 'single' && artifact ? 'viewing-episode' : ''}`} ref={mainMotionRef}>
         <section className="page-intro" aria-labelledby="page-title">
           <div>
             <div className="page-eyebrow">Agent 评测工作台</div>
@@ -1338,6 +1157,9 @@ export default function App() {
         </section>
 
         {/* Error Alert Box */}
+        {recoveryListError && (
+          <p className="inline-note" role="status">待恢复记录读取失败，列表可能不完整。请刷新页面重新读取。</p>
+        )}
         {errorMsg && (
           <div id="error-alert" className="alert-box alert-error" role="alert">
             <span className="alert-label">错误</span>
@@ -1403,23 +1225,8 @@ export default function App() {
                   </>
                 )}
               </div>
-              <div className="persistence-input-row">
-                <input
-                  id="input-exp-id"
-                  className="form-input persistence-input"
-                  placeholder="输入实验 UUID 快速读取"
-                  value={inputExpId}
-                  onChange={(e) => setInputExpId(e.target.value)}
-                />
-                <button
-                  id="btn-load-exp-id"
-                  className="btn-secondary"
-                  onClick={() => loadExperimentById(inputExpId)}
-                  disabled={isLoading || !inputExpId.trim()}
-                >
-                  重读实验
-                </button>
-              </div>
+              <HistoryReader kind="exp" value={inputExpId} busy={isLoading}
+                onChange={setInputExpId} onRead={loadExperimentById} />
             </div>
             {copyNotice && (
               <div className="copy-feedback" role="status" aria-live="polite">
@@ -1438,7 +1245,7 @@ export default function App() {
               {/* Left Panel: Experiment Config */}
               <section className="card" id="exp-config-panel">
                 <div className="card-title">
-                  <span>下次运行配置</span>
+                  <span>{experiment ? '下次运行配置' : '配置对照实验'}</span>
                   <span className="badge badge-purple">受控变量对照</span>
                 </div>
                 <div className="card-desc">
@@ -1556,9 +1363,9 @@ export default function App() {
                 )}
 
                 {/* Task Checkbox List */}
-                <div className="form-group">
+                <div className="form-group" role="group" aria-labelledby="exp-task-label">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label className="form-label">评测任务 (多选)</label>
+                    <span id="exp-task-label" className="form-label">评测任务 (多选)</span>
                     <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.75rem' }}>
                       <button
                         type="button"
@@ -1591,7 +1398,7 @@ export default function App() {
                         <div>
                           <div className="task-name">{task.name}</div>
                           <div className="task-meta">
-                            {task.description.slice(0, 32)}...
+                            {task.description}
                           </div>
                         </div>
                       </label>
@@ -1599,6 +1406,10 @@ export default function App() {
                   </div>
                 </div>
 
+                <details className="advanced-settings experiment-settings">
+                  <summary><span>种子与预算设置</span><small>Seed {expSeedsText} · 重复 {expRepeatCount} 次 · {expExecutionSeconds} 秒
+                    {expModel !== 'fake' && ` · Token ${expTokenBudget ?? '任务原预算'}${expReferenceBudget ? ` · 原厂参考上限 $${expReferenceBudget}` : ''}`}
+                  </small></summary>
                 <div className="form-group">
                   <label htmlFor="exp-seed-input" className="form-label">随机种子集合 (Seeds)</label>
                   <input
@@ -1657,11 +1468,14 @@ export default function App() {
                   </div>
                 )}
 
+                </details>
+
                 <button
                   id="run-exp-button"
                   className="btn-primary"
                   onClick={handleRunExperiment}
                   disabled={!isExperimentRunReady}
+                  aria-describedby={experimentRunHint ? 'experiment-run-hint' : undefined}
                   title={
                     !meta
                       ? '任务元数据尚未就绪'
@@ -1683,13 +1497,14 @@ export default function App() {
                     </>
                   )}
                 </button>
+                {experimentRunHint && <p id="experiment-run-hint" className="inline-note" role="status">{experimentRunHint}</p>}
                 {isLoading && (
                   <p className="loading-note" role="status" aria-live="polite">
                     {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
                   </p>
                 )}
 
-                {activeJobId && experimentJob && (
+                {activeJobId && experimentJob?.experiment_id === activeJobId && (
                   <div className="resumable-panel" role="status" aria-live="polite">
                     <div className="card-title">实验任务：{experimentJobLabels[experimentJob.status]}</div>
                     <p className="card-desc"><code>{activeJobId}</code> · 控制请求在当前 Episode 结束后生效。</p>
@@ -1797,11 +1612,11 @@ export default function App() {
                             <strong>模型：</strong>{' '}
                             {typeof experiment.config.model === 'string'
                               ? experiment.config.model
-                              : (experiment.config.model as Record<string, unknown>)?.model as string || 'N/A'}
+                              : experiment.config.model?.model || 'N/A'}
                           </div>
                           <div>
                             <strong>场景：</strong>{' '}
-                            {(experiment.config.scenario as string) || 'N/A (真实模型)'}
+                            {experiment.config.scenario || 'N/A (真实模型)'}
                           </div>
                           <div>
                             <strong>种子 (Seeds)：</strong>{' '}
@@ -1834,19 +1649,19 @@ export default function App() {
                           </div>
                           <div>
                             <strong>评测器：</strong>{' '}
-                            {(experiment.config.evaluator as string) || 'order_status_v1'}
+                            {experiment.config.evaluator || 'order_status_v1'}
                           </div>
                           <div>
                             <strong>{armLeftLabel}：</strong>{' '}
-                            {((experiment.config.baseline_agent as Record<string, unknown>)?.runtime_backend as string) || 'handwritten'}
+                            {experiment.config.baseline_agent?.runtime_backend || 'handwritten'}
                             {' / '}
-                            {((experiment.config.baseline_agent as Record<string, unknown>)?.runtime_strategy as string) || 'handwritten'}
+                            {experiment.config.baseline_agent?.runtime_strategy || 'handwritten'}
                           </div>
                           <div>
                             <strong>{armRightLabel}：</strong>{' '}
-                            {((experiment.config.recovery_agent as Record<string, unknown>)?.runtime_backend as string) || 'handwritten'}
+                            {experiment.config.recovery_agent?.runtime_backend || 'handwritten'}
                             {' / '}
-                            {((experiment.config.recovery_agent as Record<string, unknown>)?.runtime_strategy as string) || 'handwritten_recovery'}
+                            {experiment.config.recovery_agent?.runtime_strategy || 'handwritten_recovery'}
                           </div>
                         </div>
                       </div>
@@ -2098,7 +1913,7 @@ export default function App() {
                   ) : (
                     <div className="empty-state">
                       <div className="empty-icon">尚无实验结果</div>
-                      <div>请在左侧选择模型与任务，点击“开始运行对照实验”，或输入历史实验 UUID 进行复核。</div>
+                      <div>选择模型和任务，运行一次对照；也可以读取已保存的实验结果。</div>
                     </div>
                   )}
                 </section>
@@ -2115,7 +1930,8 @@ export default function App() {
               <div className="persistence-cluster">
                 <span className="persistence-label">当前 Episode:</span>
                 <span className="persistence-value">
-                  {artifact ? artifact.episode.episode_id : '尚未运行'}
+                  {artifact ? artifact.episode.episode_id : liveRun?.episodeId
+                    ?? (liveRun ? liveRun.status === 'running' ? '运行中，等待运行 ID' : '连接中断，尚未收到运行 ID' : '尚未运行')}
                 </span>
                 {artifact && (
                   <>
@@ -2147,23 +1963,8 @@ export default function App() {
                   </>
                 )}
               </div>
-              <div className="persistence-input-row">
-                <input
-                  id="input-episode-id"
-                  className="form-input persistence-input"
-                  placeholder="输入 UUID 快速读取"
-                  value={inputEpisodeId}
-                  onChange={(e) => setInputEpisodeId(e.target.value)}
-                />
-                <button
-                  id="btn-load-id"
-                  className="btn-secondary"
-                  onClick={() => loadEpisodeById(inputEpisodeId)}
-                  disabled={isLoading || !inputEpisodeId.trim()}
-                >
-                  重读
-                </button>
-              </div>
+              <HistoryReader kind="episode" value={inputEpisodeId} busy={isLoading}
+                onChange={setInputEpisodeId} onRead={loadEpisodeById} />
             </div>
             {copyNotice && (
               <div className="copy-feedback" role="status" aria-live="polite">
@@ -2171,7 +1972,7 @@ export default function App() {
               </div>
             )}
 
-            <div className={`dashboard-grid single-dashboard ${artifact ? 'has-artifact' : 'configuring'}`}>
+            <div className={`dashboard-grid single-dashboard ${artifact ? 'has-artifact' : liveRun ? 'streaming' : 'configuring'}`}>
               <details className="card config-panel" id="config-panel" open={!artifact}>
                 <summary className="card-title config-panel-summary">
                   <span>{artifact ? '下次运行配置' : '配置单次运行'}</span>
@@ -2182,33 +1983,6 @@ export default function App() {
                   </span>
                 </summary>
                 <div className="config-panel-content">
-                  <div className="single-launch-bar">
-                    <div className="single-launch-summary" aria-live="polite">
-                      <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
-                      <span>
-                        {currentSingleModelMeta?.name || selectedModel || '请选择模型'}
-                        {' · '}{singleRuntimeBackend === 'langgraph' ? 'LangGraph' : 'Reference'}
-                        {' · '}
-                        {singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp
-                          ? 'MCP HTTP'
-                          : selectedSuite === 'tool_lab_core' ? '本地工具' : '本地函数调用提议评测'}
-                      </span>
-                      <small>{selectedModel === 'fake' ? 'Fake 离线模拟' : '将发起真实模型请求'}</small>
-                    </div>
-                    <div className="single-launch-action">
-                      <button id="run-button" className="btn-primary"
-                        onClick={handleRunEpisode} disabled={!isSingleRunReady}
-                        title={!meta ? '元数据尚未就绪' : !selectedSingleTaskMeta ? '请选择一个可见任务后再运行' : undefined}>
-                        {isLoading ? <><div className="spinner" /><span>{loadingActivity === 'history' ? '正在读取历史记录…' : '正在运行 Episode…'}</span></>
-                          : <span>开始运行 Episode</span>}
-                      </button>
-                      {isLoading && (
-                        <p className="loading-note" role="status" aria-live="polite">
-                          {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
-                        </p>
-                      )}
-                    </div>
-                  </div>
                   <div className="single-setup-grid">
                     <section className="task-picker" aria-labelledby="task-picker-title">
                       <div className="task-picker-heading">
@@ -2465,6 +2239,36 @@ export default function App() {
                   </div>
                 </details>
 
+                  <div className="single-launch-bar">
+                    <div className="single-launch-summary" aria-live="polite">
+                      <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
+                      <span>
+                        {currentSingleModelMeta?.name || selectedModel || '请选择模型'}
+                        {' · '}{singleRuntimeBackend === 'langgraph' ? 'LangGraph' : 'Reference'}
+                        {' · '}
+                        {singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp
+                          ? 'MCP HTTP'
+                          : selectedSuite === 'tool_lab_core' ? '本地工具' : '本地函数调用提议评测'}
+                      </span>
+                      <small>{!meta || !selectedModel ? '目录就绪后可开始运行'
+                        : selectedModel === 'fake' ? 'Fake 离线模拟' : '将发起真实模型请求'}</small>
+                    </div>
+                    <div className="single-launch-action">
+                      <button id="run-button" className="btn-primary"
+                        onClick={handleRunEpisode} disabled={!isSingleRunReady}
+                        aria-describedby={singleRunHint ? 'single-run-hint' : undefined}
+                        title={!meta ? '元数据尚未就绪' : !selectedSingleTaskMeta ? '请选择一个可见任务后再运行' : undefined}>
+                        {isLoading ? <><div className="spinner" /><span>{loadingActivity === 'history' ? '正在读取历史记录…' : '正在运行 Episode…'}</span></>
+                          : <span>开始运行 Episode</span>}
+                      </button>
+                      {singleRunHint && !isLoading && <p id="single-run-hint" className="inline-note" role="status">{singleRunHint}</p>}
+                      {isLoading && (
+                        <p id="single-run-hint" className="loading-note" role="status" aria-live="polite">
+                          {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
+                        </p>
+                      )}
+                    </div>
+                  </div>
                     </section>
                   </div>
                 </div>
@@ -2473,112 +2277,29 @@ export default function App() {
               {/* Right Column: Single Episode Result + Trace View */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                 {/* Result Summary */}
-                <section className="card" id="results-panel">
+                <section className="card" id="results-panel" aria-labelledby="episode-results-title">
                   <div className="card-title">
-                    <span>运行结果指标</span>
+                    <h2 id="episode-results-title" className="section-heading">运行结果指标</h2>
                     {artifact && (
+                      <div className="result-heading-actions">
+                      <a className="result-jump" href="#trace-panel" onClick={(event) => {
+                        if (!tracePanelRef.current) return;
+                        event.preventDefault();
+                        tracePanelRef.current.focus({ preventScroll: true });
+                        tracePanelRef.current.scrollIntoView({ block: 'start' });
+                      }}>查看调用过程</a>
                       <span
                         id="eval-badge"
                         className={`badge ${artifact.evaluation.success ? 'badge-green' : 'badge-red'}`}
                       >
                         {artifact.evaluation.success ? '评测通过 (SUCCESS)' : '评测未通过 (FAILED)'}
                       </span>
+                      </div>
                     )}
                   </div>
-                  <div className="card-desc">展示当前 Episode 的终态判定、用量与真实性审计指标。</div>
-
                   {artifact ? (
-                    <div>
-                      <div className="metrics-grid">
-                        <div className="metric-box">
-                          <div className="metric-label">数据集 / 评分协议</div>
-                          <div className="metric-value" style={{ fontSize: '0.95rem' }}>
-                            {String(artifact.task.evaluator_config.suite ?? '').startsWith('bfcl_')
-                              ? `BFCL ${artifact.task.evaluator_config.suite === 'bfcl_java_adapted' ? 'Java ' : ''}改编子集`
-                              : '原生 ToolLab'}
-                          </div>
-                          <div className="metric-sub">
-                            {String(artifact.task.evaluator_config.suite ?? '').startsWith('bfcl_')
-                              ? `AgentLabyrinth-adapted subset · ${String(artifact.task.evaluator_config.source_case_id ?? artifact.task.name)}`
-                              : artifact.task.name}
-                          </div>
-                        </div>
-                        {/* Model Info */}
-                        <div className="metric-box">
-                          <div className="metric-label">执行模型 / 策略</div>
-                          <div className="metric-value" style={{ fontSize: '0.95rem' }} id="metric-model">
-                            {artifact.agent.model.model}
-                          </div>
-                          <div className="metric-sub">
-                            <span className="badge badge-blue">{artifact.agent.runtime_backend ?? 'handwritten'} Runtime</span>{' '}
-                            <span className={`badge ${artifact.agent.runtime_strategy === 'handwritten_recovery' ? 'badge-purple' : 'badge-blue'}`}>
-                              {artifact.agent.runtime_strategy === 'handwritten_recovery' ? '一次参数纠错' : '无参数纠错'}
-                            </span>
-                            <div>Runtime 版本：{artifact.run_config.runtime_version ?? '历史产物未记录'}</div>
-                            <div>工具传输：{artifact.run_config.environment_version === 'tool-lab-mcp-v1' ? 'MCP HTTP' : '本地'}</div>
-                          </div>
-                        </div>
-
-                        {/* Termination */}
-                        <div className="metric-box">
-                          <div className="metric-label">终止状态</div>
-                          <div className="metric-value" id="metric-status" style={{ fontSize: '1.1rem' }}>
-                            {artifact.episode.termination_reason}
-                          </div>
-                          <div className="metric-sub" style={{ color: 'var(--text-muted)' }}>
-                            {explainFailure(artifact.episode.detail || artifact.evaluation.reason)}
-                          </div>
-                        </div>
-
-                        {/* Steps & Tool Calls */}
-                        <div className="metric-box">
-                          <div className="metric-label">步数 / 工具调用</div>
-                          <div className="metric-value" id="metric-steps">
-                            {artifact.episode.step_count} 步 / {artifact.episode.tool_call_count} 次工具
-                          </div>
-                          <div className="metric-sub">模型调用: {artifact.episode.model_call_count} 次</div>
-                        </div>
-
-                        {/* Token Usage */}
-                        <div className="metric-box">
-                          <div className="metric-label">Token 消耗</div>
-                          <div className="metric-value" id="metric-tokens">
-                            {artifact.episode.token_usage.prompt_tokens + artifact.episode.token_usage.completion_tokens}
-                          </div>
-                          <div className="metric-sub">
-                            P: {artifact.episode.token_usage.prompt_tokens} / C: {artifact.episode.token_usage.completion_tokens}
-                          </div>
-                        </div>
-
-                        {/* Latency */}
-                        <div className="metric-box">
-                          <div className="metric-label">耗时</div>
-                          <div className="metric-value" id="metric-duration">
-                            {artifact.episode.duration_ms} ms
-                          </div>
-                          <div className="metric-sub">运行耗时 · 保存的时限：{artifact.agent.budget?.max_execution_time_ms
-                            ? `${artifact.agent.budget.max_execution_time_ms / 1000} 秒` : '历史配置未设置'}</div>
-                        </div>
-
-                        {/* Cost: Strictly "未知" when is_known is False */}
-                        <div className="metric-box">
-                          <div className="metric-label">{artifact.agent.model.provider === 'fake' ? '模拟费用' : '网关估算费用'}</div>
-                          <div className="metric-value" id="metric-cost" style={{ color: artifact.episode.estimated_cost.is_known ? 'var(--text-primary)' : 'var(--warn-text)' }}>
-                            {artifact.episode.estimated_cost.is_known
-                              ? `$${artifact.episode.estimated_cost.amount} USD`
-                              : '未知 (未验证)'}
-                          </div>
-                          <div className="metric-sub">
-                            版本: {artifact.episode.estimated_cost.price_table_version}
-                          </div>
-                        </div>
-                        <div className="metric-box">
-                          <div className="metric-label">原厂标价参考成本</div>
-                          <div className="metric-value">{artifact.reference_cost ? `$${artifact.reference_cost.amount} USD` : '未知'}</div>
-                          <div className="metric-sub">未命中缓存价 · 非实付费用{artifact.reference_cost ? ` · ${artifact.reference_cost.price_table_version}` : ''}</div>
-                        </div>
-                      </div>
-                    </div>
+                    <EpisodeSummary artifact={artifact}
+                      explanation={explainFailure(artifact.episode.detail || artifact.evaluation.reason)} />
                   ) : (
                     <div className="empty-state compact-empty">
                       <div>运行完成后，评测指标与只读 Trace 会显示在这里。</div>
@@ -2587,9 +2308,9 @@ export default function App() {
                 </section>
 
                 {/* Trace Timeline */}
-                <section className="card" id="trace-panel">
+                <section className="card" id="trace-panel" ref={tracePanelRef} tabIndex={-1} aria-labelledby="trace-title">
                   <div className="card-title">
-                    <span>{liveRun ? '实时 Trace' : 'Trace Replay'}</span>
+                    <h2 id="trace-title" className="section-heading">{liveRun ? '实时 Trace' : 'Trace Replay'}</h2>
                     {artifact && (
                       <span className="badge" style={{ fontFamily: 'var(--font-mono)' }}>
                         {artifact.events.length} 个事件
@@ -2630,6 +2351,7 @@ export default function App() {
                           技术 Trace
                         </button>
                       </div>
+                      <div ref={replayMotionRef} className="replay-content" data-view={replayView}>
                       {replayView === 'flow' && <McpFlowReplay key={artifact.episode.episode_id}
                         events={artifact.events} environmentVersion={artifact.run_config.environment_version ?? ''}
                         model={artifact.agent.model.model} finalState={artifact.episode.final_state}
@@ -2909,6 +2631,7 @@ export default function App() {
                           })}
                         </div>
                       )}
+                      </div>
                       </div>
                     </>
                   ) : (

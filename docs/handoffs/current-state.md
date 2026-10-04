@@ -1,10 +1,102 @@
 # Current state
 
-更新：2026-10-03。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+更新：2026-10-04。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
 
-负责人已在本轮复核后明确授权提交并推送最新代码。发布前密钥扫描检查 217 个源码/文档文件，未发现本机秘密值或凭据模式；`.env`、截图和实验临时产物被 Git 忽略。以下“没有自动提交/推送”描述复核阶段，后续提交按负责人授权执行，远端同步状态以 Git 核验为准。
+上一轮复核发布基线 `64dc5ae`。负责人2026-10-04再次明确授权接入Logo/动态效果并提交/推送最新代码；本次发布前已fetch确认基线与origin/main一致，完整门禁与暂存内容密钥扫描通过。本提交包含ADR-021–024的可靠性/Web边界/上下文首切片、连续动效、页面层级和D图标/动画。`.env`、测试截图和临时实验产物继续Git忽略，未知`.unsnooze/`保留本地不提交。发布结果在本机`artifacts/publish/20261004/`记录，整版人工签收与远端CI状态分开确认。
 
-## 2026-10-03 严格架构与 UI 复核（最新）
+发布前最终检查：质量产物`artifacts/quality/2e4f7a71-8ff7-4128-8530-6f4999fa17c6/`；Ruff格式/lint、mypy96文件、pytest298（64.06s、1条既有依赖警告）、四套Fake22格零退化、24上下文案例预期一致、Web严格类型/293模块构建、Node29/29、npm audit零漏洞、Edge16/16（47.0s）与diff检查全部通过。浏览器产物`artifacts/playwright/1f20516f-a3ae-4839-805b-98915dcda1ee/`。未进行新真实模型调用；Github/Chromium CI与整版签收不据此补签。
+
+密钥扫描检查Git索引内268个文本文件、11个二进制文件中的本机凭据值，未发现匹配；仅报告数量/路径、不输出凭据，报告`artifacts/publish/20261004/secret-scan.json`。`.env`、`.unsnooze/`和`artifacts/`不在索引内。GitHub官方Action标签的额外网络核对遇443连接失败，未称远端CI已通过；现有SHA固定工作流保留，推送后的运行结果另行核查。
+
+## 2026-10-04 D / Wayfinder 图标初版与动态展示（最新）
+
+负责人在四候选后明确选择D作为图标初版，并授权优化和动态展示。已保留原方案、用内置image_gen补优化参考稿，手写SVG统一开环/两阶路径/出口与精确色值；导航品牌加载一次短动画后保持静态，点击/Enter在新页打开完整展示，反白静态图标接favicon，导出透明标志/16、32、48、180、512px应用图标及单色版。实际生产符号以SVG为准。
+
+独立动态SVG1620ms有限播放：圆环→路径→出口，完成后静态，不表示实际模型执行；展示页支持按钮/Enter重播，动态reduce与CSS兜底静态。主导航不循环。源文件/呈现链、失败记录、资产与验证见[Wayfinder 01](../design/wayfinder-v1/README.md)，[任务卡](../tasks/logo-wayfinder-20261004.md)。
+
+Web严格类型/293模块构建、Node29/29、Edge16/16（51.0s）通过；JS gzip151.00KB，无新增依赖，既有Zod提示保留。独立Edge图标/动画核验通过，报告/实际录制/桌面窄屏截图`artifacts/brand/wayfinder-v1/`；平台导航实图已查看，浏览器产物`artifacts/playwright/85c0fff9-fc9c-43b4-a0e5-0ab9c2e9c911/`。仅改品牌呈现，本轮未重跑无关后端；上轮完整门禁快照保留。先前构建/单元spawn EPERM与校验器属性匹配失败均记录后重跑通过，不隐瞒首次失败。
+
+本机Fake course_demo预览（执行会话97349）已为发布检查停止；此前展示页/SVG HTTP200且IAB打开重播通过，恢复预览可使用下方已有course_demo命令。未调用真实模型，品牌接入无API/Schema/评分变更，不自签整版；负责人明确授权提交推送，发布检查见本文顶部。初版可继续根据负责人反馈迭代。
+
+## 2026-10-04 前端页面可用性复核
+
+负责人要求继续从前端页面优化角度重新审视。需求V0.6、UI规范1.3不变，按[任务卡](../tasks/frontend-usability-20261004.md)只调整已实现呈现，保护原工作区修改。实际IAB查看配置/结果/对照页面，发现历史输入缺label/Enter、导航缺可访问选中态、单次主操作早于配置、八张结果卡压低流程与对照次要设置常驻。
+
+已修正：HistoryReader复用原GET入口，持续label/Enter且不自动运行；nav当前模式、skip link与main/Trace焦点；启动摘要移至模型/Runtime/更多设置之后；EpisodeSummary仅展示保存Artifact，Fake/真实来源与Token模拟标记准确、四核心指标、失败原因常驻、费用/版本按需展开并直达调用过程；对照details保留Seed/重复/预算摘要，非法Seed说明禁用原因，多选任务group与完整描述。复核补修页内hash引发popstate重读/丢焦点，改用实际ref焦点/滚动、URL不变；运行与断线使用streaming布局，避免无最终Artifact时隐藏已收到Trace，保存ID/未知状态不伪造成功。无API/Schema/评分/运行条件变化，无新增依赖。
+
+新增前三条与原浏览器用例14/14（50.6s）通过；首轮完整门禁浏览器14通过/1条页内跳转焦点失败，已定位修正，未称通过。断线隐藏用例先复现失败，再修布局；专项5/5（18.4s）通过。最终完整共享门禁全部通过：Ruff格式/lint、mypy96文件、pytest298（66.42s、1条既有警告）、四套Fake22格零退化、24上下文案例预期一致、Web严格类型/293模块构建、Node29/29、audit零漏洞、Edge16/16（44.1s）、diff检查。JS gzip150.95KB，无新增依赖；既有Zod构建提示保留。
+
+质量产物`artifacts/quality/d3fd261d-f5c6-46dd-8f02-46b4dada019a/`，门禁浏览器`artifacts/playwright/4706c259-4326-47f0-9ffc-a09b9940c4a3/`。门禁后仅修截图测试的回页首定位（断言scrollY=0），生产代码不变；类型与全16条Edge补验通过，HTML报告45.78s、0失败/跳过/不稳定。最终桌面/窄屏/流程/断线截图与录像在`artifacts/playwright/8182346e-75be-4db6-b4f1-55d45d05a0cf/`，桌面/窄屏实际查看正确，报告`artifacts/playwright-report/index.html`。自有服务退出，8000/5173/8765无监听；`.env`和截图Git忽略已核对。
+
+源码顺序、调用链、状态/失败和后续可用性潜力见[页面优化交接](../learning/frontend-usability-20261004.md)。未读取Key或调用真实模型，未提交/推送/发布，不自签版本。真实200%/Windows系统动效、第二台机器/现场与远端CI待验保留。
+
+## 2026-10-04 桌面连续动效（上一轮快照）
+
+负责人授权先调研桌面动效再直接开发。已核对需求V0.6/UI规范1.3；一手来源为Apple响应性、Fluent/Windows时长及MDN原生动画，取短时、平滑减速、可打断的局部反馈。调研和决策见[研究记录](../research/desktop-motion-20261004.md)，范围见[任务卡](../tasks/ui-motion-20261004.md)，无核心接口/Schema/评分变化或新增依赖，不改变当前产品阶段。
+
+实现CSS时长/曲线Token、两项导航与三项Replay连续滑块、main/Replay/故事步骤共享useContentMotion；新操作从未完成动画的当前呈现值接续，旧动画/媒体监听清理，状态与URL立即按原规则变化。原生details配置/历史/工具详情支持intrinsic-size时平滑伸缩，否则即时展开；按钮按压/桌面任务悬停有小幅反馈。不拦截滚轮/触控，动态reduce取消JS/SVG与非必要位移；animate缺失/抛错静态降级。
+
+新增三条Edge用例，独立11/11（38.8s）通过；视频配置首轮放describe被拒绝，已修正并如实记录。快速切换/中间滑块采样、键盘/焦点、展开草稿保留、动态reduce、动画API故障及原有四视口/只读/错误路径通过。最终共享门禁全部通过：Ruff格式/lint、mypy96文件、pytest298 passed（59.86s、1条既有依赖警告），四套Fake22格零退化、24上下文实验预期一致，Web严格类型/291模块构建、Node29/29、npm audit零漏洞、Edge11/11（33.2s）、diff检查通过。JS gzip149.73KB，既有两条Zod构建提示未屏蔽。
+
+最终质量目录`artifacts/quality/52244c2f-7ee4-453d-bb53-52db7e073d60/`，浏览器`artifacts/playwright/4f370c51-a6b3-46fe-9b4c-05d1b3cdd2d2/`，录像在`results/motion-continuous-desktop--d1abe-motion-preserve-saved-state/video.webm`，HTML报告`artifacts/playwright-report/index.html`。测试服务已退出，8000/5173/8765监听数0；录像与实验产物保持Git忽略。离线预览复现命令见下方动效交接。
+
+源码阅读/调用链/生命周期/失败与本机录像见[动效交接](../learning/ui-motion-20261004.md)。本轮Fake验证，无Key读取或新真实模型调用，未提交/推送/发布；原未提交修改保留。实机手感、真实200%/Windows系统动效、第二台机器/课程现场和GitHub/Chromium CI仍待验，不自签V0.2/V0.3。
+
+## 2026-10-04 已实现能力优化（上一轮快照）
+
+负责人要求在暂时没有人工验收时间的情况下优化现有能力；本轮按Accepted [ADR-024](../adr/ADR-024-existing-capabilities-integrity.md)与[任务卡](../tasks/optimization-20261004.md)实施，不扩大V0.3功能。需求仍是V0.6，UI规范1.3。
+
+已修复：显式上下文策略参与每侧比较指纹，旧缺省/null指纹兼容；完整结果复用核对ID/事件归属、有安全点时核对Agent/Task/RunConfig/双方哈希；坏JSON可从有效安全点重建，错身份/来源保留记录并明确拒绝、不遮住有效安全点；Context CLI保存既有Fake场景来源，失败重跑新ID保持原配置；ContextReport交叉核对24矩阵、文件身份/哈希/单变量/Trace链/用量与诊断，不只信完成标记；消息构造后复查时限，不再发过期调用。减少动效时不生成SVG数据包动画，媒体偏好变化即时生效，保留手动回放。
+
+新增12项测试先全部复现失败，修复后12 passed（6.24s），另补两项Trace/报告同时错计数的检查。首轮完整门禁后端296项及22格回归/24上下文实验通过，前端未使用导入失败，已修正并完整复跑。最终共享门禁全部通过：Ruff格式/lint、mypy96文件，pytest298 passed（61.68s、1条既有依赖警告）；旧四套22格零退化；24上下文实验预期一致；Web严格类型/290模块构建、Node29项、npm audit零漏洞、Edge八条24.1s、diff检查通过。浏览器真实CLI→真实隔离API GET→只读网页→按原策略失败重跑，新ID/原文件不变；390/768/1280/1440px画布、无横向溢出、导航、键盘切帧和动态减少动效通过。
+
+最终质量目录`artifacts/quality/c35f95ef-fe9f-48c3-b045-d4d764504613/`，浏览器`artifacts/playwright/65b1d25e-eabc-4421-9cfc-8ce248a4009d/`，HTML报告`artifacts/playwright-report/index.html`。成功/窗口1失败/窗口2成功的本机ID、预览命令和截图边界见下方学习交接。测试服务已退出，8000/5173/8765监听数0，`.env`与实验产物仍被Git忽略。
+
+源码阅读顺序、调用链、状态变化、失败路径、最短人工核对见[优化交接](../learning/existing-capabilities-optimization-20261004.md)。仅历史无安全点结果维持旧Schema只读兼容，不重算旧配置哈希；完整性核对不是密码学认证。没有读取Key、真实模型调用、Git提交推送或发布，既有未提交改动保留。V0.2/V0.3未整版签收；真实200%/Windows系统开关、第二台机器/现场与远端CI仍待验。
+
+## 2026-10-04 V0.3 上下文管理首切片（上一轮快照）
+
+负责人明确要求开始V0.3，已完整核对需求V0.6，先修订当前阶段/受控例外、建立Accepted [ADR-023](../adr/ADR-023-context-management-first-slice.md) 和 [任务卡](../tasks/V0.3-context-management-first-slice.md)，再编码。V0.2仍未整版签收；下方“先收尾、不提前V0.3”是此前快照，本次例外仅覆盖上下文管理首切片，不自签旧版本。
+
+新增严格ContextPolicy1.0与显式AgentSpec1.2；默认旧配置不产生字段、哈希/基线不改写。Session请求投影保留初始system/user及完整工具轮次，两调度器共享规则；协议错误在请求Provider前停止；消息深拷贝，完整历史继续保存/Checkpoint恢复。MODEL_REQUESTED仅显式配置扩展context诊断，外层Schema/评分不改。既有恢复/Runtime对照固定相同context_policy，拒绝混合变量。Web校验和只读历史标注已同步，API/Web新建入口暂未开放。
+
+CLI `uv --cache-dir .uv-cache run --locked python -m scripts.context_ablation` 固定001/007、Seed1/17、两个Runtime、full/窗口1/窗口2，共24Episode，使用正式Runner/Environment/Evaluator/Artifact；诊断报告单独版本化，不冒充Experiment/真实模型。20成功、4个窗口1文档失败符合预期；订单各策略1608字节/2模型/2工具，文档full与窗口2为2984字节/3模型/3工具，窗口1因Fake遗忘循环5562字节/6模型/5工具，max_tool_calls_reached（沿用MAX_STEPS）停止。字节仅序列化消息，模拟Token仍40/20每调用，不是tokenizer或HTTP包大小。
+
+最终完整共享门禁已通过：Ruff/mypy95文件、pytest284 passed（55.95s、1条既有依赖警告）；旧四套Fake2/8/8/4零退化；新24实验预期匹配；Web严格类型/290模块构建/Node29项、npm audit0漏洞、Edge七条21.2s、diff检查通过。新增专项由真实CLI生成的产物在HTTP读取边界供页面回放，策略/评分失败/终止/技术Trace及零POST通过；不宣称新建上下文API可用。首轮后端两条工具次数断言与专项评分文案断言失败已修正并完整复跑。离线预览现在验证ContextReport后复用原Fake服务；不读取Key或接管占用端口。
+
+最终质量/上下文产物 `artifacts/quality/4b8e0fdd-4732-46ac-87c7-267d425bcec8/`；浏览器与截图 `artifacts/playwright/72e37303-6bbc-45be-8995-ea0f1e9d35a0/results/acceptance-actual-context--f53f6-and-failed-read-only-replay/context-history.png`，HTML报告 `artifacts/playwright-report/index.html`。首次完整门禁目录 `612751c6-c603-4978-8dc7-26c0bf0a46ae` 保留并供学习文档示例回放；独立产物 `artifacts/context-ablation/verified-20261004-a/`。自己的服务已退出，8000/5173/8765监听数0。
+
+源码阅读/调用链/状态/失败/命令及本机可回放ID见[学习交接](../learning/V0.3-context-management.md)。本轮没有真实模型调用、Key读取、提交推送或Tag发布，原V0.2未提交修改保留。下一切片：显式上下文单变量Experiment/API/Web（先ADR，含Job/历史/看板身份兼容），再选定免费模型小样本与更长任务；Planning/Memory/Reflection/LLM Judge/第二框架尚未开始。V0.2最终模型/预算、实机辅助功能/第二台机器/现场签收与远端CI待验不清除。
+
+## 2026-10-03–04 V0.2 收尾：Web 数据边界与自动门禁
+
+按负责人继续依照需求收尾的授权，已完成 Accepted [ADR-022](../adr/ADR-022-web-response-validation.md) 范围。Web 元数据、Episode/Experiment、Job、指标看板、恢复 ID 列表及 SSE 都先校验再更新状态；静态类型从 Zod Mini 消费投影推导。历史/恢复/Job 核对请求 ID，Trace 拒绝重复或错属事件，complete 与已收到的轨迹保持顺序一致。保留历史未知指标、Decimal 字符串、未知费用和未消费来源字段；后端 Pydantic 仍是公开契约来源，没有改变 Domain/评分或公开 Schema。
+
+新增 6 条 Playwright，实际启动隔离 Fake API 和 Web，拒绝复用占用端口，不读取 Key。覆盖新建 Episode→独立评分→Trace→只读回放、坏历史清空旧成功、同 SPA 迟到 Job 受理竞争、错 ID、坏 SSE 和坏恢复列表。统一入口 `uv --cache-dir .uv-cache run --locked python -m scripts.check`；PowerShell 包装及 GitHub Actions 使用同一门禁，官方 Actions 固定 SHA、只读权限、无模型 Secret。
+
+完整本地实跑通过：Ruff format/lint、mypy **91 文件**；pytest **251 passed**（45.00s、1 条既有 Starlette/AnyIO 警告）；Web strict 类型含 E2E、**290 modules** 构建；Node **28/28**；Edge Playwright **6/6**（17.7s）；四套 Fake **2/8/8/4 cells、零退化**；npm audit **0 vulnerabilities** 和 diff 检查通过。JS gzip **149.11 KB**，相比上一轮增加约11.46 KB。构建仍有两条 Zod 源码注释的 Rollup 提示，未屏蔽。
+
+完整门禁证据：`artifacts/quality/b5aa5fad-9cf2-4bcf-85b8-c52bfb931f47/`；浏览器 API 产物 `artifacts/playwright/75d8e52f-4c63-4569-9965-ca35a0770f2f/api/`，报告 `artifacts/playwright-report/index.html`。锁定 Chromium 首次启动在本机报 WinError 14001、未进入页面；实际用已安装 Edge 验证，不修改系统库。**GitHub/Chromium CI 尚未运行**，不能据本地通过宣称远端已绿。测试结束自己的服务已退出，8000/5173/8765 无监听。
+
+10-04 交接前最终配置增加内部 run ID 的 UUID 检查，strict 类型与六条 Edge 用例再次通过（26.4s），产物 `artifacts/playwright/7cd69255-405e-448c-8248-f9188a0b7a57/api/`；YAML 解析与工作流静态检查通过。最新 HTML 报告已更新，最后核对项目端口监听数为0。仅文档更新没有重复真实模型或重跑全部后端。
+
+源码阅读、调用链、状态/失败路径、依赖选择和最小实验见[学习交接](../learning/V0.2-web-boundaries-automation-20261003.md)，执行与验收见[任务卡](../tasks/V0.2-web-boundaries-automation-20261003.md)。本轮没有新的真实模型调用，没有提交/推送、Tag/发布；上一轮未提交的修复仍保留。**V0.2 未整版签收**：最终免费模型和全局 Token 继续延期；当前机器真实200%/Windows系统减少动效、第二台机器与课程现场签收仍待补验。下一步先运行发布后的远端门禁并完成实机/现场核对，再由负责人决定模型/预算收口；不提前增加 Docker、数据库或 V0.3。
+
+## 2026-10-03 再次复核：状态正确性与 Job 持久受理
+
+按负责人再次检查并继续推进的授权，已修复 Token 超限漏记本次费用/未知标记、Job 创建/控制迟到响应夺回导航、暂停 Job 恢复时遗留加载、旧 Job 状态短暂错配新 ID、failed Job 被误列为可恢复。提取前端 RequestGeneration，所有历史/运行入口统一判断页面请求归属；后端执行不会因页面离开而被宣称取消。
+
+新增 Accepted [ADR-021](../adr/ADR-021-durable-experiment-acceptance.md)：202 前先保存既有 Checkpoint 1.0 固定计划，再保存 queued Job，队列仅携 ID，首次执行和恢复统一读取计划。第三个 Job 等待执行槽位时退出进程，现在可重启恢复原矩阵；旧无计划孤儿可直接取消。两文件不是事务，计划写成但 Job 写失败时不返回 202，有效计划可经非 Job 入口恢复。没有数据库或新公开 Schema。
+
+历史详情增加 Episode 内部 ID，以及 Experiment ID/config_hash/Pair 数量校验；两个 GET 移至线程读取。Experiment 的坏 Episode 最终 JSON 仅在有效安全点存在时恢复，完整但来源不同拒绝复用；预算耗尽时坏文件不能假冒可免费复用结果。未新增完整 Episode 配置哈希校验，旧 Experiment 1.0 继续可读。
+
+最终实跑：Ruff format/lint、mypy **89 文件**、pytest **251 passed**（1 条既有依赖弃用警告）；Web **196 modules** 构建、Node **13/13**、`git diff --check` 通过。四套 Fake 固定回归 **2/8/8/4 单元、零退化**，最终报告在 `artifacts/recheck-state-final-regression-20261003/regression-reports/`。子进程实际退出覆盖第三个 queued Job，故障注入覆盖两次持久写入各自失败、错误来源和坏 JSON 恢复。首轮新增测试场景名称错误已修正并全量重跑，不把失败隐去。
+
+浏览器 Fake 新实验 `be9750ea-2503-42cd-9640-e668f8ba7b0d` 为 Baseline 0/1、Recovery 1/1；单次 SSE `05764436-f421-404c-b2c5-b7a0482603d8` SUCCESS、17 事件、2 工具，输入/输出/专注视图正常。8 秒延迟的受理响应没有覆盖期间打开的看板历史；暂停 Job `6a514a12-63aa-4b82-b18c-213d7aa9e3a8` 恢复期间后退没有卡住页面，前进可 GET 回读同 ID 已完成结果。截图 `artifacts/recheck-ui-20261003/fake-flow.png`。实际细节、阅读顺序、调用链、状态与失败路径见[学习交接](../learning/V0.2-state-integrity-recheck-20261003.md)，范围见[任务卡](../tasks/V0.2-recheck-state-integrity-20261003.md)。
+
+可继续 V0.2 的前端 API 边界运行时校验、交互自动化和统一自动门禁收尾。**整版仍未签收**：全局 Token 与最终免费模型清单按负责人决定延期；本轮没有新的真实模型调用，真实 200%/Windows 减少动效、第二台机器与课程现场签收仍待完成。数据库需要单独 ADR 和授权；不推进未签收版本之外的功能。临时延迟仅在忽略的诊断脚本里；本轮 API/Web 已停止，8000/5173/8765 无监听，临时浏览器页已关闭。
+
+## 2026-10-03 严格架构与 UI 复核（上一轮已发布）
 
 本轮按负责人“发现问题自行修改”的授权，对既有 API、模型入口、历史状态、流程动画与离线回归做跨模块复核；修复结果见 [任务卡](../tasks/V0.2-architecture-audit-20261002.md)、[ADR-020](../adr/ADR-020-local-browser-origin-boundary.md) 和[源码阅读/实验交接](../learning/V0.2-architecture-audit-20261003.md)。本地 API 原通配 CORS 可被外部网页利用，现仅接受固定 localhost 浏览器 Origin，并在路由前拒绝不可信 GET/POST；CLI 无 Origin 仍可用，API 必须保持 loopback。`/v1/models` 公共目录并不证明 Key 可调用，真实模型 UI 不再展示无法通过后端白名单的自定义入口，文案与带日期的模型说明改为如实表达。目录查询从事件循环移出并加锁复用，避免一次慢查询卡住其他 API 请求。
 
@@ -14,7 +106,7 @@ Web 的单次/对照切换现在保留 URL 所指结果与空态，浏览器前�
 
 V0.2 **尚未整版签收**：全局 Token 与最终免费模型仍按负责人决定延期，真实 200%/系统级减少动效、第二台机器及课程现场签收待办；本轮没有自动提交或推送。原 `2026-10-01` 段落保留为当日快照，涉及旧模型目录/验收状态时以本段与带日期的新记录为准。
 
-## 2026-10-01 UI 复验与课程案例固化（最新）
+## 2026-10-01 UI 复验与课程案例固化（当日快照）
 
 按负责人接续授权完成固定 Fake 演示生成器 `scripts/course_demo.py`：正式 EpisodeService 跑成功、一次参数纠错对照、40ms 总时限/250ms 人为等待、真实子进程安全点退出后同 ID 恢复，以及独立 localhost MCP HTTP 本地/远程一致性与固定断线。八个 Episode、一个 Experiment；校验终态与独立评分，失败非零退出、旧目录拒绝覆盖，输出仅诊断索引不新增核心契约。`--preview` 一条命令启动隔离 API/Web，拒绝已有占用端口、只停止自己启动的进程；演示 API 只展示 Fake 并在创建 Provider 前拒绝真实请求，不读取 Key。生成时 MCP 服务 finally 停止，回放只 GET。
 

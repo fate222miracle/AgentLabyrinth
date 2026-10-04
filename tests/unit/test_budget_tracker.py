@@ -3,6 +3,8 @@
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from packages.domain.models import Budget, EstimatedCost, TaskSpec, TerminationReason, TokenUsage
 from packages.runtime.handwritten.budget import BudgetTracker
 
@@ -119,3 +121,42 @@ def test_budget_unknown_cost_handling() -> None:
     final_cost = tracker.total_estimated_cost()
     assert final_cost.is_known is False
     assert final_cost.price_table_version == "aihubmix-free-unverified"
+
+
+@pytest.mark.parametrize("limit", ["prompt", "completion", "task"])
+@pytest.mark.parametrize("known", [True, False])
+def test_token_stop_preserves_complete_response_accounting(limit: str, known: bool) -> None:
+    """A token stop retains incurred cost, unknown provenance and checkpoint totals."""
+    task = load_task().model_copy(update={"token_budget": 1 if limit == "task" else 100})
+    tracker = BudgetTracker(
+        Budget(
+            max_prompt_tokens=1 if limit == "prompt" else 100,
+            max_completion_tokens=1 if limit == "completion" else 100,
+            max_estimated_cost=Decimal("0.005"),
+        ),
+        task,
+    )
+    cost = EstimatedCost(
+        amount=Decimal("0.01") if known else Decimal("0"),
+        is_known=known,
+        price_table_version="response-price-v1",
+    )
+    ok, reason, detail = tracker.accrue_usage(
+        TokenUsage(prompt_tokens=2, completion_tokens=2), cost
+    )
+    assert not ok
+    assert reason == TerminationReason.TOKEN_BUDGET_EXCEEDED
+    assert (
+        detail
+        == {
+            "prompt": "agent_max_prompt_tokens_exceeded",
+            "completion": "agent_max_completion_tokens_exceeded",
+            "task": "task_token_budget_exceeded",
+        }[limit]
+    )
+    assert tracker.total_estimated_cost() == cost
+    assert tracker.total_token_usage() == TokenUsage(prompt_tokens=2, completion_tokens=2)
+    restored = BudgetTracker(Budget(), task)
+    restored.restore(tracker.snapshot())
+    assert restored.total_estimated_cost() == cost
+    assert restored.total_token_usage() == tracker.total_token_usage()

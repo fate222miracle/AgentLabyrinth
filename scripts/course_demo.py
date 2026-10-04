@@ -328,6 +328,20 @@ def generate(directory: Path, skip_mcp: bool) -> None:
     print(f'Preview: uv run python -m scripts.course_demo --preview --artifacts-dir "{directory}"')
 
 
+def validate_preview_directory(directory: Path) -> None:
+    """Accept generated course cases or a validated, completed Fake context report."""
+    if (directory / "demo-index.json").is_file():
+        return
+    context_report = directory / "context-ablation.json"
+    if context_report.is_file():
+        from scripts.context_ablation import ContextReport
+
+        report = ContextReport.model_validate_json(context_report.read_text(encoding="utf-8"))
+        report.validate_artifacts(directory)
+        return
+    raise ValueError("Preview needs generated demo-index.json or context-ablation.json")
+
+
 def main() -> None:
     """Generate cases or expose the explicit isolated folder on localhost only."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -342,8 +356,12 @@ def main() -> None:
     args = parser.parse_args()
     directory = (args.artifacts_dir or ROOT / "artifacts/course-demo" / str(uuid4())).resolve()
     if args.serve or args.preview:
-        if args.artifacts_dir is None or not (directory / "demo-index.json").is_file():
-            parser.error("Preview needs an explicit generated directory with demo-index.json")
+        if args.artifacts_dir is None:
+            parser.error("Preview needs an explicit generated directory")
+        try:
+            validate_preview_directory(directory)
+        except ValueError:
+            parser.error("Preview needs a valid generated course or Fake context directory")
         if args.preview:
             preview(directory)
             return

@@ -109,6 +109,13 @@ class BudgetTracker:
         self.prompt_tokens += usage.prompt_tokens
         self.completion_tokens += usage.completion_tokens
 
+        # Record the complete response before choosing a stop reason. A token
+        # limit cannot undo cost already incurred by this model call.
+        if cost.is_known:
+            self.estimated_cost += cost.amount
+        else:
+            self._has_unknown_cost = True
+
         # Check token boundaries first
         if self.prompt_tokens > self.max_prompt_tokens:
             return (
@@ -129,18 +136,12 @@ class BudgetTracker:
                 "task_token_budget_exceeded",
             )
 
-        # Cost tracking and boundary check:
-        # Unknown fees are explicitly not treated as verified $0
-        if cost.is_known:
-            self.estimated_cost += cost.amount
-            if self.estimated_cost > self.max_estimated_cost:
-                return (
-                    False,
-                    TerminationReason.COST_BUDGET_EXCEEDED,
-                    "agent_max_estimated_cost_exceeded",
-                )
-        else:
-            self._has_unknown_cost = True
+        if self.estimated_cost > self.max_estimated_cost:
+            return (
+                False,
+                TerminationReason.COST_BUDGET_EXCEEDED,
+                "agent_max_estimated_cost_exceeded",
+            )
 
         return True, None, None
 

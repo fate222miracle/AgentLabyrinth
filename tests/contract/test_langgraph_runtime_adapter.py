@@ -156,6 +156,8 @@ def test_failure_boundaries(case: str, reason: str, calls: int, tools: int, tmp_
         assert artifact.episode.termination_reason == TerminationReason(reason)
         assert artifact.episode.model_call_count == calls
         assert artifact.episode.tool_call_count == tools
+        if case == "token_budget":
+            assert artifact.episode.estimated_cost.amount == Decimal("0.001")
         assert "private-secret" not in artifact.model_dump_json()
         write_artifact(artifact, tmp_path / f"{backend}.json")
         assert read_artifact(tmp_path / f"{backend}.json") == artifact

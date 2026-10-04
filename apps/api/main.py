@@ -21,7 +21,11 @@ from apps.api.schemas import (
     MetaResponse,
 )
 from apps.api.service import EpisodeService, ExperimentJobStopped
-from packages.application.experiment import ReferenceCostBudgetExceeded, experiment_checkpoint_path
+from packages.application.experiment import (
+    ReferenceCostBudgetExceeded,
+    experiment_checkpoint_path,
+    read_experiment_checkpoint,
+)
 from packages.domain.models import TraceEvent
 
 app = FastAPI(
@@ -68,7 +72,6 @@ _experiment_slots = asyncio.Semaphore(2)
 
 
 async def _run_experiment_job(
-    req: CreateExperimentRequest | None,
     service: EpisodeService,
     experiment_id: UUID,
 ) -> None:
@@ -81,10 +84,7 @@ async def _run_experiment_job(
                 status="running",
                 requested_action=current.requested_action if current else None,
             )
-            if req is None:
-                await service.resume_experiment_job(experiment_id)
-            else:
-                await service.execute_experiment(req, job_id=experiment_id)
+            await service.resume_experiment_job(experiment_id)
             service.update_experiment_job(experiment_id, status="completed")
     except ExperimentJobStopped as exc:
         service.update_experiment_job(
@@ -100,10 +100,8 @@ async def _run_experiment_job(
         )
 
 
-def _schedule_experiment_job(
-    req: CreateExperimentRequest | None, service: EpisodeService, experiment_id: UUID
-) -> None:
-    task = asyncio.create_task(_run_experiment_job(req, service, experiment_id))
+def _schedule_experiment_job(service: EpisodeService, experiment_id: UUID) -> None:
+    task = asyncio.create_task(_run_experiment_job(service, experiment_id))
     _experiment_jobs[experiment_id] = task
     task.add_done_callback(lambda _: _experiment_jobs.pop(experiment_id, None))
 
@@ -307,7 +305,7 @@ async def get_episode(
     service: Annotated[EpisodeService, Depends(get_episode_service)],
 ) -> EpisodeResponse:
     """Read a saved artifact by its strictly validated UUID."""
-    artifact = service.get_episode(episode_id)
+    artifact = await asyncio.to_thread(service.get_episode, episode_id)
     if artifact is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -382,10 +380,11 @@ async def start_experiment_job(
 ) -> ExperimentJobState:
     """Queue a bounded background Experiment with a stable, client-known ID."""
     try:
-        state = service.reserve_experiment_job(req.request_id)
+        plan = await service.prepare_experiment(req, experiment_id=req.request_id)
+        state = service.reserve_experiment_job(req.request_id, plan)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    _schedule_experiment_job(req, service, req.request_id)
+    _schedule_experiment_job(service, req.request_id)
     return state
 
 
@@ -424,15 +423,27 @@ async def control_experiment_job(
     """Pause, cancel, or resume a job without changing completed Episode artifacts."""
     if action == "resume":
         state = service.get_experiment_job(experiment_id)
-        if state is None or state.status not in {"paused", "interrupted", "running"}:
+        if state is None or state.status not in {"paused", "interrupted", "queued", "running"}:
             raise HTTPException(status_code=409, detail="Job is not resumable")
         if experiment_id in _experiment_jobs:
             raise HTTPException(status_code=409, detail="Job is already active")
         if not experiment_checkpoint_path(service.artifacts_dir, experiment_id).is_file():
             raise HTTPException(status_code=409, detail="Experiment plan is unavailable")
+        try:
+            plan = read_experiment_checkpoint(
+                experiment_checkpoint_path(service.artifacts_dir, experiment_id)
+            )
+            if plan.experiment_id != experiment_id:
+                raise ValueError("Foreign experiment plan")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail="Experiment plan is invalid") from exc
         queued = service.update_experiment_job(experiment_id, status="queued")
-        _schedule_experiment_job(None, service, experiment_id)
+        _schedule_experiment_job(service, experiment_id)
         return queued
+    if action == "cancel" and experiment_id not in _experiment_jobs:
+        state = service.get_experiment_job(experiment_id)
+        if state is not None and state.status in {"queued", "running", "paused", "interrupted"}:
+            return service.update_experiment_job(experiment_id, status="cancelled")
     try:
         return service.request_experiment_action(experiment_id, action)
     except ValueError as exc:
@@ -495,7 +506,7 @@ async def get_experiment(
     service: Annotated[EpisodeService, Depends(get_episode_service)],
 ) -> ExperimentResponse:
     """Read a saved ExperimentArtifact by its strictly validated UUID."""
-    artifact = service.get_experiment(experiment_id)
+    artifact = await asyncio.to_thread(service.get_experiment, experiment_id)
     if artifact is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

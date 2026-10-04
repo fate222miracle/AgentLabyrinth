@@ -1,6 +1,7 @@
 """Durable Experiment jobs stop only between Episodes and preserve completed arms."""
 
 import asyncio
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -11,9 +12,136 @@ import httpx
 import pytest
 
 from apps.api.main import app, get_episode_service
+from apps.api.schemas import CreateExperimentRequest
 from apps.api.service import EpisodeService
+from packages.application.experiment import read_experiment_checkpoint
 from packages.domain.models import Message, ModelConfig, ModelResponse, ToolSchema
 from packages.providers.fake import FakeModelProvider
+
+
+@pytest.mark.parametrize("failure", ["plan", "job"])
+def test_plan_write_failure_never_accepts_or_schedules_a_job(tmp_path: Path, failure: str) -> None:
+    """A failed durable write cannot become an accepted request or invoke a provider."""
+    service = EpisodeService(artifacts_dir=tmp_path)
+    request = CreateExperimentRequest(
+        provider="fake", model="fake-model", task_ids=["order-status-001"]
+    )
+
+    async def exercise() -> None:
+        app.dependency_overrides[get_episode_service] = lambda: service
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+                base_url="http://test",
+            ) as client:
+                response = await client.post(
+                    "/api/v1/experiments/jobs", json=request.model_dump(mode="json")
+                )
+                assert response.status_code == 500
+        finally:
+            app.dependency_overrides.clear()
+
+    failing_write = (
+        patch("apps.api.service.write_experiment_checkpoint", side_effect=OSError("private-path"))
+        if failure == "plan"
+        else patch.object(service, "_save_job", side_effect=OSError("private-path"))
+    )
+    with (
+        failing_write,
+        patch("apps.api.main._schedule_experiment_job") as schedule,
+        patch.object(FakeModelProvider, "generate") as model,
+    ):
+        asyncio.run(exercise())
+        schedule.assert_not_called()
+        model.assert_not_called()
+    assert service.get_experiment_job(request.request_id) is None
+    restarted = EpisodeService(artifacts_dir=tmp_path)
+    if failure == "job":
+        assert request.request_id in restarted.resumable_experiment_ids()
+    else:
+        assert restarted.resumable_experiment_ids() == []
+
+
+def test_queued_job_survives_process_exit_before_first_model_call(tmp_path: Path) -> None:
+    """The third accepted Job keeps its original matrix even without an execution slot."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).with_name("_checkpoint_worker.py")),
+            "queued",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    ids = json.loads((tmp_path / "queued_ids.json").read_text(encoding="utf-8"))
+    job_id = ids[2]
+    plan_path = tmp_path / "experiments/checkpoints" / f"{job_id}.json"
+    plan = read_experiment_checkpoint(plan_path)
+    assert plan.seeds == [3] and plan.repeat_count == 2
+    assert not list((tmp_path / "checkpoints").glob(f"{uuid5(UUID(job_id), '0:baseline')}.json"))
+    service = EpisodeService(artifacts_dir=tmp_path)
+
+    async def exercise() -> None:
+        app.dependency_overrides[get_episode_service] = lambda: service
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                assert (await client.get(f"/api/v1/experiments/jobs/{job_id}")).json()[
+                    "status"
+                ] == "interrupted"
+                assert job_id in (await client.get("/api/v1/experiments/jobs/resumable")).json()
+                assert (
+                    await client.post(f"/api/v1/experiments/jobs/{job_id}/resume")
+                ).status_code == 200
+                for _ in range(200):
+                    state = (await client.get(f"/api/v1/experiments/jobs/{job_id}")).json()
+                    if state["status"] == "completed":
+                        break
+                    await asyncio.sleep(0.01)
+                assert state["status"] == "completed"
+                artifact = (await client.get(f"/api/v1/experiments/{job_id}")).json()["experiment"]
+                assert artifact["config"]["seeds"] == [3]
+                assert len(artifact["pairs"]) == 2 and len(set(artifact["episode_ids"])) == 4
+                assert (
+                    await client.post(f"/api/v1/experiments/jobs/{job_id}/resume")
+                ).status_code == 409
+        finally:
+            app.dependency_overrides.clear()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_orphan_job_can_be_cancelled_without_a_runner(tmp_path: Path, status: str) -> None:
+    """Older orphan Jobs without a plan can be stopped explicitly after restart."""
+    service = EpisodeService(artifacts_dir=tmp_path)
+    job_id = uuid4()
+    service.reserve_experiment_job(job_id)
+    service.update_experiment_job(job_id, status=status)
+
+    async def exercise() -> None:
+        app.dependency_overrides[get_episode_service] = lambda: service
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post(f"/api/v1/experiments/jobs/{job_id}/cancel")
+                assert response.status_code == 200 and response.json()["status"] == "cancelled"
+                assert (await client.get(f"/api/v1/experiments/jobs/{job_id}")).json()[
+                    "status"
+                ] == "cancelled"
+                assert (
+                    await client.post(f"/api/v1/experiments/jobs/{job_id}/resume")
+                ).status_code == 409
+        finally:
+            app.dependency_overrides.clear()
+
+    asyncio.run(exercise())
 
 
 def test_job_recovers_after_process_exit(tmp_path: Path) -> None:

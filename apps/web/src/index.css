@@ -46,6 +46,7 @@
   --motion-fast: 120ms;
   --motion-default: 180ms;
   --motion-slow: 240ms;
+  --motion-ease: cubic-bezier(.16, 1, .3, 1);
 }
 
 * {
@@ -105,6 +106,9 @@ html { scroll-padding-top: 9rem; }
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  min-height: 44px;
+  color: inherit;
+  text-decoration: none;
 }
 
 .brand-mark {
@@ -118,6 +122,12 @@ html { scroll-padding-top: 9rem; }
   font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.04em;
+}
+
+.brand-mark img {
+  display: block;
+  width: 2rem;
+  height: 2rem;
 }
 
 .brand-title {
@@ -965,7 +975,7 @@ pre {
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   box-shadow: 0 1px 4px rgb(30 25 20 / 8%);
-  transition: transform var(--motion-slow) cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform var(--motion-slow) var(--motion-ease);
 }
 
 .nav-tabs[data-active="single"]::before,
@@ -1026,6 +1036,39 @@ button:focus-visible,
   outline-offset: 2px;
 }
 
+/* Local tactile feedback; scrolling and application state remain browser-owned. */
+.btn-primary,
+.btn-secondary,
+.task-option {
+  transition: transform var(--motion-fast) var(--motion-ease),
+    background var(--motion-default) var(--motion-ease),
+    border-color var(--motion-default) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease);
+}
+.btn-primary:not(:disabled):active,
+.btn-secondary:not(:disabled):active { transform: scale(.98); }
+@media (hover: hover) and (pointer: fine) {
+  .task-option:not(:disabled):hover { transform: translateY(-2px); }
+}
+
+@supports (interpolate-size: allow-keywords) {
+  .config-panel, .history-disclosure, .flow-detail, .model-note-disclosure {
+    interpolate-size: allow-keywords;
+  }
+  :is(.config-panel, .history-disclosure, .flow-detail, .model-note-disclosure)::details-content {
+    height: 0;
+    opacity: 0;
+    overflow: clip;
+    transition: height var(--motion-slow) var(--motion-ease),
+      opacity var(--motion-default) var(--motion-ease),
+      content-visibility var(--motion-slow) allow-discrete;
+  }
+  :is(.config-panel, .history-disclosure, .flow-detail, .model-note-disclosure)[open]::details-content {
+    height: auto;
+    opacity: 1;
+  }
+}
+
 .inline-header,
 .toolbar-row,
 .summary-header,
@@ -1066,8 +1109,12 @@ button:focus-visible,
 }
 
 .task-meta {
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
 .history-panel {
@@ -1238,6 +1285,8 @@ button:focus-visible,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .btn-primary:active, .btn-secondary:active,
+  .task-option:hover, .step-card:hover, .step-card.active { transform: none !important; }
   *,
   *::before,
   *::after {
@@ -1493,7 +1542,9 @@ button:focus-visible,
   border-radius: var(--radius-md);
   background: var(--color-surface);
   cursor: pointer;
-  transition: border-color var(--motion-default), background var(--motion-default);
+  transition: transform var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-default) var(--motion-ease),
+    background var(--motion-default) var(--motion-ease);
 }
 
 .suite-choice-options label.selected {
@@ -1564,7 +1615,9 @@ button:focus-visible,
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
-  transition: border-color var(--motion-default), background var(--motion-default);
+  transition: transform var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-default) var(--motion-ease),
+    background var(--motion-default) var(--motion-ease);
 }
 
 .task-option:hover:not(:disabled) {
@@ -1670,10 +1723,10 @@ button:focus-visible,
 
 .single-launch-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(13rem, 19rem);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 1.25rem;
-  margin-bottom: 1.25rem;
+  margin-top: 1.25rem;
   padding: 0.85rem 1rem;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -1999,3 +2052,56 @@ button:focus-visible,
 .history-disclosure > summary { padding: 1rem 1.25rem; cursor: pointer; font-weight: 600; }
 .history-disclosure > summary span { margin-left: 0.8rem; font-size: 0.8rem; color: var(--text-secondary); font-weight: 400; }
 .history-disclosure > summary:focus-visible { outline: 2px solid var(--brand-action); outline-offset: 2px; }
+
+/* Keep the next action and saved evidence easy to find in either workspace. */
+.skip-link {
+  position: fixed;
+  top: 0.5rem;
+  left: 0.75rem;
+  z-index: 100;
+  padding: 0.6rem 1rem;
+  border: 2px solid var(--focus-ring);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--brand-action);
+  transform: translateY(-200%);
+}
+.skip-link:focus { transform: none; }
+#main-content:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.history-reader { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 0.5rem; min-width: 0; }
+.history-reader > label { color: var(--text-secondary); font-size: 0.875rem; }
+.history-reader .persistence-input { min-height: 44px; font-size: 0.875rem !important; }
+.history-reader .btn-secondary { min-height: 44px; }
+.viewing-episode .page-intro { padding-top: 0; }
+.viewing-episode .page-intro h1 { font-size: clamp(1.5rem, 2vw, 2rem); }
+.section-heading { font: inherit; }
+.result-heading-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
+.result-jump { font-size: 0.875rem; color: var(--brand-action); text-underline-offset: 3px; }
+.result-jump:focus-visible, #trace-panel:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.episode-provenance, .episode-runtime { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; }
+.episode-provenance { margin: 0.5rem 0; font-size: 0.875rem; }
+.episode-provenance strong { overflow-wrap: anywhere; }
+.episode-runtime { margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.875rem; }
+.episode-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 1rem; }
+.episode-metrics .metric-box { min-width: 0; }
+.episode-metrics .metric-label, .episode-metrics .metric-sub { font-size: 0.875rem; letter-spacing: normal; }
+.episode-metrics .metric-value { font-size: 1.125rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.episode-details { border-top: 1px solid var(--border-color); }
+.episode-details > summary { cursor: pointer; padding: 0.6rem 0; font-size: 0.875rem; font-weight: 600; }
+.episode-details > summary span { margin-left: 0.5rem; font-weight: 400; color: var(--text-secondary); }
+.episode-details > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.episode-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin: 0.5rem 0 0; font-size: 0.875rem; }
+.episode-detail-grid dt { color: var(--text-secondary); }
+.episode-detail-grid dd { margin: 0.25rem 0 0; overflow-wrap: anywhere; }
+.experiment-settings { margin-bottom: 1rem; }
+.experiment-settings > summary { flex-wrap: wrap; }
+.experiment-settings > summary small { overflow-wrap: anywhere; }
+@media (max-width: 900px) {
+  .episode-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .history-reader { width: 100%; grid-template-columns: minmax(0, 1fr); }
+  .history-reader .persistence-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; flex-direction: initial; }
+  .episode-detail-grid { grid-template-columns: minmax(0, 1fr); }
+  .episode-details > summary span { display: block; margin: 0.25rem 0 0; }
+}

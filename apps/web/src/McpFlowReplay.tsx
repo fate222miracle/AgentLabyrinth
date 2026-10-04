@@ -75,6 +75,14 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [duration, setDuration] = useState(1400);
+  const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  useEffect(() => {
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setReducedMotion(query.matches);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
   const section = useRef<HTMLElement>(null);
   const canvas = useRef<HTMLDivElement>(null);
   const focusButton = useRef<HTMLButtonElement>(null);
@@ -146,7 +154,7 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
   const activeLink = frame?.phase === 'choose' ? 'choose' : frame?.phase === 'execute' ? `invoke:${frame.tool}`
     : frame?.phase === 'return' ? `return:${frame.tool}` : '';
   const edge = (id: string, source: string, target: string): VisualEdge => ({ id, source, target, type: 'packet',
-    data: { active: activeLink === id, playing, duration, failed: Boolean(frame?.failed) } });
+    data: { active: activeLink === id, playing: playing && !reducedMotion, duration, failed: Boolean(frame?.failed) } });
   const edges = [edge('choose', 'model', 'gateway'), ...displayTools.flatMap((tool) => [
     edge(`invoke:${tool}`, 'gateway', `tool:${tool}`), edge(`return:${tool}`, `tool:${tool}`, 'model'),
   ])];

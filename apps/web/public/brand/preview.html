@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AgentLabyrinth · Wayfinder</title>
+  <link rel="icon" type="image/svg+xml" href="wayfinder-icon.svg" />
+  <style>
+    :root { color-scheme: light; font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; color: #292724; background: #F7F5F0; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1000px; margin: 0 auto; padding: 48px 24px; }
+    .eyebrow { color: #A6492D; font-size: 13px; letter-spacing: .16em; }
+    .stage { min-height: 340px; display: flex; align-items: center; justify-content: center; gap: 30px; }
+    #motion { width: 176px; height: 176px; }
+    h1 { font-size: clamp(28px, 5vw, 52px); letter-spacing: -.04em; margin: 0; }
+    .subtitle { color: #625F59; margin: 12px 0 0; font-size: 16px; }
+    .controls { display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap; }
+    button { border: 1px solid #A6492D; border-radius: 10px; background: #A6492D; color: #FFFDF9; min-height: 44px; padding: 10px 24px; font: inherit; cursor: pointer; }
+    button:focus-visible, a:focus-visible { outline: 3px solid #A6492D; outline-offset: 4px; }
+    #preference { font-size: 14px; color: #625F59; }
+    .samples { display: flex; gap: 32px; justify-content: center; flex-wrap: wrap; border-top: 1px solid #E4E0D8; margin-top: 42px; padding-top: 32px; }
+    figure { margin: 0; display: grid; justify-items: center; align-content: end; gap: 12px; min-width: 58px; }
+    figcaption { font-size: 13px; color: #625F59; }
+    footer { margin-top: 36px; text-align: center; font-size: 14px; color: #625F59; }
+    a { color: #A6492D; text-underline-offset: 3px; }
+    @media (max-width: 620px) { main { padding-top: 28px; } .stage { flex-direction: column; gap: 18px; text-align: center; padding: 32px 0; } #motion { width: 144px; height: 144px; } .samples { gap: 20px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">D / WAYFINDER 01</div>
+    <div class="stage">
+      <img id="motion" src="wayfinder-motion.svg" alt="开环、迷宫路径与向右出口构成的标志" width="176" height="176" />
+      <div><h1>AgentLabyrinth</h1><p class="subtitle">可复现 Agent 实验平台</p></div>
+    </div>
+    <div class="controls"><button id="replay" type="button">重播动画</button><span id="preference">圆环 · 路径 · 出口</span></div>
+    <div class="samples">
+      <figure><img src="wayfinder-icon.svg" width="16" height="16" alt="16像素应用图标" /><figcaption>16 px</figcaption></figure>
+      <figure><img src="wayfinder-icon.svg" width="32" height="32" alt="32像素应用图标" /><figcaption>32 px</figcaption></figure>
+      <figure><img src="wayfinder-icon.svg" width="48" height="48" alt="48像素应用图标" /><figcaption>48 px</figcaption></figure>
+      <figure><img src="wayfinder-icon.svg" width="80" height="80" alt="80像素应用图标" /><figcaption>应用图标</figcaption></figure>
+      <figure><img src="wayfinder-mark.svg" width="80" height="80" alt="透明背景标志" /><figcaption>透明标志</figcaption></figure>
+    </div>
+    <footer>品牌动态展示 · <a href="../../?mode=single">返回实验平台</a></footer>
+  </main>
+  <script>
+    const mark = document.getElementById('motion');
+    const preference = document.getElementById('preference');
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+    let playback = 0;
+    function syncPreference() {
+      mark.src = reduce.matches ? 'wayfinder-mark.svg' : 'wayfinder-motion.svg?play=' + (++playback);
+      preference.textContent = reduce.matches ? '已遵循减少动效设置，展示静态标志' : '圆环 · 路径 · 出口';
+    }
+    document.getElementById('replay').addEventListener('click', syncPreference);
+    reduce.addEventListener('change', syncPreference);
+    syncPreference();
+  </script>
+</body>
+</html>

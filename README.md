@@ -1,6 +1,16 @@
 # AgentLabyrinth
 
+品牌图标采用 D / Wayfinder 初版：导航短动画加载后保持完整标志，点击品牌可打开独立动态展示；浏览器favicon为静态图标，尊重减少动效。前端启动后访问 `/brand/preview.html`，SVG/透明PNG与实际验证见[设计交接](docs/design/wayfinder-v1/README.md)。
+
 面向 AI Agent 的可复现实验平台。唯一权威需求：`docs/product/requirements.md` **V0.6**。
+
+2026-10-04 前端可用性复核：历史表单支持标签/Enter，导航可识别当前模式并跳至工作区；单次先配置后运行，结果突出来源与核心指标，详情按需展开并可直达调用过程；对照种子/预算集中设置。实际检查、源码顺序与复现见 [页面优化交接](docs/learning/frontend-usability-20261004.md)，不改变API或评分。
+
+2026-10-04 桌面动效优化：导航/Replay连续滑块、可打断内容过渡、原生面板伸缩与按压反馈；保留浏览器原生滚动，动态减少动效及动画故障降级。调研、源码/调用链与实际验证见 [动效交接](docs/learning/ui-motion-20261004.md)，无新增依赖或接口变化。
+
+2026-10-04 已实现能力优化按 [ADR-024](docs/adr/ADR-024-existing-capabilities-integrity.md) 推进：不同上下文分组比较，恢复前核对结果来源，CLI产物可按原策略重跑，预览核验完整矩阵与Trace，超时停止新请求，动画响应减少动效偏好。阅读顺序、复现实验和稍后人工核对见 [优化交接](docs/learning/existing-capabilities-optimization-20261004.md)；自动验证与负责人签收分别记录。
+
+2026-10-04 按 [ADR-023](docs/adr/ADR-023-context-management-first-slice.md) 受控启动 **V0.3 上下文管理首切片**，V0.2尚未整版签收。已实现完整历史/最近完整工具轮次的请求投影、两种Runtime和安全点恢复、固定Fake消融及只读历史策略显示；尚无新建上下文对照的Web入口、摘要/Memory或第二外部框架。运行 `uv --cache-dir .uv-cache run --locked python -m scripts.context_ablation` 生成24条实际轨迹与报告；20成功、4个窗口1文档失败符合工程预期，不能代表真实模型得分。源码顺序/调用链/失败和实际结果见 [阅读指南](docs/learning/V0.3-context-management.md)。
 
 2026-10-01 收尾：Episode/对照 API 支持可选 `max_execution_time_ms`，Web 新运行默认 300 秒；恢复累计安全点活动耗时，已开始的工具先完成再停止。历史看板默认折叠，动画支持“专注查看”。源码/实验与限制见 [学习交接](docs/learning/V0.2-product-closeout-20261001.md)。全局 Token 预算、最终免费模型选择与整版现场签收仍待完成，数据库为后续 ADR 方向。
 
@@ -31,13 +41,34 @@ uv --cache-dir .uv-cache run --locked python -m scripts.course_demo --preview --
 
 ## 启动与检查
 
-需要 Python 3.12 和 uv。在项目根目录运行一键检查脚本：
+需要 Python 3.12、uv 和 Node.js 22.21+。首次安装锁定的前端依赖及浏览器：
+
+```powershell
+npm.cmd --prefix apps/web ci
+cd apps/web
+npx.cmd playwright install --no-shell chromium
+cd ../..
+```
+
+在项目根目录运行完整门禁（先停止自己启动的 8000/5173 服务，测试不复用已运行的 API/Web）：
 
 ```powershell
 ./scripts/check.ps1
 ```
 
-脚本锁定同步依赖，依次运行 Ruff 格式、Lint、mypy、pytest 和四套固定 Fake 跨版本回归（单题、四类任务、Runtime 对照、超时预期失败），失败立即停止。回归 JSON 报告写入 `artifacts/regression/regression-reports/`。2026-10-01 最终后端225测试、mypy/Ruff86文件、Web11项检查与生产构建通过；四套回归22单元无退化来自同日上一收尾验证。需要先安装 `uv` 并让终端能找到它。
+PowerShell 入口锁定同步 Python 依赖后调用跨平台 `scripts.check`。它校验两类固定 BFCL 来源，运行 Ruff 格式/Lint、mypy、pytest、四套 Fake 回归、Web strict 类型/构建/单测、依赖漏洞扫描与 Playwright，失败立即停止。产物每次写入独立 `artifacts/quality/<UUID>/`，浏览器报告为 `artifacts/playwright-report/`。首次 BFCL 下载和 npm 漏洞扫描需要网络，模型全部 Fake，不读取 Key；不自动提交或发布。GitHub Actions 调用同一入口，官方 Actions 固定提交版本、只读权限，不配置模型 Secret。
+
+2026-10-03 本地完整门禁实跑：后端 **251 passed**，Ruff/mypy **91 文件**，前端 **28/28**，浏览器 **6/6**，四套回归 **22 单元、零退化**，npm audit **0 vulnerabilities**。本机锁定 Chromium 启动报 WinError 14001，实际浏览器验证采用已安装的 Edge；CI 默认 Chromium 尚未在 GitHub 运行。Zod Mini 校验已覆盖所有页面接口与 SSE，见 [ADR-022](docs/adr/ADR-022-web-response-validation.md) 和[学习交接](docs/learning/V0.2-web-boundaries-automation-20261003.md)。V0.2 尚未整版签收。
+
+若本机 Chromium 无法启动且已有 Edge，可明确选择 Edge 后运行；如果系统策略阻止 `.ps1`，直接使用 Python 入口，不修改系统策略：
+
+```powershell
+$env:AGENTLABYRINTH_E2E_CHANNEL = 'msedge'
+uv --cache-dir .uv-cache sync --locked
+uv --cache-dir .uv-cache run --locked python -m scripts.check
+```
+
+`AGENTLABYRINTH_E2E_CHANNEL` 仅允许 chromium、chrome、msedge；只影响测试浏览器。单独验证前端可在 `apps/web` 执行 `npm.cmd run typecheck`、`npm.cmd test`、`npm.cmd run test:e2e`。
 
 也可单独执行固定回归；Manifest 锁定模型、任务、Seed 和基线产物，成功变失败会返回非零退出码。真实模型回归需另备真实基线并显式使用 `--allow-live`：
 

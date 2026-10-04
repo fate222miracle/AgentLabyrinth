@@ -185,34 +185,20 @@ def compute_config_hash(data: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-async def run_experiment(
+def create_experiment_plan(
     baseline_agent: AgentSpec,
     recovery_agent: AgentSpec,
     tasks: list[TaskSpec],
-    provider_factory: Callable[[], ModelProvider],
-    *,
-    seed: int = 1,
-    seeds: list[int] | None = None,
-    repeat_count: int = 1,
-    artifacts_dir: Path,
-    config_metadata: dict[str, Any] | None = None,
-    comparison_axis: ComparisonAxis = "recovery_policy",
-    checkpoint_state: ExperimentCheckpoint | None = None,
-    resume_provider_factory: Callable[[int], ModelProvider] | None = None,
+    seeds: list[int],
+    repeat_count: int,
+    comparison_axis: ComparisonAxis,
+    config_metadata: dict[str, Any],
     experiment_id: UUID | None = None,
-    before_arm: Callable[[], None] | None = None,
-) -> ExperimentArtifact:
-    """Run or resume a fixed paired matrix, reusing completed Episode artifacts."""
-    if not tasks:
-        raise ValueError("Experiment requires at least one task")
-    resolved_seeds = list(seeds) if seeds is not None else [seed]
-    if not resolved_seeds:
-        raise ValueError("Experiment requires at least one seed")
-    if len(set(resolved_seeds)) != len(resolved_seeds):
-        raise ValueError("Experiment seeds must be unique")
-    if repeat_count < 1:
-        raise ValueError("Experiment repeat_count must be at least 1")
-    for field in ("model", "prompt_version", "tool_set_version", "budget"):
+) -> ExperimentCheckpoint:
+    """Validate and freeze a paired matrix before accepting or executing work."""
+    if not tasks or not seeds or len(set(seeds)) != len(seeds) or repeat_count < 1:
+        raise ValueError("Experiment requires tasks, unique seeds and a positive repeat count")
+    for field in ("model", "prompt_version", "tool_set_version", "budget", "context_policy"):
         if getattr(baseline_agent, field) != getattr(recovery_agent, field):
             raise ValueError(f"Paired agents must share {field}")
     if comparison_axis == "runtime_backend":
@@ -231,35 +217,69 @@ async def run_experiment(
             raise ValueError("Recovery comparison requires the same backend and baseline/recovery")
     else:
         raise ValueError("Unknown comparison axis")
+    raw_limit = config_metadata.get("max_reference_cost_usd")
+    if raw_limit is not None and (
+        Decimal(str(raw_limit)) <= 0 or not config_metadata.get("reference_price_version")
+    ):
+        raise ValueError("Reference cost budget requires a positive limit and price version")
+    plan = {
+        "schema_version": "1.0",
+        "experiment_id": str(experiment_id or uuid4()),
+        "created_at": datetime.now(UTC).isoformat(),
+        "baseline_agent": baseline_agent.model_dump(mode="json"),
+        "recovery_agent": recovery_agent.model_dump(mode="json"),
+        "tasks": [task.model_dump(mode="json") for task in tasks],
+        "seeds": seeds,
+        "repeat_count": repeat_count,
+        "comparison_axis": comparison_axis,
+        "config_metadata": config_metadata,
+    }
+    return ExperimentCheckpoint.model_validate_json(
+        json.dumps({**plan, "plan_hash": compute_config_hash(plan)})
+    )
 
+
+async def run_experiment(
+    baseline_agent: AgentSpec,
+    recovery_agent: AgentSpec,
+    tasks: list[TaskSpec],
+    provider_factory: Callable[[], ModelProvider],
+    *,
+    seed: int = 1,
+    seeds: list[int] | None = None,
+    repeat_count: int = 1,
+    artifacts_dir: Path,
+    config_metadata: dict[str, Any] | None = None,
+    comparison_axis: ComparisonAxis = "recovery_policy",
+    checkpoint_state: ExperimentCheckpoint | None = None,
+    resume_provider_factory: Callable[[int], ModelProvider] | None = None,
+    experiment_id: UUID | None = None,
+    before_arm: Callable[[], None] | None = None,
+) -> ExperimentArtifact:
+    """Run or resume a fixed paired matrix, reusing completed Episode artifacts."""
+    resolved_seeds = list(seeds) if seeds is not None else [seed]
+    prepared = create_experiment_plan(
+        baseline_agent,
+        recovery_agent,
+        tasks,
+        resolved_seeds,
+        repeat_count,
+        comparison_axis,
+        config_metadata or {},
+        experiment_id,
+    )
     raw_reference_limit = (config_metadata or {}).get("max_reference_cost_usd")
     reference_limit = Decimal(str(raw_reference_limit)) if raw_reference_limit is not None else None
     reference_version = (config_metadata or {}).get("reference_price_version")
-    if reference_limit is not None and (reference_limit <= 0 or not reference_version):
-        raise ValueError("Reference cost budget requires a positive limit and price version")
 
     if checkpoint_state is None:
-        new_id = experiment_id or uuid4()
+        new_id = prepared.experiment_id
         if (
             experiment_checkpoint_path(artifacts_dir, new_id).exists()
             or (artifacts_dir / "experiments" / f"{new_id}.json").exists()
         ):
             raise ValueError("Experiment ID already exists")
-        plan = {
-            "schema_version": "1.0",
-            "experiment_id": str(new_id),
-            "created_at": datetime.now(UTC).isoformat(),
-            "baseline_agent": baseline_agent.model_dump(mode="json"),
-            "recovery_agent": recovery_agent.model_dump(mode="json"),
-            "tasks": [task.model_dump(mode="json") for task in tasks],
-            "seeds": resolved_seeds,
-            "repeat_count": repeat_count,
-            "comparison_axis": comparison_axis,
-            "config_metadata": config_metadata or {},
-        }
-        checkpoint_state = ExperimentCheckpoint.model_validate_json(
-            json.dumps({**plan, "plan_hash": compute_config_hash(plan)})
-        )
+        checkpoint_state = prepared
         write_experiment_checkpoint(
             experiment_checkpoint_path(artifacts_dir, checkpoint_state.experiment_id),
             checkpoint_state,
@@ -283,12 +303,8 @@ async def run_experiment(
     pairs: list[PairComparison] = []
     committed_reference_cost = Decimal("0")
 
-    def check_reference_budget(episode_id: UUID) -> None:
-        if (
-            reference_limit is not None
-            and committed_reference_cost >= reference_limit
-            and not (artifacts_dir / f"{episode_id}.json").is_file()
-        ):
+    def check_reference_budget() -> None:
+        if reference_limit is not None and committed_reference_cost >= reference_limit:
             raise ReferenceCostBudgetExceeded("Experiment reference cost budget reached")
 
     def record_reference_cost(artifact: EpisodeArtifact) -> None:
@@ -317,12 +333,23 @@ async def run_experiment(
             validator=validator,
         )
         artifact_path = artifacts_dir / f"{episode_id}.json"
-        if artifact_path.is_file():
-            artifact = read_artifact(artifact_path)
-            if artifact.agent != agent or artifact.task != task or artifact.run_config != config:
-                raise ValueError("Saved experiment Episode provenance mismatch")
-            return artifact
         store = CheckpointStore(artifacts_dir / "checkpoints")
+        if artifact_path.is_file():
+            try:
+                artifact = read_artifact(artifact_path)
+            except ValueError:
+                if not store.path(episode_id).is_file():
+                    raise
+            else:
+                if (
+                    artifact.episode.episode_id != episode_id
+                    or artifact.agent != agent
+                    or artifact.task != task
+                    or artifact.run_config != config
+                ):
+                    raise ValueError("Saved experiment Episode provenance mismatch")
+                return artifact
+        check_reference_budget()
         if store.path(episode_id).is_file():
             if resume_provider_factory is None:
                 raise ValueError("A resumable provider factory is required")
@@ -365,7 +392,6 @@ async def run_experiment(
         if before_arm is not None:
             before_arm()
         base_id = uuid5(experiment_id, f"{pair_index}:baseline")
-        check_reference_budget(base_id)
         art_base = await run_arm(baseline_agent, task, current_seed, base_id)
         episode_ids.append(base_id)
         record_reference_cost(art_base)
@@ -374,7 +400,6 @@ async def run_experiment(
         if before_arm is not None:
             before_arm()
         rec_id = uuid5(experiment_id, f"{pair_index}:recovery")
-        check_reference_budget(rec_id)
         art_rec = await run_arm(recovery_agent, task, current_seed, rec_id)
         episode_ids.append(rec_id)
         record_reference_cost(art_rec)

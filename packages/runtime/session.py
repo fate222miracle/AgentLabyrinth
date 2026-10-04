@@ -26,6 +26,7 @@ from packages.domain.ports import (
     ToolValidator,
     TraceRecorder,
 )
+from packages.runtime.context import ContextHistoryError, project_context
 from packages.runtime.handwritten.budget import BudgetState, BudgetTracker
 from packages.tools.registry import DefaultToolValidator, ToolRegistry, ValidationResult
 
@@ -219,14 +220,26 @@ class EpisodeSession:
         allowed, reason, detail = self.budget.can_call_model()
         if not allowed:
             return self.stop(reason or TerminationReason.MAX_STEPS, detail or "max_steps_exceeded")
+        payload: dict[str, JsonValue] = {"messages_count": len(self.messages)}
+        if self.agent.context_policy is not None:
+            try:
+                projection = project_context(self.messages, self.agent.context_policy)
+            except ContextHistoryError:
+                return self.stop(TerminationReason.RUNTIME_ERROR, "invalid_context_history")
+            model_messages = projection.messages
+            payload = {"messages_count": len(model_messages), "context": projection.diagnostics}
+        else:
+            model_messages = [message.model_copy(deep=True) for message in self.messages]
+        if self.time_exceeded():
+            return self.stop_for_time()
         self.budget.model_call_count += 1
         self.budget.step_count += 1
-        self.record(EventType.MODEL_REQUESTED, {"messages_count": len(self.messages)})
+        self.record(EventType.MODEL_REQUESTED, payload)
         deadline = asyncio.timeout(self.remaining_seconds())
         try:
             async with deadline:
                 response = await self.provider.generate(
-                    self.messages, self.environment.available_tools(), self.agent.model
+                    model_messages, self.environment.available_tools(), self.agent.model
                 )
         except TimeoutError:
             if not deadline.expired():

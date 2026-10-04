@@ -87,6 +87,7 @@ def test_dashboard_compatibility_and_legacy_records(tmp_path: Path) -> None:
 
             legacy = read_experiment(Path(__file__).parents[1] / "fixtures/legacy_experiment.json")
             write_experiment(legacy, tmp_path / "experiments" / f"{legacy.experiment_id}.json")
+            assert client.get(f"/api/v1/experiments/{legacy.experiment_id}").status_code == 200
             tampered = legacy.model_copy(update={"experiment_id": uuid4(), "config_hash": "wrong"})
             write_experiment(tampered, tmp_path / "experiments" / f"{tampered.experiment_id}.json")
             inconsistent = legacy.model_copy(update={"experiment_id": uuid4(), "pairs": []})

@@ -4,6 +4,7 @@ import asyncio
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
+from uuid import UUID, uuid5
 
 import pytest
 
@@ -73,3 +74,15 @@ def test_reference_budget_and_gateway_cost_remain_separate(tmp_path: Path) -> No
             )
     assert len(list((tmp_path / "limited").glob("*.json"))) == 1
     assert len(list((tmp_path / "limited" / "experiments" / "checkpoints").glob("*.json"))) == 1
+    plan = next((tmp_path / "limited" / "experiments" / "checkpoints").glob("*.json"))
+    recovery_id = uuid5(UUID(plan.stem), "0:recovery")
+    (tmp_path / "limited" / f"{recovery_id}.json").write_text("{", encoding="utf-8")
+    # A malformed result cannot claim free reuse or bypass admission to a safe point.
+    (tmp_path / "limited" / "checkpoints" / f"{recovery_id}.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    restarted = EpisodeService(artifacts_dir=tmp_path / "limited")
+    with patch.object(AIHubMixModelProvider, "generate") as model:
+        with pytest.raises(ReferenceCostBudgetExceeded):
+            asyncio.run(restarted.resume_experiment(UUID(plan.stem)))
+        model.assert_not_called()
