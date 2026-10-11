@@ -4,10 +4,10 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from packages.application.experiment import ComparisonAxis, ExperimentArtifact
-from packages.domain.models import EpisodeArtifact, RuntimeBackend, RuntimeStrategy
+from packages.domain.models import ContextPolicy, EpisodeArtifact, RuntimeBackend, RuntimeStrategy
 
 ALLOWED_AIHUBMIX_MODELS: set[str] = {
     "coding-minimax-m2.7-free",
@@ -84,7 +84,7 @@ class CreateEpisodeRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.3"
     request_id: UUID = Field(default_factory=uuid4)
     provider: Literal["fake", "aihubmix"]
     model: str
@@ -101,6 +101,14 @@ class CreateEpisodeRequest(BaseModel):
     runtime_strategy: RuntimeStrategy = "handwritten"
     tool_transport: Literal["local", "mcp"] = "local"
     fault_profile: FaultProfile = "none"
+    context_policy: ContextPolicy | None = None
+
+    @model_validator(mode="after")
+    def context_revision(self) -> "CreateEpisodeRequest":
+        """Keep explicit context configuration out of legacy requests."""
+        if self.context_policy is not None and self.schema_version != "1.3":
+            raise ValueError("Context policy requires Episode request revision 1.3")
+        return self
 
 
 class EpisodeResponse(BaseModel):
@@ -118,7 +126,7 @@ class CreateExperimentRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.3"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = "1.5"
     request_id: UUID = Field(default_factory=uuid4)
     provider: Literal["fake", "aihubmix"]
     model: str
@@ -147,10 +155,28 @@ class CreateExperimentRequest(BaseModel):
     max_execution_time_ms: int | None = Field(default=None, ge=1, le=3600000, strict=True)
     token_budget: int | None = Field(default=None, ge=100, le=20000)
     max_reference_cost_usd: Decimal | None = Field(default=None, gt=0, allow_inf_nan=False)
+    max_total_tokens: int | None = Field(default=None, ge=1, le=1_000_000_000, strict=True)
     comparison_axis: ComparisonAxis = "recovery_policy"
     runtime_backend: RuntimeBackend = "handwritten"
     runtime_strategy: RuntimeStrategy = "handwritten"
     fault_profile: FaultProfile = "none"
+
+    context_policy: ContextPolicy | None = None
+
+    @model_validator(mode="after")
+    def global_token_revision(self) -> "CreateExperimentRequest":
+        """Keep global budget semantics out of legacy request revisions."""
+        if self.max_total_tokens is not None and self.schema_version not in ("1.4", "1.5"):
+            raise ValueError("Global Token budget requires request revision 1.4")
+        if (
+            self.context_policy is not None or self.comparison_axis == "context_policy"
+        ) and self.schema_version != "1.5":
+            raise ValueError("Context policy requires Experiment request revision 1.5")
+        if self.comparison_axis == "context_policy" and (
+            self.context_policy is None or self.context_policy.mode != "recent_tool_rounds"
+        ):
+            raise ValueError("Context comparison requires a recent_tool_rounds policy")
+        return self
 
 
 class ExperimentResponse(BaseModel):

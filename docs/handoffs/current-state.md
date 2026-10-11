@@ -1,6 +1,134 @@
 # Current state
 
-更新：2026-10-04。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+更新：2026-10-11。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+
+## 2026-10-11 GitHub 同步授权
+
+负责人要求本次及后续任务完成后及时提交/推送，授权已写入AGENTS；按已完成门禁汇总提交当前全局Token预算、上下文API/Web对照、实时执行/通用输出呈现和模型准入/工具说明修复，关联ADR-025–027及各学习交接。此前各轮“未提交”是当时状态；本轮核对GitHub远端与暂存来源并扫描凭据后同步main，最终提交SHA和远端核对结果留在本机 `artifacts/publish/20261011/`，不将实验产物/.env入库。质量证据沿用紧邻完成的全套343 Python/35 Node/29 Edge及Fake回归；仅补授权/同步记录不重复推理或干扰正在运行的网页。整版现场签收和远端CI仍另行确认。
+
+发布前远端fetch确认HEAD与origin/main一致（4581ffb）；直连GitHub遇连接重置/443超时，临时沿用本机既有HTTPS代理后成功，不修改Git全局代理/证书。暂存58个文件，索引扫描297文本/11二进制，未发现本机凭据值或常见密钥模式；.env/artifacts不在索引内。补清理此前未跟踪ReadableFields文件末尾空行，暂存diff检查通过，不改变运行行为。扫描报告 `artifacts/publish/20261011/secret-scan.json`。
+
+## 2026-10-11 两个共性问题修复（最新）
+
+负责人授权处理推荐模型实测发现的目录误拦截和提交说明问题，Accepted ADR-027 已落地。仅正式配置的 Flash 允许精确布尔目录例外，元信息及共享执行检查一致，客户端不得注入，未配置型号/Provider 失败仍拒绝或失败；M3/Flash 新增为实验候选，默认仍 M2.7，Kimi 不加入。新 API ToolLab 工具说明固定 v1.1.0，答案/证据支持记录与成功文档阅读，严格参数/权限/评分不改；旧安全点、失败重跑、冻结计划按保存版本，固定 CLI 回归按基线版本执行，原基线/hash 不改。BFCL 不变。
+
+最终完整门禁通过：mypy99、pytest343（46.97s，1 条既有依赖警告）、四套 Fake22格零退化、CLI上下文24、Web类型/构建、Node35/35、audit0、Edge29/29（1.1m）、Ruff/diff。修正首轮脚本版本兼容与浏览器测试漏展开问题，未放宽断言/评分。目录 `artifacts/quality/cc2b1c0e-71f6-4c35-b782-78a7dc815cc1/`、浏览器 `artifacts/playwright/90dd056c-b6e7-439d-8899-a53c3b672173/`，日志 `artifacts/admission-20261011/quality.log`。
+
+正常5173代理SSE真实文档007各一题：Flash `935c9445-dc06-4f41-946f-7fc03ade9759` 正式例外通过，approved/document:DOC-007，3模型/3工具/32196ms/3180报告Token；M3 `c22c8823-f06a-4eef-bbc2-bfecfdf0003d` 完成搜索/阅读/提交但答案多带原文，精确评分 false/FAILED，3模型/3工具/34990ms/4031Token。每题24Trace+1complete，GET重读一致；未重试或继续调参，不能把可调用记为能力全通过。正式meta live含M2.7/GLM5.3/M3/Flash/Fake，Flash缺目录提示保持，notes同步新失败原因。源码/版本/失败路径/复测/接续见 [学习交接](../learning/model-admission-tool-descriptions-20261011.md) 与 [任务卡](../tasks/model-admission-tool-descriptions-20261011.md)。
+
+已恢复正常API启动器PID19328/Web PID40112，8000/5173，日志 `artifacts/admission-20261011/`；刷新 `http://127.0.0.1:5173/?mode=single` 可选择新候选，文档现场演示先用 M2.7 或本次通过的 Flash。全部旧改动/历史保留，无提交推送、远端CI或整版签收；本轮未新增真实MCP/恢复实验。前文旧PIDs/“网页候选尚未追加”由本节替代。
+
+## 2026-10-11 推荐三模型小样本（最新）
+
+负责人更换Key模型范围后授权接续：M3 BFCL/订单通过、文档读完后误提query_records被权限校验终止（2/3）；GLM5.3 Flash BFCL/订单/文档均通过（3/3）；KimiK3目录可见但HTTP400/no_available_channel，未测多轮。统一LangGraph/无纠错/full/Seed1/8000Token/180秒/1024单响应，七Episode、13模型尝试、13154已报告Token，无自动重试或隐式换模型。两次目录仍无Flash但六次真实响应200，正式GET目录前置检查会拦截；临models_path诊断不代表网页新建验收。另发现SubmitAnswerArgs描述只说queried record/query_records证据，与文档read_document冲突，可能误导M3但未证实因果。后续先为可信候选准入及通用工具描述/版本兼容形成ADR，不能静默改评分/权限或中途混Prompt。正式目录、API/Schema/Provider与旧历史未改；保存产物核验通过，完整结果与ID/阅读路径见 [三模型实测与共性问题交接](../learning/recommended-model-review-20261011.md)。无提交推送/整版签收，网页候选尚未追加。
+
+## 2026-10-11 截图中新模型真实检查
+
+负责人授权测试并确认原Key已保存权限。截图新增Qwen3.8 27B、Atlas Dots3 Note Preview、Ling3.0 Flash VL、Nex N2.5 Pro/Mini，五个均经真实BFCL0/LangGraph小样本返回HTTP400、UPSTREAM_CHANNEL_UNAVAILABLE（上游no_available_channel），0工具；当前无法评能力，不记能力零分。已有MiniMax同配置对照通过，6980ms/389报告Token；Qwen一次无工具小请求也无通道。新进程目录三次仍仅MiniMax/GLM两ID，无环境Key覆盖或.env重复项；权限/凭据一致性、同步与上游路由尚不能唯一归因，不宣称每日额度耗尽或永久下架。共六Episode＋一次文本请求，七推理尝试，无自动重试，未延伸多轮/批量。诊断临时候选models_path只用于当前进程，生产目录、API/Provider/权限/评分与原历史不改；产物重读/身份/末尾事件核验通过。证据和接续步骤见 [真实测试交接](../learning/new-model-review-20261011.md)，本机忽略结果在artifacts/new-model-review-20261011/。无提交推送或整版签收。
+
+## 2026-10-11 跨模型比较与免费候选调研
+
+负责人说明现有免费模型已跑通，询问如何衡量结果及寻找新候选。本轮核对现有 Experiment 三轴都要求同模型；ToolLab 答案/证据与 BFCL 函数提议匹配分别评分，运行 SUCCESS 不等于独立评分通过。建议固定任务/预算/Runtime/上下文/纠错，只变模型，先复用独立产物做只读汇总，另列上游失败与成功任务效率；新增公开 model 轴先走 ADR。官网核对 MiniMax M3、GLM5.3 Flash、Kimi K3 免费详情，均仅候选、未用本机 Key 实测或入目录；Qwen3.6 Preview 索引与下架详情冲突，排除。原工作区改动保留，无推理请求、契约/评分变化或提交推送。口径、调用链入口、候选来源及下一步见 [调研与交接](../research/model-evaluation-free-candidates-20261011.md)。
+
+## 2026-10-10 模型连接失败现场排查（最新运行状态）
+
+负责人询问每日额度。核对最近MiniMax/GLM文档任务均约5秒终止，保存码NETWORK_CONNECTION_FAILED，没有保存HTTP429/每日额度证据。无Key公开目录探测：当前系统代理可HTTP200，直连HTTPS超时；MiniMax一次最多64输出Token真实小请求HTTP200（108总Token），证明当前该模型仍可请求，不能扩为其他模型额度结论。仅重启已核对自有API，保留Web与全部产物；随后平台经5173代理真实单题BFCL MiniMax成功，Episode `4aad38d6-2efb-4bbc-8551-f952240b7dd9`，SUCCESS且独立评测true，3561ms，输出math.factorial/number=5（未执行计算）。没有重跑文档多轮或其他模型批量；本轮共两次真实小请求，不把目录200当推理成功。
+
+当前API启动器PID30104/Web PID22188，loopback8000/5173。旧进程网络路径/代理状态或瞬时连接异常与重启后恢复一致，但原脱敏错误未保留底层reason，无法确证某一种原因；不宣称上游额度重置，也不修改全局代理、证书、DNS或Provider/Schema/评分。后续若再次出现，优先记录脱敏连接类型与当前代理通路，不盲目更换模型或自动重试歧义推理请求。日志沿用 `artifacts/execution-ui-20261010/normal-api-*.log`，[排查记录](../learning/model-connection-20261010.md)含证据与边界。未提交推送。
+
+## 2026-10-10 实时优先与结束保持（最新）
+
+负责人明确要运行中看到Agent过程，不要完成后再播。确认原新建单次已使用SSE，但完成后setLiveRun(null)切历史，Artifact身份effect重置到起点。沿用ADR-014，App保留completed状态与确认后的保存事件/实际Model及Environment；McpFlowReplay displayMode区分live/completed/replay，前两种始终跟随最新已收到事件，complete后保留终点和最终输出、不出现播放器。启动时一次聚焦执行区并检查请求代次，后续不反复滚动；短时连线随事件到达，断线/完成/reduce不动画。主动点击“查看保存详情与回放”才进入旧只读回放，历史GET/导航继续保留。BFCL仍不执行函数，无数值结果；不改API/Trace/Schema/评分，不扩Resume/重跑/Experiment实时订阅。
+
+Web类型/构建、Node35/35、Edge完整28/28（1.2m）、diff通过。浏览器 `artifacts/playwright/d3c2632c-500d-4db6-bb9c-1d0ac573cb5f/`，实际查看增量/完成截图；新增分段ReadableStream夹具使用实际Fake文档事件，仅证明前端消费/不提前显示/完整结果后保持同一终点/主动回放/动态reduce/刷新零POST/源产物不变，不是新真实模型或网络时延证据。既有Fake实际新建闭环同步验收completed。截图复核后只把ToolLab输出详情移到终止元信息之前，最终构建再次通过（JS gzip157.36KB/CSS12.08KB）。不重复无关后端全套/远端CI或自动签收。
+
+正常API启动器PID8004/Web PID22188已恢复，loopback8000/5173；Web代理GET目录live、四个免费候选、页面200，无真实推理POST。日志 `artifacts/execution-ui-20261010/normal-*.log`，进入 `http://127.0.0.1:5173/?mode=single` 新发起任务才展示实时过程，已有Episode链接是保存历史；真实多轮演示可用ToolLab文档007，不以一次BFCL调用代表长链。任务卡/UI规范与 [源码阅读/状态/失败交接](../learning/execution-path-ui-20261010.md)已更新，原所有改动与历史保留，无提交推送；现场视觉/实机签收继续待办。
+
+## 2026-10-10 通用任务交付展示（最新）
+
+负责人指出BFCL阶乘题没有输出，随后明确所有任务应展示对应交付要求。核对本机GLM实际轨迹只有 `math.factorial(number=5)` 与accepted=true，无120；BFCL环境仅接收提议。沿用ADR-013/014/022，前端输入/输出补公开交付要求，结束节点/详情从当前前缀快照呈现答案/证据或函数调用/参数；独立保存产物补评测success/reason，SUCCESS不推导评测通过，失败/缺字段/缺快照不补造。数字结果与其他函数执行结果仍不生成，新增执行环境须单独ADR；未改Schema/评分/Provider或历史文件。源码/交接补充见 [执行路径说明](../learning/execution-path-ui-20261010.md)、任务卡与UI规范7.4。
+
+Web类型、构建、Node35/35、Edge完整27/27（1.1m）、diff通过；浏览器产物 `artifacts/playwright/1094deb0-5627-4f5b-ae28-ba9f6d62992d/`，BFCL桌面/390截图实际查看。新增显示夹具仅Mock GET，不能作为BFCL Fake成功证据；订单/文档/参数拒绝为隔离Fake真实运行。覆盖早期不借后续输出、评分失败、缺快照、历史零POST、文件不变和视口。截图复核后仅将结束输出移到终止元信息之前、说明改为通用函数，最终构建再次通过（JS gzip157.02KB/CSS12.08KB）；不重复无关Python全套、新真实推理或远端CI，不签收整版。
+
+测试停止并核对自有服务后已恢复正常API启动器PID21408/Web PID30072，loopback8000/5173，经Web代理GET目录live，四个免费候选可见、页面200；本次不再切Fake演示后端。运行日志 `artifacts/execution-ui-20261010/normal-*.log`。刷新历史并将动画滑块移到结尾查看新输出；本机阶乘历史ID `e609046d-7706-4e08-9342-237c8538dbae`，另一台电脑用自身产物，不依赖该ID。所有原未提交改动保留，无提交推送；课程实机/投影反馈与整版签收待办仍保留。
+
+## 2026-10-10 正常模型入口恢复（当前运行服务）
+
+负责人发现免费模型消失；原因是上轮启动的 `scripts.course_demo --preview` 使用 DemoService，只开放 Fake，并非候选配置被删除。已按进程树核对停止该演示启动器/API，保留 Vite PID18712，改为 README 正常 `apps.api.main:app` 后端（启动器 PID33632），读取默认 `artifacts/`。经5173代理实际 GET `/api/v1/meta` 返回 `live`，MiniMax M2.7、GLM5.3、MiMo V2.5/V2.6四个免费候选与Fake均可见，网页200；无真实推理POST，不代表额度或通道重新通过。当前入口 `http://127.0.0.1:5173/?mode=single`；上一节隔离演示ID仍保存在demo目录，正常后端不读取该目录。UI与正式模型配置未改，日志 `artifacts/execution-ui-20261010/normal-api-*.log`。后续展示新版UI优先保留正常后端，仅明确需要离线隔离演示时切换DemoService，避免正常模型入口被演示服务替代。
+
+## 2026-10-10 逐次执行路径与证据阅读 UI（最新）
+
+负责人批准调研后按“节点随实际调用出现＋工具结果与证据卡”开发，要求优化视觉。沿用 ADR-013/014/022/024，只改前端呈现；[任务卡](../tasks/execution-path-ui-20261010.md)、[源码/状态/失败/接手说明](../learning/execution-path-ui-20261010.md)完整，UI 规范新增 7.4。复用既有 React Flow/CSS/ReadableFields/useContentMotion，固定模型/调度/工具图改为每次模型请求与每次调用独立节点，同名重复不合并，失败尝试保留；稳定来源 ID 与当前事件前缀，不提前显示后续工具/传输/结果。暖调行动卡、清晰文字状态、曲线箭头、逐次入口、短时可打断详情/视口过渡，长链默认对焦当前区域而非缩成小字。原三视图游标、MCP 链路、技术 Trace、保存最终结果和专注查看保留。
+
+Web 类型/构建、Node34/34、Edge完整25/25（57.8s）与diff通过，浏览器产物`artifacts/playwright/7538e08f-b630-449d-b648-bc640b88d6cd/`。桌面/窄屏截图实际查看后补箭头显示，最终构建（JS gzip156.27KB/CSS12.03KB）与类型通过，三项路径专项再次3/3（11.9s），最终产物`artifacts/playwright/05419c52-dec3-4188-a926-ba2d6cddbd02/`。覆盖重复/拒绝/证据/超时、BFCL Provider失败、受控SSE截断、历史零POST/原产物不变、键盘/四视口/动态reduce。首次EPERM、首轮测试误匹配“尚未收到工具返回”、次轮错误假定通用Fake可答BFCL均如实记录，未篡改评分/Provider使测试假通过。通用Fake的BFCL仍是provider_error；正向BFCL展示用既有真实历史/专用受控Provider，不能宣称本轮通过。无依赖/API/Schema/模型目录/后端修改或新真实模型调用，未重复无关Python全套/远端CI，不自签V0.2。
+
+随后自查并补起始游标：EPISODE_STARTED创建任务节点，观察原位更新，路径严格按原eventIndex裁剪；旧首帧晚于游标时不提前显示其反馈。最终Web类型/构建（JS gzip156.43KB/CSS12.07KB）、Node35/35、Edge完整25/25（1.0m）再次通过，最终产物`artifacts/playwright/b55b632d-d0dc-453b-b334-745940ae78a0/`，桌面/窄屏截图实际查看。
+
+已恢复独立Fake预览，最终启动器PID29632，loopback8000/5173，Web/目录GET可达。示例`http://127.0.0.1:5173/?episode_id=e275778d-3d3f-530f-b531-eadf0412a606`（参数纠错）；点击播放全过程查看逐次出现，再回看失败调用。目录/日志`artifacts/execution-ui-20261010/`；本次`--skip-mcp`生成，不声称新的MCP实测。预览只提供Fake，正式模型目录未改；另一台电脑先生成自己的演示索引。原工作区未提交改动全部保留，无自动提交推送。下一步先收负责人视觉/投影/实机反馈，既有真实小样本/系统辅助功能/整版签收待办不清除。
+
+## 2026-10-09 模型目录恢复体验修复（最新）
+
+负责人反馈目录不可读。本轮排查8000直连meta为live，5173代理200，四个配置真实ID均可见；旧目录异常未记录，不能断言当时超时/Key失效/下线。确认旧Web只首次读取，临时失败后停留旧提示，原后端失败缓存30秒。修复共享loadMetadata首次/重读初始化区别、有效模型与任务/预算草稿保持、独立目录错误/手动重读、读取中与运行中禁用、复用RequestGeneration拒绝旧响应覆盖恢复；TimeoutError沿用REQUEST_TIMEOUT，后端只记录错误码/异常类型，不输出原异常/Key。缓存/模型预检/API/Schema/评分不改。[源码与接手说明](../learning/model-catalog-recovery-20261009.md)完整。
+
+16项目录/Provider Mock专项通过；首门禁335 Python通过、20 Edge通过2新测试失败（StrictMode双读与独立Fake服务仅Fake的测试预期），修测试并发现/补晚到响应保护后专项2/2通过。最终完整门禁Ruff格式/lint、mypy98、pytest335 passed（46.04s，1条既有依赖警告）、四套22格Fake零退化、CLI上下文24预期一致、Web类型/294模块构建（JS gzip155.33KB）、Node32/32、audit零漏洞、Edge22/22（57.2s）、diff通过。门禁`artifacts/quality/b8b9ec2e-45a3-4453-b141-78b6e175af0d/`，浏览器`artifacts/playwright/377b7e97-df25-4ae3-9bef-4d7e2eda0b3c/`，日志`artifacts/catalog-recovery-20261009/quality-final.log`；无真实推理POST或远端CI/整版签收。
+
+最终恢复API启动器PID37076/Web PID21256，loopback8000/5173。新后端经5173代理再次GET目录live，MiniMax M2.7/GLM5.3/MiMo V2.5/V2.6可见，Web200；不等于重新验证调用额度/权限。日志与脱敏索引`artifacts/catalog-recovery-20261009/`。原改动与实验保留，没有提交推送；刷新页面可使用新重读入口，30秒缓存内失败仍可稍后再读。
+
+## 2026-10-09 V0.3 上下文 API/Web 对照（质量门禁完成，最新）
+
+负责人授权接续下一任务，Accepted ADR-026、需求V0.6受控例外与AGENTS已同步。[任务卡](../tasks/V0.3-context-comparison-next.md)、[源码/演示/失败/接手说明](../learning/V0.3-context-comparison-web-20261009.md)完整。复用ContextPolicy与正式Runtime/Runner/Job，仅增加context_policy轴：左full、右最近1–100完整轮次，同模型/Prompt/工具/Runtime/纠错策略/任务/Seed/预算。旧轴仍固定上下文，缺省Agent/hash不改。单Episode请求1.3、Experiment请求1.5，显式策略要求新版；新轴计划1.2/结果1.4，兼容全局Token。策略进冻结来源、结果和回归指纹，恢复和显式失败重跑沿用原策略；上下文轴全部挽救指标null、recovered=false。网页配置/原窗口只读、成对表格、CSV策略字段与当前请求帧诊断完成；字节非Token/HTTP包，旧无诊断不补造。
+
+最终完整门禁：Ruff格式/lint、mypy98、pytest333 passed（42.77s，1条既有依赖警告）、四套Fake22格零退化、CLI上下文24案例预期一致、Web类型/294模块构建（JS gzip155.14KB）、Node32/32、audit零漏洞、Edge20/20（53.0s）与diff检查通过。门禁`artifacts/quality/8cd84ed7-acb1-4f82-9f50-200acbbe2b6a/`，浏览器`artifacts/playwright/a73d4052-9aa5-4779-b4f0-17e06d2b92b9/`，日志`artifacts/context-web-20261009/quality-final.log`。新专项最初12/12，后补单Episode API至13项并进入全套；覆盖窗口1遗忘/窗口2成功、两Runtime、版本/窗口/混变量拒绝、原策略重跑、完成侧不改写恢复、全局预算停止/恢复、回归策略预检。Edge覆盖从页面创建、失败明确、草稿与保存值隔离、刷新/前后只GET、实际CSV下载、四视口/减少动效/当前帧。专项与最终截图实际查看，不代替实机手感、系统辅助功能或整版签收。
+
+最终截图复核后，仅把页头说明补入已实现的上下文对照，Web类型/构建再次通过（JS gzip155.15KB）；未改运行逻辑，未重复整套门禁。
+
+首轮专项沙箱WinError5（5通过/7目录错误）、Node子进程EPERM，改受控本机执行；首两轮浏览器测试预期误用success选项（UI为clean）/CSV空值引号，首完整门禁332通过1失败（新测试误期200，原接口201），只修测试后全套通过。未修改原创建状态码或模拟成功掩盖失败。
+
+原预览已退出，质量门禁后恢复API PID23288/Web PID9940，loopback8000/5173与HTTP已保存演示通过。Fake上下文实验`98b5dcd2-6bb3-4b23-b402-f51b36ad320e`，001/007各一对，完整历史2/2、窗口1为1/2；文档右侧预期MAX_STEPS。链接`http://127.0.0.1:5173/?experiment_id=98b5dcd2-6bb3-4b23-b402-f51b36ad320e`，日志/脱敏索引`artifacts/context-web-20261009/`，演示仅Fake，不是新增真实验证。
+
+保留此前未提交UI/模型/预算等改动；无新依赖、数据库、额外框架、真实批量、提交推送或整版签收。下一步建议单独安排一个当前可用模型的小样本上下文对照与课程实机演练，再决定长链任务；不将本轮Fake工程结果当真实策略有效性或完整V0.3完成。
+
+## 2026-10-08 V0.2 全局 Token 预算（质量门禁完成，最新）
+
+负责人授权接续开发。Accepted ADR-025、SSOT FR-08与[任务卡](../tasks/V0.2-global-token-budget-20261008.md)同步，API/Web/Experiment已接可选max_total_tokens：跨矩阵已报告输入+输出的Episode边界准入，完整结果/安全点只计一次，失败报告用量照计，未知响应/不一致停止，旧单次预算/配置哈希不改。请求1.4、新预算计划1.1/结果1.3，旧版本可读；终态安全点零额外调用落盘，半对不伪造完整评分。最后在途Episode可超额，非供应商硬上限。Job失败原因和实际累计/保存预算在Web明确呈现，窄屏失败结果先于草稿。[源码、调用链、失败与交接](../learning/V0.2-global-token-budget-20261008.md)齐全。
+
+完整共享门禁：Ruff格式/lint、mypy97、pytest320 passed（46.80s、1条既有依赖警告）、四套Fake22格零退化、上下文24案例预期一致、Web类型/294模块构建、Node31/31、audit零漏洞、Edge19/19（51.3s）、diff检查通过。产物`artifacts/quality/e28f0367-8fd1-498c-9e17-8632631ee79b/`；浏览器`artifacts/playwright/5cf6b5c2-f0e9-4050-9116-22c6dbf75be6/`。首次专项1失败40通过（测试误用真实预算值）修正；首次完整312通过7失败，短目录七例通过、等长目录复现，定位Windows临时文件名过长。共享原子写缩短临时名、计划/安全点复用helper后长路径原用例通过，保留fsync/replace/失败清理，不承诺任意长最终路径。
+
+首轮停止截图实际查看后补失败Job结果区与窄屏前置（不再“尚无结果”），后端不变；最终Web类型/构建（JS gzip154.02KB）、Node31/31、Edge19/19（51.2s）再次通过。最终截图/报告`artifacts/playwright/f1edd75f-3536-41d3-8438-1b079edbbda2/`，预算停止1440/390实图已查看；键盘/四视口/减少动效自动覆盖不替代实机签收。未进行新的真实预算调用或远端CI。
+
+预览恢复API PID8288、Web PID21596，日志`artifacts/global-token-20261008/`；本机HTTP Fake补演示完整实验`f82fec0f-2e8a-4c43-a1bf-f4bb8945b44f`（121阈值/240模拟Token）和停止Job`168f623c-d43d-458b-bb24-241ec5d2b8e9`（预算1、明确failed），GET/网页200通过。现有UI/模型/文档修改保留，无新增依赖/提交推送/整版签收。V0.2全局Token代码缺口已补，实机/第二机器/现场、真实预算与整版签收仍待；下一开发按[上下文对照任务卡](../tasks/V0.3-context-comparison-next.md)先新ADR，复用现有首切片，不启动完整V0.3。
+
+## 2026-10-08 当前免费模型真实复测（最新）
+
+负责人授权使用列表免费模型实际运行。[结果与失败归因](../learning/free-model-review-20261008.md)：四个型号各两题，MiniMax M2.7和GLM5.3的BFCL/订单均通过；MiMo V2.5/V2.6各两次上游HTTP429，尚未执行工具，13秒间隔下仍失败，具体限额原因未确定，不是放宽平台权限能修复。MiniMax另经正式实时目录检查，用LangGraph完成文档007（两次搜索→读取→提交，4模型/4工具、4655实际报告Token、44.929s）。共9 Episode、5成功/4失败，成功响应报告10020Token；失败零usage不证明上游零消耗，网关实付仍未知。
+
+实时目录live且四ID均可见，未把可见性当可用性。已更新models.json旧日期说明，保留默认MiniMax和实验标记，GLM作为备用候选、MiMo标明本轮429；历史产物/评分/预算不改。16项Provider/目录/脚本Mock测试通过（1.10s），未重跑完整门禁/浏览器或真实上下文消融，未承诺持续可用或自动签收/提交推送。原本预览服务已退出，恢复API PID29720、Web PID13228；meta/历史EpisodeGET与Web200通过。日志/脱敏结果在`artifacts/live-model-review-20261008/`，完整产物在原artifacts，可用文档Episode `ae543224-be7b-4326-aacd-360ea33f6955` 只读演示。
+
+## 2026-10-08 V0.2 收尾与 V0.3 推进复核（最新）
+
+负责人要求检查版本完成情况与可继续内容。[复核与下一步顺序](V0.2-V0.3-progress-review-20261008.md)已核对需求、ADR与实际代码：V0.2主要受控能力已实现，FR-08跨Episode全局Token仍缺；最终真实模型、第二机器/实机/现场及整版签收未收口。已实现总时限、MCP/BFCL可视化与10月8日UI/audit修复不再列为当前缺口。V0.3上下文首切片已存在，API/Web尚无新建策略及上下文对照轴；建议先补V0.2预算，再按新ADR接上下文网页对照、少量长链任务和单模型小样本，其余机制按实验需要依次推进。
+
+本轮专项68 passed（26.11s、1条既有依赖警告）；独立CLI Fake24案例为20成功/4个文档窗口1预期MAX_STEPS，报告与产物校验通过。产物`artifacts/version-review-20261008/`。首次缺basetemp父目录30 passed/38 setup errors，第二次沙箱WinError5，第三次本机隔离目录通过，过程如实记录。本轮仅分析/专项验证/交接，没有业务代码或契约变化、真实调用、完整门禁、浏览器重测、提交推送或整版签收；现有UI改动与预览服务保留。
+
+## 2026-10-08 课堂演示 UI 与可视化优化（最新）
+
+负责人授权优先优化现有 UI/可视化。按 V0.6、UI1.3 与 ADR-013/014/022/024，完成对照结论前置、历史草稿折叠、流程当前帧参数/反馈/证据、MODEL_REQUESTED/RESPONDED 阶段及三视图共享原事件锚点。已保存实验结果在 DOM 与视觉上均先于草稿，窄屏不再被最近历史列表压下；Job 控制/恢复入口保持可见。技术 JSON 按需查看，不改 API/Schema/评分/运行条件。源码阅读、失败路径、演示顺序及接手规则见 [阅读交接](../learning/ui-classroom-20261008.md)、[任务卡](../tasks/ui-classroom-20261008.md)。
+
+最终 Web 类型/294模块构建（JS gzip153.01KB）、Node30/30、Edge18/18（47.6s）、npm audit零漏洞及diff检查通过；浏览器证据 `artifacts/playwright/8f0a0c71-db46-4271-99c9-76461269684a/`，含四视口、减少动效、失败/损坏历史与SSE、导航竞态、同一事件位置、只读历史和草稿隔离。`source-map-js` 仅1.2.1→1.2.2安全补丁，无新项目依赖。首次沙箱EPERM、TS导入扩展名错误、旧进程占用安装及首次Edge14通过/4失败（折叠步骤、缺FFmpeg）均已修复后复核，过程见交接。未重跑无改动后端全套门禁或远端CI，不替代现场签收。
+
+IAB实际检查历史真实对照和MCP专注回放，参数/返回/已保存终点分层，截图 `artifacts/ui-classroom-20261008/`；没有重新调用真实模型。目录初次读取暂不可用，后续GET恢复模型ID可见，未将目录可见性当作真实可用性通过。前后端恢复本机8000/5173（API PID3140、Web PID23756，日志 `artifacts/local-review-20261008/`）；历史MCP无需重新启动MCP服务。保留10月7日复核报告，未提交/推送；全局Token、模型最终收口、第二机器/真实现场与V0.2整版签收仍单独保留。
+
+## 2026-10-07 V0.1 / V0.2 需求与可视化复核（最新）
+
+代码基线 `4581ffb`；负责人要求分析需求符合度、可视化与优化可行性。完整矩阵、源码依据和建议见 [复核报告](V0.1-V0.2-review-20261007.md)。V0.1 保留既有18项签收；V0.2主要受控能力具备，但全局Token、最终模型入口、实机/第二机器/现场与远端CI仍未收尾。Episode总时限已实现，不再沿用10月1日实现前的缺失结论；ADR-023上下文首切片保持既有授权边界。
+
+本次确认12原生任务四类各3、ID/名称唯一；任务契约/总时限/看板/回归专项25 passed（2.61s、1条既有警告）。首次沙箱临时目录权限失败22 passed/3 setup errors，改项目内隔离目录和本机执行后通过；未重跑完整门禁。`npm audit --json` 当前返回1 high（间接source-map-js，GHSA-68fv-2mgg-jv7q，修复版本1.2.2），10月4日零漏洞仅为历史快照，本轮未升级依赖。
+
+IAB只读查看当前真实历史对照及ToolLab/MCP/BFCL回放，1440桌面与390窄屏抽查；图与关键参数分离、对照结论层级、三种视图切换重置位置、模型请求等待阶段和播放器非真实耗时说明仍有优化空间。推荐先做结论优先、当前帧摘要与共享回放位置；全局Token需另ADR，不把建议视为新需求或自动启动实现。截图在本机忽略目录`artifacts/ui-review-20261007/`，媒体模拟/窄屏不替代系统辅助功能签收。
+
+开始时前轮服务已退出，首次Trace GET出现Failed to fetch；恢复loopback API/Web后同ID读取正常，未归因为产品bug。前后端保持运行，视口已重置、浏览器返回原Experiment；未新调用真实模型、未重启MCP，历史MCP无需服务器。只交付分析文档，没有业务代码/Schema/模型目录/评分变更或提交推送，不自签整版。
+
+## 2026-10-04 发布与质量快照（历史）
 
 上一轮复核发布基线 `64dc5ae`。负责人2026-10-04再次明确授权接入Logo/动态效果并提交/推送最新代码；本次发布前已fetch确认基线与origin/main一致，完整门禁与暂存内容密钥扫描通过。本提交包含ADR-021–024的可靠性/Web边界/上下文首切片、连续动效、页面层级和D图标/动画。`.env`、测试截图和临时实验产物继续Git忽略，未知`.unsnooze/`保留本地不提交。发布结果在本机`artifacts/publish/20261004/`记录，整版人工签收与远端CI状态分开确认。
 

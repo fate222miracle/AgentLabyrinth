@@ -14,7 +14,8 @@ from packages.application.experiment import ExperimentArtifact, read_experiment
 from packages.application.reference_pricing import reference_price_version
 from packages.application.regression import compare_experiments, fixed_config
 from packages.application.trace import write_text_atomically
-from packages.domain.models import AgentSpec
+from packages.domain.models import AgentSpec, ContextPolicy
+from packages.environments.tool_lab.environment import TOOL_LAB_TOOL_SET_VERSIONS
 
 
 class RegressionManifest(BaseModel):
@@ -45,6 +46,7 @@ def preflight(
         "seeds": seeds,
         "repeat_count": request.repeat_count,
         "token_budget": request.token_budget,
+        "max_total_tokens": request.max_total_tokens,
         "comparison_axis": request.comparison_axis,
         "fault_profile": request.fault_profile,
         "max_reference_cost_usd": (
@@ -65,14 +67,26 @@ def preflight(
         if request.comparison_axis == "runtime_backend"
         else request.runtime_backend,
         "baseline_strategy": request.runtime_strategy
-        if request.comparison_axis == "runtime_backend"
+        if request.comparison_axis in ("runtime_backend", "context_policy")
         else "handwritten",
         "recovery_strategy": request.runtime_strategy
-        if request.comparison_axis == "runtime_backend"
+        if request.comparison_axis in ("runtime_backend", "context_policy")
         else "handwritten_recovery",
     }
     if any(config.get(key) != value for key, value in expected.items()):
         raise ValueError("Regression request differs from pinned baseline")
+    policy = request.context_policy
+    for arm in ("baseline", "recovery"):
+        expected_policy = (
+            ContextPolicy(mode="full")
+            if request.comparison_axis == "context_policy" and arm == "baseline"
+            else policy
+        )
+        saved_policy = config.get(f"{arm}_agent", {}).get("context_policy")
+        if saved_policy != (
+            expected_policy.model_dump(mode="json") if expected_policy is not None else None
+        ):
+            raise ValueError("Regression context policy differs from pinned baseline")
     tasks = [
         service._with_fault_profile(  # noqa: SLF001 - same local application composition
             service._with_token_budget(service._get_task(task_id), request.token_budget),
@@ -95,6 +109,10 @@ def preflight(
         raise ValueError("Regression task version or evaluation protocol changed")
     agent_path = DEFAULT_FAKE_AGENT if request.provider == "fake" else DEFAULT_AIHUBMIX_AGENT
     agent = AgentSpec.model_validate_json(agent_path.read_text(encoding="utf-8"))
+    tool_version = config["tool_set_version"]
+    if tool_version not in TOOL_LAB_TOOL_SET_VERSIONS:
+        raise ValueError("Regression agent or evaluation protocol changed")
+    agent = agent.model_copy(update={"tool_set_version": tool_version})
     agent = service._agent_with_token_budget(agent, request.token_budget)
     agent = service._agent_with_time_budget(agent, request.max_execution_time_ms)
     saved_model = config["model"]
@@ -121,7 +139,9 @@ def run(manifest_path: Path, artifacts_dir: Path, candidate_revision: str, allow
         raise ValueError("Real-model regression requires --allow-live")
     baseline_path = (manifest_path.parent / manifest.baseline_artifact).resolve()
     baseline = read_experiment(baseline_path)
-    service = EpisodeService(artifacts_dir=artifacts_dir)
+    service = EpisodeService(
+        artifacts_dir=artifacts_dir, tool_set_version=baseline.config["tool_set_version"]
+    )
     preflight(baseline, manifest.request, service)
     candidate = asyncio.run(service.execute_experiment(manifest.request))
     report = compare_experiments(

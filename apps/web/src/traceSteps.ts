@@ -2,6 +2,21 @@ export interface TraceStepEvent {
   step_index: number;
   event_type: string;
   payload: Record<string, unknown>;
+  duration_ms?: number;
+}
+
+/** Present only the recorded tool feedback, including standardized errors. */
+export function toolFeedbackFields(event: TraceStepEvent | undefined, tool: string): [string, unknown][] {
+  if (!event) return [];
+  const record = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+  const observation = record(event.payload.observation) ? event.payload.observation : event.payload;
+  const result = record(observation.result) ? observation.result : observation;
+  const detail = record(result.error) ? result.error : result;
+  const preferred = event.event_type === 'TOOL_FAILED' ? ['code', 'message', 'retryable']
+    : tool === 'search_documents' ? ['documents'] : tool === 'read_document' ? ['document']
+      : tool === 'query_records' ? ['records'] : tool === 'submit_answer' ? ['feedback'] : ['accepted', 'feedback'];
+  return keyFields(detail, preferred);
 }
 
 /** Keep adjacent saved events together without rewriting their order. */

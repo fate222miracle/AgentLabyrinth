@@ -50,6 +50,18 @@ test('duplicate pair ownership cannot reuse an Episode or leave an orphan result
   assert.throws(() => parseApi(experimentArtifactSchema, legacy), /校验失败/);
 });
 
+test('global Token budget requires the new artifact revision and remains distinct from legacy', () => {
+  const legacy = JSON.parse(readFileSync(new URL('../../../tests/fixtures/legacy_experiment.json', import.meta.url)));
+  assert.equal(parseApi(experimentArtifactSchema, legacy).config.max_total_tokens, undefined);
+  const current = { ...legacy, schema_version: '1.3', config: { ...legacy.config, max_total_tokens: 121 } };
+  assert.equal(parseApi(experimentArtifactSchema, current).config.max_total_tokens, 121);
+  for (const corrupt of [
+    { ...current, schema_version: '1.2' },
+    { ...current, config: { ...current.config, max_total_tokens: 0 } },
+    { ...current, config: { ...current.config, max_total_tokens: '121' } },
+  ]) assert.throws(() => parseApi(experimentArtifactSchema, corrupt), /校验失败/);
+});
+
 test('HTTP errors and wrong identity cannot populate a result', async () => {
   await assert.rejects(readApi(new Response('private raw upstream text', { status: 502 }), jobSchema), /^Error: 接口请求失败 \(502\)$/);
   await assert.rejects(readApi(new Response('{secret'), jobSchema), /JSON 无效/);
@@ -74,5 +86,33 @@ test('versioned context policy survives read-only replay and malformed windows a
     const corrupt = structuredClone(value);
     mutate(corrupt.artifact.agent);
     assert.throws(() => parseApi(episodeResponseSchema, corrupt), /校验失败/);
+  }
+});
+
+
+test('context result validates policies, revision and inapplicable recovery metrics', () => {
+  const legacy = JSON.parse(readFileSync(new URL('../../../tests/fixtures/legacy_experiment.json', import.meta.url)));
+  legacy.schema_version = '1.4';
+  legacy.config.comparison_axis = 'context_policy';
+  legacy.config.baseline_agent = { runtime_backend: 'handwritten', runtime_strategy: 'handwritten', context_policy: {
+    schema_version: '1.0', algorithm_version: 'tool-round-window-v1', mode: 'full', max_tool_rounds: null,
+  } };
+  legacy.config.recovery_agent = { ...legacy.config.baseline_agent, context_policy: {
+    ...legacy.config.baseline_agent.context_policy, mode: 'recent_tool_rounds', max_tool_rounds: 1,
+  } };
+  for (const pair of legacy.pairs) { pair.retry_eligible = null; pair.recovered = false; }
+  legacy.metrics.retry_eligible_count = null;
+  legacy.metrics.retry_recovery_count = null;
+  legacy.metrics.retry_recovery_rate = null;
+  assert.equal(parseApi(experimentArtifactSchema, legacy).config.recovery_agent.context_policy.max_tool_rounds, 1);
+  for (const corrupt of [
+    (v) => { v.schema_version = '1.3'; },
+    (v) => { v.config.recovery_agent.context_policy.max_tool_rounds = 0; },
+    (v) => { v.config.recovery_agent.runtime_backend = 'langgraph'; },
+    (v) => { v.metrics.retry_recovery_rate = 0; },
+    (v) => { v.pairs[0].recovered = true; },
+  ]) {
+    const invalid = structuredClone(legacy); corrupt(invalid);
+    assert.throws(() => parseApi(experimentArtifactSchema, invalid));
   }
 });

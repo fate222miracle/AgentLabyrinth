@@ -6,8 +6,12 @@ from pathlib import Path
 from time import monotonic
 from unittest.mock import patch
 
+import pytest
+
 from apps.api.schemas import CreateEpisodeRequest
 from apps.api.service import EpisodeService
+from packages.domain.ports import ModelProviderError
+from packages.providers.aihubmix import list_available_model_ids
 
 
 def test_slow_catalog_check_leaves_event_loop_responsive(tmp_path: Path) -> None:
@@ -61,3 +65,36 @@ def test_simultaneous_catalog_reads_use_one_upstream_lookup(tmp_path: Path) -> N
 
         asyncio.run(exercise())
     lookup.assert_called_once()
+
+
+def test_catalog_failure_cache_expires_and_logs_no_exception_details(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A transient failure recovers after 30 seconds without leaking private errors."""
+    service = EpisodeService(artifacts_dir=tmp_path, live_model_catalog=True)
+    with (
+        patch("apps.api.service.monotonic", side_effect=[100, 110, 131]),
+        patch(
+            "apps.api.service.list_available_model_ids",
+            side_effect=[TimeoutError("private credential-like detail"), {"coding-glm-5.3-free"}],
+        ) as lookup,
+    ):
+        assert service.get_meta().model_catalog_status == "unavailable"
+        assert service.get_meta().model_catalog_status == "unavailable"
+        recovered = service.get_meta()
+    assert recovered.model_catalog_status == "live"
+    assert any(model.id == "coding-glm-5.3-free" for model in recovered.models)
+    assert lookup.call_count == 2
+    assert "TimeoutError" in caplog.text
+    assert "private credential-like detail" not in caplog.text
+
+
+def test_catalog_timeout_has_sanitized_provider_code() -> None:
+    """Use the same timeout code as model requests, with no upstream error text."""
+    with (
+        patch("packages.providers.aihubmix.get_aihubmix_api_key", return_value="test-only"),
+        patch("urllib.request.urlopen", side_effect=TimeoutError("private detail")),
+    ):
+        with pytest.raises(ModelProviderError, match="REQUEST_TIMEOUT") as failure:
+            list_available_model_ids()
+    assert "private detail" not in str(failure.value)

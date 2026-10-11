@@ -1,0 +1,74 @@
+import { readFile } from 'node:fs/promises';
+import { expect, test } from '@playwright/test';
+import { experimentResponseSchema, episodeResponseSchema, parseApi } from '../src/apiContracts';
+import { flowFrames } from '../src/flowFrames';
+
+test('context comparison runs from Web and preserves history, CSV and request diagnostics', async ({ page, request }, testInfo) => {
+  await page.goto('/');
+  await page.getByLabel('对照变量', { exact: true }).selectOption('context_policy');
+  await page.getByLabel('评测模型', { exact: true }).selectOption('fake');
+  await page.locator('#exp-scenario-select').selectOption('clean');
+  await page.getByRole('button', { name: '清空', exact: true }).click();
+  await page.locator('#task-checkbox-list label').filter({ hasText: 'order-status-001' }).getByRole('checkbox').check();
+  await page.locator('#task-checkbox-list label').filter({ hasText: 'order-status-007' }).getByRole('checkbox').check();
+  await page.getByLabel('右侧保留完整工具轮次').fill('1.5');
+  await page.locator('#run-exp-button').click();
+  await expect(page.getByText('上下文窗口须为 1–100 的整数', { exact: true })).toBeVisible();
+  await page.getByLabel('右侧保留完整工具轮次').fill('1');
+  await page.locator('#run-exp-button').click();
+  await expect(page).toHaveURL(/experiment_id=/);
+  const experimentId = new URL(page.url()).searchParams.get('experiment_id')!;
+  const original = parseApi(experimentResponseSchema, await (await request.get(`/api/v1/experiments/${experimentId}`)).json()).experiment;
+  expect(original.schema_version).toBe('1.4');
+  expect(original.metrics.baseline_success_count).toBe(2);
+  expect(original.metrics.recovery_success_count).toBe(1);
+  expect(original.metrics.retry_recovery_rate).toBeNull();
+  const savedContext = page.getByLabel('已保存上下文对照');
+  await expect(savedContext).toContainText('最近 1 轮');
+  await expect(page.getByText('仅完整历史通过', { exact: true })).toBeVisible();
+  await page.locator('.experiment-draft > summary').click();
+  await page.getByLabel('右侧保留完整工具轮次').fill('2');
+  await expect(savedContext).toContainText('最近 1 轮');
+  const mutations: string[] = [];
+  page.on('request', (r) => { if (r.url().includes('/api/') && r.method() !== 'GET') mutations.push(r.url()); });
+  await page.reload();
+  await expect(savedContext).toContainText('最近 1 轮');
+  const downloadEvent = page.waitForEvent('download');
+  await page.locator('#btn-export-experiment-csv').click();
+  const download = await downloadEvent;
+  const csv = await readFile((await download.path())!, 'utf8');
+  expect(csv).toContain('context_mode');
+  expect(csv).toContain('"full"');
+  expect(csv).toContain('"recent_tool_rounds","1"');
+  for (const line of csv.trim().split('\r\n').slice(1)) {
+    expect(line.split(',').slice(19, 21)).toEqual(['', '']);
+  }
+  await download.saveAs(testInfo.outputPath('context-comparison.csv'));
+  for (const [width, height] of [[1440, 900], [1280, 800], [768, 1024], [390, 844]]) {
+    await page.setViewportSize({ width, height });
+    await savedContext.scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
+    await page.screenshot({ path: testInfo.outputPath(`context-result-${width}.png`) });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole('button', { name: '查看 order-status-007 的 最近完整工具轮次 Trace', exact: true }).click();
+  const episodeId = new URL(page.url()).searchParams.get('episode_id')!;
+  const artifact = parseApi(episodeResponseSchema, await (await request.get(`/api/v1/episodes/${episodeId}`)).json()).artifact;
+  const frames = flowFrames(artifact.events, artifact.run_config.environment_version ?? '');
+  const projected = frames.findIndex((frame) => frame.phase === 'request' && Number((frame.payload.context as Record<string, unknown>)?.dropped_messages_count) > 0);
+  expect(projected).toBeGreaterThan(0);
+  const slider = page.getByRole('slider', { name: '动画进度' });
+  await slider.fill(String(projected));
+  await slider.dispatchEvent('input');
+  const diagnostic = page.getByLabel('已保存模型输入诊断');
+  await expect(diagnostic).toContainText('剔除消息数');
+  await expect(diagnostic).toContainText('不是 Token');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.screenshot({ path: testInfo.outputPath('context-request.png') });
+  await page.goBack();
+  await expect(savedContext).toContainText('最近 1 轮');
+  await page.goForward();
+  await expect(page).toHaveURL(new RegExp(`episode_id=${episodeId}`));
+  expect(mutations).toEqual([]);
+  expect(parseApi(experimentResponseSchema, await (await request.get(`/api/v1/experiments/${experimentId}`)).json()).experiment).toEqual(original);
+});

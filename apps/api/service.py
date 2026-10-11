@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -42,12 +43,27 @@ from packages.application.experiment import (
 from packages.application.reference_pricing import reference_price_version
 from packages.application.regression import fixed_config
 from packages.application.trace import read_artifact, write_text_atomically
-from packages.domain.models import AgentSpec, EpisodeArtifact, RunConfig, TaskSpec, TraceEvent
-from packages.domain.ports import Environment, Evaluator, ModelProvider, ToolValidator
+from packages.domain.models import (
+    AgentSpec,
+    ContextPolicy,
+    EpisodeArtifact,
+    RunConfig,
+    TaskSpec,
+    TraceEvent,
+)
+from packages.domain.ports import (
+    Environment,
+    Evaluator,
+    ModelProvider,
+    ModelProviderError,
+    ToolValidator,
+)
 from packages.environments.bfcl.adapter import ROOT as BFCL_ROOT
 from packages.environments.bfcl.adapter import BFCLAdapter
 from packages.environments.bfcl.environment import BFCLEnvironment
 from packages.environments.tool_lab.environment import (
+    TOOL_LAB_TOOL_SET_VERSION,
+    TOOL_LAB_TOOL_SET_VERSIONS,
     ToolLabEnvironment,
     create_tool_lab_registry,
 )
@@ -86,7 +102,11 @@ class EpisodeService:
         tasks_dir: Path | None = None,
         models_path: Path | None = None,
         live_model_catalog: bool = False,
+        tool_set_version: str = TOOL_LAB_TOOL_SET_VERSION,
     ) -> None:
+        if tool_set_version not in TOOL_LAB_TOOL_SET_VERSIONS:
+            raise ValueError("Unsupported ToolLab tool description version")
+        self.tool_set_version = tool_set_version
         self.artifacts_dir = artifacts_dir or DEFAULT_ARTIFACTS_DIR
         self.tasks_dir = tasks_dir or DEFAULT_TASKS_DIR
         self.models_path = models_path or DEFAULT_MODELS_PATH
@@ -227,20 +247,26 @@ class EpisodeService:
                     self._live_model_ids = list_available_model_ids()
                     self._model_catalog_status = "live"
                     self._model_catalog_expires_at = now + 300
-                except Exception:
+                except Exception as exc:
+                    logging.getLogger(__name__).warning(
+                        "AIHubMix model catalog unavailable (%s)",
+                        exc.code if isinstance(exc, ModelProviderError) else type(exc).__name__,
+                    )
                     self._live_model_ids = set()
                     self._model_catalog_status = "unavailable"
                     self._model_catalog_expires_at = now + 30
             return self._live_model_ids
 
-    def _configured_model_ids(self) -> set[str]:
+    def _configured_model_ids(self, *, catalog_optional: bool = False) -> set[str]:
         """Read the curated free-model shortlist from the single catalog file."""
         try:
             data = json.loads(self.models_path.read_text(encoding="utf-8"))
             return {
                 item["id"]
                 for item in data.get("models", [])
-                if item.get("provider") == "aihubmix" and isinstance(item.get("id"), str)
+                if item.get("provider") == "aihubmix"
+                and isinstance(item.get("id"), str)
+                and (not catalog_optional or item.get("allow_catalog_missing") is True)
             }
         except (OSError, ValueError, TypeError):
             return set()
@@ -366,7 +392,23 @@ class EpisodeService:
 
         if self.live_model_catalog:
             live_ids = self._get_live_model_ids()
-            models = [model for model in models if model.provider == "fake" or model.id in live_ids]
+            exceptions = self._configured_model_ids(catalog_optional=True)
+            models = [
+                model
+                for model in models
+                if model.provider == "fake" or model.id in live_ids or model.id in exceptions
+            ]
+            models = [
+                model.model_copy(
+                    update={
+                        "notes": model.notes + " 当前目录未确认此 ID；仅依据带日期实测允许尝试。"
+                        "可用性以实际运行结果为准。"
+                    }
+                )
+                if model.id in exceptions and model.id not in live_ids
+                else model
+                for model in models
+            ]
             if default_model not in {model.id for model in models}:
                 default_model = next(
                     (model.id for model in models if model.provider == "aihubmix"), "fake"
@@ -421,7 +463,9 @@ class EpisodeService:
         )
 
     def _require_live_model(self, model_id: str) -> None:
-        """Reject IDs absent from the visible catalog; invocation remains unverified."""
+        """Keep catalog preflight except for explicitly configured tested candidates."""
+        if model_id in self._configured_model_ids(catalog_optional=True):
+            return
         if self.live_model_catalog and model_id not in self._get_live_model_ids():
             raise ValueError("Model is not visible in the current AIHubMix catalog")
 
@@ -494,6 +538,11 @@ class EpisodeService:
             }
         )
 
+        if req.context_policy is not None:
+            agent = agent.model_copy(
+                update={"schema_version": "1.2", "context_policy": req.context_policy}
+            )
+
         # 3. Assemble components
         environment: Environment
         evaluator: Evaluator
@@ -505,9 +554,11 @@ class EpisodeService:
             environment_version = "bfcl-adapted-single-call-v1"
             agent = agent.model_copy(update={"tool_set_version": "bfcl-v4-pinned"})
         else:
+            agent = agent.model_copy(update={"tool_set_version": self.tool_set_version})
             if req.tool_transport == "mcp":
                 environment = MCPToolLabEnvironment(
-                    MCP_DISCONNECTED_URL if req.fault_profile == "mcp_disconnect" else None
+                    MCP_DISCONNECTED_URL if req.fault_profile == "mcp_disconnect" else None,
+                    tool_set_version=agent.tool_set_version,
                 )
                 validator = environment._validator
             else:
@@ -515,7 +566,10 @@ class EpisodeService:
                 validator = DefaultToolValidator(registry)
                 executor = ToolExecutor(registry, validator)
                 environment = ToolLabEnvironment(
-                    registry=registry, executor=executor, validator=validator
+                    registry=registry,
+                    executor=executor,
+                    validator=validator,
+                    tool_set_version=agent.tool_set_version,
                 )
             evaluator = OrderStatusEvaluator()
             environment_version = (
@@ -607,7 +661,9 @@ class EpisodeService:
             await asyncio.to_thread(self._require_live_model, model_id)
             provider = AIHubMixModelProvider(min_request_interval=13.0)
         environment, validator, evaluator = self._saved_environment(
-            checkpoint.task, checkpoint.run_config.environment_version
+            checkpoint.task,
+            checkpoint.run_config.environment_version,
+            checkpoint.agent.tool_set_version,
         )
         return await resume_checkpointed_episode(
             episode_id,
@@ -618,7 +674,7 @@ class EpisodeService:
         )
 
     def _saved_environment(
-        self, task: TaskSpec, environment_version: str
+        self, task: TaskSpec, environment_version: str, tool_set_version: str = "v1.0.0"
     ) -> tuple[Environment, ToolValidator, Evaluator]:
         """Reconstruct one pinned environment for resume or explicit rerun."""
         if environment_version == "bfcl-adapted-single-call-v1":
@@ -638,7 +694,8 @@ class EpisodeService:
             evaluator: Evaluator = BFCLEvaluator()
         elif environment_version == "tool-lab-mcp-v1":
             environment = MCPToolLabEnvironment(
-                MCP_DISCONNECTED_URL if task.initial_state.get("mcp_disconnect") else None
+                MCP_DISCONNECTED_URL if task.initial_state.get("mcp_disconnect") else None,
+                tool_set_version=tool_set_version,
             )
             validator = environment._validator
             evaluator = OrderStatusEvaluator()
@@ -646,7 +703,10 @@ class EpisodeService:
             registry = create_tool_lab_registry()
             validator = DefaultToolValidator(registry)
             environment = ToolLabEnvironment(
-                registry=registry, executor=ToolExecutor(registry, validator), validator=validator
+                registry=registry,
+                executor=ToolExecutor(registry, validator),
+                validator=validator,
+                tool_set_version=tool_set_version,
             )
             evaluator = OrderStatusEvaluator()
         else:
@@ -701,7 +761,7 @@ class EpisodeService:
             scenario = None
             provider = AIHubMixModelProvider(min_request_interval=13.0)
         environment, validator, evaluator = self._saved_environment(
-            source.task, source.run_config.environment_version
+            source.task, source.run_config.environment_version, source.agent.tool_set_version
         )
         rerun_id = uuid4()
         if scenario is not None:
@@ -808,6 +868,12 @@ class EpisodeService:
         # 3. Run paired experiment
         baseline_agent = self._agent_with_token_budget(baseline_agent, req.token_budget)
         recovery_agent = self._agent_with_token_budget(recovery_agent, req.token_budget)
+        baseline_agent = baseline_agent.model_copy(
+            update={"tool_set_version": self.tool_set_version}
+        )
+        recovery_agent = recovery_agent.model_copy(
+            update={"tool_set_version": self.tool_set_version}
+        )
         baseline_agent = self._agent_with_time_budget(baseline_agent, req.max_execution_time_ms)
         recovery_agent = self._agent_with_time_budget(recovery_agent, req.max_execution_time_ms)
         if req.comparison_axis == "runtime_backend":
@@ -838,6 +904,30 @@ class EpisodeService:
                     "runtime_backend": req.runtime_backend,
                 }
             )
+        if req.context_policy is not None:
+            baseline_agent = baseline_agent.model_copy(
+                update={
+                    "schema_version": "1.2",
+                    "context_policy": ContextPolicy(mode="full")
+                    if req.comparison_axis == "context_policy"
+                    else req.context_policy,
+                }
+            )
+            if req.comparison_axis == "context_policy":
+                baseline_agent = baseline_agent.model_copy(
+                    update={"runtime_strategy": req.runtime_strategy}
+                )
+                recovery_agent = baseline_agent.model_copy(
+                    update={
+                        "id": uuid4(),
+                        "name": f"{baseline_agent.name}-recent-context",
+                        "context_policy": req.context_policy,
+                    }
+                )
+            else:
+                recovery_agent = recovery_agent.model_copy(
+                    update={"schema_version": "1.2", "context_policy": req.context_policy}
+                )
         config_metadata = {
             "provider": req.provider,
             "requested_model": req.model,
@@ -860,6 +950,9 @@ class EpisodeService:
                 reference_price_version(req.model) if req.provider == "aihubmix" else None
             ),
         }
+
+        if req.max_total_tokens is not None:
+            config_metadata["max_total_tokens"] = req.max_total_tokens
 
         return create_experiment_plan(
             baseline_agent,

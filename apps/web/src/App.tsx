@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { changedStateFields, groupTraceByStep, keyFields, stepOutcome, stepTitle } from './traceSteps';
+import { changedStateFields, groupTraceByStep, keyFields, toolFeedbackFields, stepOutcome, stepTitle } from './traceSteps';
+import { ReadableFields, fieldLabels } from './ReadableFields';
 import { McpFlowReplay } from './McpFlowReplay';
 import { summarizeEpisode, type EpisodeHistorySummary, type ExperimentDashboardItem } from './historySummary';
 import { ExperimentDashboard } from './ExperimentDashboard';
@@ -97,40 +98,6 @@ function snapshotAt(
   return { state, source };
 }
 
-const fieldLabels: Record<string, string> = {
-  answer: '答案', evidence: '引用证据', acquired_evidence: '已获取证据',
-  records: '查询记录', documents: '文档', document: '文档内容',
-  document_id: '文档 ID', order_id: '订单 ID', status: '状态',
-  evidence_id: '证据 ID', target_order_id: '目标订单', task_kind: '任务类型',
-  document_query: '文档检索目标', code: '错误码', message: '错误说明', retryable: '可重试',
-  title: '标题', content: '内容', feedback: '反馈',
-  submission: '提交内容', accepted: '已接受', proposed_call: '已提交调用',
-  table: '数据表', filters: '筛选条件', query: '检索词', top_k: '返回上限',
-  description: '任务说明', question: '任务问题', done: '任务结束',
-  termination_reason: '终止原因', detail: '详情', success: '成功',
-};
-
-function ReadableValue({ value }: { value: unknown }) {
-  if (value === null || value === undefined) return <span className="story-muted">无</span>;
-  if (typeof value === 'boolean') return <span>{value ? '是' : '否'}</span>;
-  if (Array.isArray(value)) {
-    if (value.length === 0) return <span className="story-muted">空</span>;
-    return <div className="story-value-list">{value.map((item, index) =>
-      <div className="story-value-item" key={index}><ReadableValue value={item} /></div>)}</div>;
-  }
-  if (isRecord(value)) return Object.keys(value).length > 0
-    ? <ReadableFields entries={Object.entries(value)} /> : <span className="story-muted">空</span>;
-  return <span className="story-value-text">{String(value)}</span>;
-}
-
-function ReadableFields({ entries }: { entries: [string, unknown][] }) {
-  return <dl className="story-fields">{entries.map(([key, value]) =>
-    <div className="story-field" key={key}>
-      <dt title={key}>{fieldLabels[key] ?? key.replace(/_/g, ' ')}</dt>
-      <dd><ReadableValue value={value} /></dd>
-    </div>)}</dl>;
-}
-
 function downloadFile(filename: string, content: string, contentType: string): void {
   const blob = new Blob([content], { type: contentType });
   const url = URL.createObjectURL(blob);
@@ -160,29 +127,31 @@ function experimentCsv(experiment: ExperimentArtifact): string {
     'experiment_id', 'config_hash', 'comparison_axis', 'task_id', 'seed', 'repeat_index',
     'arm', 'episode_id', 'success', 'termination_reason', 'steps', 'model_calls',
     'tool_calls', 'tokens', 'duration_ms', 'cost_usd', 'official_reference_cost_usd', 'tool_selection_accuracy',
-    'tool_argument_validity_rate', 'pair_retry_eligible', 'pair_recovered',
+    'tool_argument_validity_rate', 'pair_retry_eligible', 'pair_recovered', 'context_mode', 'context_max_tool_rounds',
   ];
   const axis = typeof experiment.config.comparison_axis === 'string'
     ? experiment.config.comparison_axis : 'recovery_policy';
   const rows = experiment.pairs.flatMap((pair) => [
     [experiment.experiment_id, experiment.config_hash, axis, pair.task_id, pair.seed,
-      pair.repeat_index ?? 1, axis === 'runtime_backend' ? 'reference' : 'baseline',
+      pair.repeat_index ?? 1, axis === 'context_policy' ? 'full' : axis === 'runtime_backend' ? 'reference' : 'baseline',
       pair.baseline_episode_id, pair.baseline_success,
       pair.baseline_termination_reason, pair.baseline_steps, pair.baseline_model_calls,
       pair.baseline_tool_calls, pair.baseline_tokens, pair.baseline_duration_ms,
       pair.baseline_cost, pair.baseline_reference_cost, pair.baseline_tool_selection_accuracy,
       pair.baseline_tool_argument_validity_rate,
-      axis === 'runtime_backend' ? null : pair.retry_eligible,
-      axis === 'runtime_backend' ? null : pair.recovered],
+      axis !== 'recovery_policy' ? null : pair.retry_eligible,
+      axis !== 'recovery_policy' ? null : pair.recovered,
+      experiment.config.baseline_agent?.context_policy?.mode, experiment.config.baseline_agent?.context_policy?.max_tool_rounds],
     [experiment.experiment_id, experiment.config_hash, axis, pair.task_id, pair.seed,
-      pair.repeat_index ?? 1, axis === 'runtime_backend' ? 'langgraph' : 'recovery',
+      pair.repeat_index ?? 1, axis === 'context_policy' ? 'recent_tool_rounds' : axis === 'runtime_backend' ? 'langgraph' : 'recovery',
       pair.recovery_episode_id, pair.recovery_success,
       pair.recovery_termination_reason, pair.recovery_steps, pair.recovery_model_calls,
       pair.recovery_tool_calls, pair.recovery_tokens, pair.recovery_duration_ms,
       pair.recovery_cost, pair.recovery_reference_cost, pair.recovery_tool_selection_accuracy,
       pair.recovery_tool_argument_validity_rate,
-      axis === 'runtime_backend' ? null : pair.retry_eligible,
-      axis === 'runtime_backend' ? null : pair.recovered],
+      axis !== 'recovery_policy' ? null : pair.retry_eligible,
+      axis !== 'recovery_policy' ? null : pair.recovered,
+      experiment.config.recovery_agent?.context_policy?.mode, experiment.config.recovery_agent?.context_policy?.max_tool_rounds],
   ]);
   return `\uFEFF${[headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
 }
@@ -218,7 +187,12 @@ function parseSeedList(value: string): number[] | null {
   return new Set(seeds).size === seeds.length ? seeds : null;
 }
 
-function comparisonLabel(pair: PairComparison, axis: 'recovery_policy' | 'runtime_backend'): string {
+function comparisonLabel(pair: PairComparison, axis: 'recovery_policy' | 'runtime_backend' | 'context_policy'): string {
+  if (axis === 'context_policy') {
+    if (pair.baseline_success && pair.recovery_success) return '两种上下文均通过';
+    if (!pair.baseline_success && !pair.recovery_success) return '两种上下文均未通过';
+    return pair.baseline_success ? '仅完整历史通过' : '仅最近轮次通过';
+  }
   if (axis === 'runtime_backend') {
     if (pair.baseline_success && pair.recovery_success) return '两种 Runtime 均通过';
     if (!pair.baseline_success && !pair.recovery_success) return '两种 Runtime 均未通过';
@@ -256,6 +230,8 @@ async function copyTextToClipboard(value: string, label: string): Promise<string
 export default function App() {
   const [activeTab, setActiveTab] = useState<'single' | 'experiment'>('experiment');
   const [meta, setMeta] = useState<MetaResponse | null>(null);
+  const [metadataLoading, setMetadataLoading] = useState(false);
+  const [metadataError, setMetadataError] = useState<string | null>(null);
 
   // Single Episode states
   const [selectedModel, setSelectedModel] = useState<string>('');
@@ -268,7 +244,7 @@ export default function App() {
   const [artifact, setArtifact] = useState<EpisodeArtifact | null>(null);
   const [liveRun, setLiveRun] = useState<{
     events: TraceEvent[]; episodeId: string | null; model: string;
-    environmentVersion: string; status: 'running' | 'interrupted';
+    environmentVersion: string; status: 'running' | 'interrupted' | 'completed';
   } | null>(null);
   const [recentEpisodeIds, setRecentEpisodeIds] = useState<string[]>([]);
   const [episodeHistorySummaries, setEpisodeHistorySummaries] = useState<
@@ -296,7 +272,8 @@ export default function App() {
   const [expModel, setExpModel] = useState<string>('');
   const [expScenario, setExpScenario] = useState<string>('invalid-then-success');
   const [expFaultProfile, setExpFaultProfile] = useState<string>('none');
-  const [comparisonAxis, setComparisonAxis] = useState<'recovery_policy' | 'runtime_backend'>('recovery_policy');
+  const [contextWindow, setContextWindow] = useState(2);
+  const [comparisonAxis, setComparisonAxis] = useState<'recovery_policy' | 'runtime_backend' | 'context_policy'>('recovery_policy');
   const [expRuntimeBackend, setExpRuntimeBackend] = useState<'handwritten' | 'langgraph'>('handwritten');
   const [expRuntimeStrategy, setExpRuntimeStrategy] = useState<'handwritten' | 'handwritten_recovery'>('handwritten_recovery');
   const [singleRuntimeBackend, setSingleRuntimeBackend] = useState<'handwritten' | 'langgraph'>('handwritten');
@@ -307,6 +284,7 @@ export default function App() {
   const [expRepeatCount, setExpRepeatCount] = useState<number>(1);
   const [expTokenBudget, setExpTokenBudget] = useState<number | null>(8000);
   const [expReferenceBudget, setExpReferenceBudget] = useState<string>('');
+  const [expGlobalTokenBudget, setExpGlobalTokenBudget] = useState<string>('');
   const [singleTokenBudget, setSingleTokenBudget] = useState<number | null>(8000);
   const [executionSeconds, setExecutionSeconds] = useState(300);
   const [expExecutionSeconds, setExpExecutionSeconds] = useState(300);
@@ -332,6 +310,7 @@ export default function App() {
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const metadataRequests = useRef(new RequestGeneration());
   const pageRequests = useRef(new RequestGeneration());
   const jobControlRequests = useRef(new RequestGeneration());
 
@@ -418,9 +397,14 @@ export default function App() {
           } else {
             setResumableJobIds((ids) => ids.filter((id) => id !== activeJobId));
           }
-          if (job.status === 'failed') setErrorMsg(job.error_code === 'REFERENCE_COST_BUDGET_EXCEEDED'
-            ? '已达到原厂标价参考预算；已完成的 Episode 已保存。若要提高预算，请创建新实验。'
-            : '实验执行失败，已完成的 Episode 仍保留；请检查错误后创建新实验。');
+          if (job.status === 'failed') {
+            const budgetErrors: Record<string, string> = {
+              REFERENCE_COST_BUDGET_EXCEEDED: '已达到原厂标价参考预算；已完成的 Episode 已保存。若要提高预算，请创建新实验。',
+              EXPERIMENT_TOKEN_BUDGET_EXCEEDED: '已达到整场实验 Token 预算，后续运行已停止；已完成的 Episode 已保存。提高预算须创建新实验。',
+              EXPERIMENT_TOKEN_USAGE_UNKNOWN: '存在未报告或不一致的模型用量，已停止后续运行；已保存记录保留，不能按零继续累计。',
+            };
+            setErrorMsg(budgetErrors[job.error_code ?? ''] ?? '实验执行失败，已完成的 Episode 仍保留；请检查错误后创建新实验。');
+          }
         } else {
           timer = window.setTimeout(poll, 900);
         }
@@ -454,6 +438,30 @@ export default function App() {
       .finally(() => { if (!controller.signal.aborted) setDashboardLoading(false); });
   };
 
+  const loadMetadata = async (initialize = false) => {
+    const metadataRequestId = metadataRequests.current.begin();
+    const initializeDefaults = initialize || meta === null;
+    setMetadataLoading(true);
+    setMetadataError(null);
+    try {
+      const data = await readApi(await fetch('/api/v1/meta'), metaSchema);
+      if (!metadataRequests.current.isCurrent(metadataRequestId)) return;
+      setMeta(data);
+      setSelectedModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : data.default_model);
+      setExpModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : data.default_model);
+      if (initializeDefaults && data.tasks.length > 0) {
+        const initialTask = data.tasks.find((task) => task.suite === 'tool_lab_core') ?? data.tasks[0];
+        setSelectedSuite(initialTask.suite);
+        setSelectedSingleTask(initialTask.id);
+        setExpTasks(data.tasks.filter((task) => task.suite === 'tool_lab_core').map((task) => task.id));
+      }
+    } catch (err: unknown) {
+      if (metadataRequests.current.isCurrent(metadataRequestId)) setMetadataError(err instanceof Error ? err.message : '目录读取失败');
+    } finally {
+      if (metadataRequests.current.isCurrent(metadataRequestId)) setMetadataLoading(false);
+    }
+  };
+
   // 1. Fetch Metadata and parse initial query parameters
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -461,26 +469,7 @@ export default function App() {
     const epId = params.get('episode_id');
     const jobId = params.get('experiment_job_id');
 
-    fetch('/api/v1/meta')
-      .then((res) => {
-        return readApi(res, metaSchema);
-      })
-      .then((data: MetaResponse) => {
-        setMeta(data);
-        if (data.default_model) {
-          setSelectedModel(data.default_model);
-          setExpModel(data.default_model);
-        }
-        if (data.tasks && data.tasks.length > 0) {
-          const initialTask = data.tasks.find((task) => task.suite === 'tool_lab_core') ?? data.tasks[0];
-          setSelectedSuite(initialTask.suite);
-          setSelectedSingleTask(initialTask.id);
-          setExpTasks(data.tasks.filter((t) => t.suite === 'tool_lab_core').map((t) => t.id));
-        }
-      })
-      .catch((err) => {
-        setErrorMsg(`API 连通性错误: ${err.message}`);
-      });
+    void loadMetadata(true);
     fetch('/api/v1/episodes/resumable')
       .then((res) => readApi(res, resumableIdsSchema))
       .then((ids: string[]) => setResumableEpisodeIds(ids))
@@ -557,7 +546,7 @@ export default function App() {
   useEffect(() => {
     setReplayPlaying(false);
     setEventTypeFilter('ALL');
-    setReplayIndex(Math.max((artifact?.events.length ?? 1) - 1, 0));
+    setReplayIndex(0);
     setExpandedEvents({});
   }, [artifact?.episode.episode_id]);
 
@@ -695,6 +684,11 @@ export default function App() {
       environmentVersion: selectedSuite !== 'tool_lab_core' ? 'bfcl-adapted-single-call-v1'
         : selectedSingleTaskMeta?.supports_mcp && singleToolTransport === 'mcp' ? 'tool-lab-mcp-v1' : 'tool-lab-m0-v1',
       status: 'running' });
+    requestAnimationFrame(() => {
+      if (!pageRequests.current.isCurrent(requestId)) return;
+      tracePanelRef.current?.focus({ preventScroll: true });
+      tracePanelRef.current?.scrollIntoView({ block: 'start' });
+    });
     try {
       const currentModelObj = meta?.models.find((m) => m.id === selectedModel);
       const isFake = selectedModel === 'fake' || currentModelObj?.provider === 'fake';
@@ -734,7 +728,10 @@ export default function App() {
       if (!pageRequests.current.isCurrent(requestId)) return;
       const newArtifact = data.artifact;
       setArtifact(newArtifact);
-      setLiveRun(null);
+      setLiveRun((current) => current ? { ...current, events: newArtifact.events,
+        model: newArtifact.agent.model.model,
+        environmentVersion: newArtifact.run_config.environment_version ?? current.environmentVersion,
+        episodeId: newArtifact.episode.episode_id, status: 'completed' } : current);
       addRecentEpisodeId(newArtifact.episode.episode_id);
 
       const url = new URL(window.location.href);
@@ -854,15 +851,23 @@ export default function App() {
       setErrorMsg('原厂标价参考预算必须是正数 USD，或留空');
       return;
     }
+    if (expGlobalTokenBudget !== '' && (!/^\d+$/.test(expGlobalTokenBudget)
+      || Number(expGlobalTokenBudget) < 1 || Number(expGlobalTokenBudget) > 1_000_000_000)) {
+      setErrorMsg('整场实验 Token 预算须为 1–1,000,000,000 的整数，或留空');
+      return;
+    }
     const episodeCount = expTasks.length * seeds.length * expRepeatCount * 2;
     const requestId = pageRequests.current.begin();
     setActiveJobId(null);
     setExperimentJob(null);
     setExperiment(null);
-    beginLoading(`正在串行执行${comparisonAxis === 'runtime_backend' ? 'Runtime' : '恢复策略'}对照，预计 ${episodeCount} 个 Episode。`);
+    beginLoading(`正在串行执行${comparisonAxis === 'context_policy' ? '上下文' : comparisonAxis === 'runtime_backend' ? 'Runtime' : '恢复策略'}对照，预计 ${episodeCount} 个 Episode。`);
     setErrorMsg(null);
     let started = false;
     try {
+      if (comparisonAxis === 'context_policy' && (!Number.isInteger(contextWindow) || contextWindow < 1 || contextWindow > 100)) {
+        throw new Error('上下文窗口须为 1–100 的整数');
+      }
       const currentModelObj = meta?.models.find((m) => m.id === expModel);
       const isFake = expModel === 'fake' || currentModelObj?.provider === 'fake';
 
@@ -874,9 +879,11 @@ export default function App() {
         seeds,
         repeat_count: expRepeatCount,
         token_budget: isFake ? null : expTokenBudget,
+        max_total_tokens: expGlobalTokenBudget === '' ? null : Number(expGlobalTokenBudget),
         max_execution_time_ms: expExecutionSeconds * 1000,
         max_reference_cost_usd: isFake || expReferenceBudget === '' ? null : expReferenceBudget,
         comparison_axis: comparisonAxis,
+        ...(comparisonAxis === 'context_policy' ? { context_policy: { mode: 'recent_tool_rounds', max_tool_rounds: contextWindow } } : {}),
         runtime_backend: expRuntimeBackend,
         runtime_strategy: expRuntimeStrategy,
         fault_profile: isFake ? expFaultProfile : 'none',
@@ -1000,7 +1007,15 @@ export default function App() {
     : artifact?.events.filter(
         (event) => eventTypeFilter === 'ALL' || event.event_type === eventTypeFilter,
       ) ?? [];
-  const safeReplayIndex = Math.min(replayIndex, Math.max(visibleEvents.length - 1, 0));
+  // One saved event anchors all views; grouped steps never overwrite that position.
+  const replayAnchor = artifact?.events[replayIndex];
+  const safeReplayIndex = Math.max(0, replayView === 'story'
+    ? traceSteps.findIndex((group) => group.events.some((event) => event.event_id === replayAnchor?.event_id))
+    : visibleEvents.findIndex((event) => event.event_id === replayAnchor?.event_id));
+  const selectReplayIndex = (index: number) => {
+    const target = visibleEvents[index];
+    if (target && artifact) setReplayIndex(artifact.events.findIndex((event) => event.event_id === target.event_id));
+  };
   const activeReplayEvent = visibleEvents[safeReplayIndex];
   const activeStep = replayView === 'story' ? traceSteps[safeReplayIndex] : undefined;
   const proposedCall = activeStep?.events.find((event) => event.event_type === 'TOOL_CALL_PROPOSED');
@@ -1026,20 +1041,7 @@ export default function App() {
     || validation?.payload.permitted === false);
   const stepFailed = Boolean(toolResult?.event_type === 'TOOL_FAILED'
     || validationRejected || finishedEvent?.payload.success === false);
-  const toolFeedback = toolResult && isRecord(toolResult.payload.observation)
-    ? toolResult.payload.observation : toolResult?.payload;
-  const feedbackFields = isRecord(toolFeedback?.result) ? toolFeedback.result : toolFeedback;
-  const feedbackDetail = isRecord(feedbackFields?.error) ? feedbackFields.error : feedbackFields;
-  const toolName = String(proposedCall?.payload.name ?? '');
-  const preferredFeedbackKeys = toolResult?.event_type === 'TOOL_FAILED'
-    ? ['code', 'message', 'retryable']
-    : toolName === 'search_documents' ? ['documents']
-      : toolName === 'read_document' ? ['document']
-        : toolName === 'query_records' ? ['records']
-          : toolName === 'submit_answer' ? ['feedback']
-            : ['accepted', 'feedback'];
-  const visibleFeedback = isRecord(feedbackDetail)
-    ? keyFields(feedbackDetail, preferredFeedbackKeys) : [];
+  const visibleFeedback = toolFeedbackFields(toolResult, String(proposedCall?.payload.name ?? ''));
   const visibleStateChanges: [string, unknown][] = keyFields(Object.fromEntries(stateChanges),
     ['acquired_evidence', 'submission', 'done', 'proposed_call']).map(([key, value]) => [key,
       key === 'submission' && isRecord(value) ? value.answer
@@ -1054,12 +1056,12 @@ export default function App() {
     safeReplayIndex);
   useEffect(() => {
     if (!replayPlaying || visibleEvents.length < 2) return;
-    const timer = window.setInterval(
-      () => setReplayIndex((index) => Math.min(index + 1, visibleEvents.length - 1)),
+    const timer = window.setTimeout(
+      () => selectReplayIndex(Math.min(safeReplayIndex + 1, visibleEvents.length - 1)),
       replaySpeedMs,
     );
-    return () => window.clearInterval(timer);
-  }, [replayPlaying, replaySpeedMs, visibleEvents.length]);
+    return () => window.clearTimeout(timer);
+  }, [replayPlaying, replaySpeedMs, safeReplayIndex, artifact, replayView, eventTypeFilter]);
 
   useEffect(() => {
     if (replayPlaying && safeReplayIndex >= visibleEvents.length - 1) {
@@ -1067,13 +1069,15 @@ export default function App() {
     }
   }, [replayPlaying, safeReplayIndex, visibleEvents.length]);
   const parsedExpSeeds = parseSeedList(expSeedsText);
-  const activeComparisonAxis = experiment?.config.comparison_axis === 'runtime_backend'
+  const activeComparisonAxis = experiment?.config.comparison_axis === 'context_policy'
+    ? 'context_policy'
+    : experiment?.config.comparison_axis === 'runtime_backend'
     ? 'runtime_backend'
     : experiment?.config.comparison_axis === 'recovery_policy'
       ? 'recovery_policy'
       : experiment ? 'recovery_policy' : comparisonAxis;
-  const armLeftLabel = activeComparisonAxis === 'runtime_backend' ? 'Reference Runtime' : 'Baseline Policy';
-  const armRightLabel = activeComparisonAxis === 'runtime_backend' ? 'LangGraph Runtime' : 'Recovery Policy';
+  const armLeftLabel = activeComparisonAxis === 'context_policy' ? '完整历史' : activeComparisonAxis === 'runtime_backend' ? 'Reference Runtime' : 'Baseline Policy';
+  const armRightLabel = activeComparisonAxis === 'context_policy' ? '最近完整工具轮次' : activeComparisonAxis === 'runtime_backend' ? 'LangGraph Runtime' : 'Recovery Policy';
   const expEpisodeCount =
     expTasks.length * (parsedExpSeeds?.length ?? 0) * expRepeatCount * 2;
   const isExperimentRunReady = Boolean(meta) && Boolean(expModel) && expTasks.length > 0 &&
@@ -1087,6 +1091,370 @@ export default function App() {
       : parsedExpSeeds === null ? '请展开种子与预算设置，输入 1–10 个不重复整数 Seed。'
         : expRepeatCount < 1 || expRepeatCount > 10 ? '请展开种子与预算设置，将重复次数设为 1–10。'
           : isLoading ? loadingMessage : null;
+
+  const hasExperimentResult = Boolean(experiment) || experimentJob?.status === 'failed';
+  const experimentConfigPanel = (
+    <section className="card" id="exp-config-panel">
+      <details className="experiment-draft" open={!experiment}>
+        <summary>{experiment ? '配置下一次对照实验' : '配置对照实验'}<span>草稿 · 不修改已保存结果</span></summary>
+      <div className="card-title">
+        <span>{experiment ? '下次运行配置' : '配置对照实验'}</span>
+        <span className="badge badge-purple">受控变量对照</span>
+      </div>
+      <div className="card-desc">
+        严格固定模型、任务、工具集、种子与预算，每次只比较一种策略变量。
+      </div>
+
+      <div className="form-group">
+        <label htmlFor="comparison-axis" className="form-label">对照变量</label>
+        <select
+          id="comparison-axis"
+          className="form-select"
+          value={comparisonAxis}
+          onChange={(e) => setComparisonAxis(e.target.value as 'recovery_policy' | 'runtime_backend' | 'context_policy')}
+          disabled={isLoading}
+        >
+          <option value="recovery_policy">恢复策略：关闭 vs 一次参数纠错</option>
+          <option value="runtime_backend">执行框架：手写循环 vs LangGraph</option>
+          <option value="context_policy">上下文：完整历史 vs 最近完整工具轮次</option>
+        </select>
+      </div>
+
+      {comparisonAxis === 'runtime_backend' ? (
+        <>
+          <div className="form-group">
+            <label htmlFor="runtime-recovery-policy" className="form-label">两组相同的恢复策略</label>
+            <select id="runtime-recovery-policy" className="form-select" value={expRuntimeStrategy}
+              onChange={(e) => setExpRuntimeStrategy(e.target.value as 'handwritten' | 'handwritten_recovery')} disabled={isLoading}>
+              <option value="handwritten">关闭参数纠错</option>
+              <option value="handwritten_recovery">启用一次参数纠错</option>
+            </select>
+          </div>
+          <div className="strategy-summary" aria-label="Runtime 对照">
+            <div><strong>Reference</strong><span>Python 手写调度循环</span></div>
+            <div><strong>LangGraph</strong><span>StateGraph 独立节点调度</span></div>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="form-group">
+            <label htmlFor="policy-runtime" className="form-label">两组共同使用的 Runtime</label>
+            <select id="policy-runtime" className="form-select" value={expRuntimeBackend}
+              onChange={(e) => setExpRuntimeBackend(e.target.value as 'handwritten' | 'langgraph')} disabled={isLoading}>
+              <option value="handwritten">Reference：Python 手写循环</option>
+              <option value="langgraph">LangGraph</option>
+            </select>
+          </div>
+          {comparisonAxis === 'context_policy' ? <>
+            <div className="form-group">
+              <label htmlFor="context-window" className="form-label">右侧保留完整工具轮次</label>
+              <input id="context-window" className="form-input" type="number" min="1" max="100" step="1" value={contextWindow}
+                onChange={(e) => setContextWindow(Number(e.target.value))} disabled={isLoading} />
+            </div>
+            <div className="form-group">
+              <label htmlFor="context-recovery" className="form-label">两组相同的恢复策略</label>
+              <select id="context-recovery" className="form-select" value={expRuntimeStrategy}
+                onChange={(e) => setExpRuntimeStrategy(e.target.value as 'handwritten' | 'handwritten_recovery')} disabled={isLoading}>
+                <option value="handwritten">关闭参数纠错</option><option value="handwritten_recovery">启用一次参数纠错</option>
+              </select>
+            </div>
+            <p className="form-help">完整历史 vs 最近 {contextWindow} 轮；Trace 保留完整历史。窗口 1 可能丢失文档证据，Fake 只验证机制。</p>
+          </> : <div className="strategy-summary" aria-label="恢复策略对照">
+            <div><strong>Baseline</strong><span>参数错误后终止</span></div>
+            <div><strong>Recovery</strong><span>INVALID_ARGUMENTS 最多纠错一次</span></div>
+          </div>}
+        </>
+      )}
+
+      {/* Model Selector */}
+      <div className="form-group">
+        <label htmlFor="exp-model-select" className="form-label">评测模型</label>
+        <select
+          id="exp-model-select"
+          className="form-select"
+          value={expModel}
+          onChange={(e) => setExpModel(e.target.value)}
+          disabled={isLoading}
+        >
+          {meta?.models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name} {m.is_default ? '· 目录默认' : ''} {m.is_experimental ? '· 实验性' : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Model Notes Box */}
+      <div className="form-group">
+        <div className="model-note-box">
+          <strong>说明：</strong>{' '}
+          {currentExpModelMeta
+            ? currentExpModelMeta.notes
+            : '模型元数据未就绪；请刷新目录后选择已列出的模型。'}
+        </div>
+      </div>
+
+      {/* Scenario selector if Fake model */}
+      {expModel === 'fake' && (
+        <>
+        <div className="form-group">
+          <label htmlFor="exp-scenario-select" className="form-label">
+            Fake 模拟场景
+          </label>
+          <select
+            id="exp-scenario-select"
+            className="form-select"
+            value={expScenario}
+            onChange={(e) => setExpScenario(e.target.value)}
+            disabled={isLoading}
+          >
+            <option value="invalid-then-success">
+              invalid-then-success (核心因果场景：Baseline 失败 / Recovery 挽救成功)
+            </option>
+            <option value="clean">clean / success (基准全通对照)</option>
+            <option value="invalid-arguments">invalid-arguments (参数错误且无法纠正)</option>
+            <option value="wrong-answer">wrong-answer (提交错误答案)</option>
+            <option value="max-steps">max-steps (步数超限)</option>
+          </select>
+        </div>
+        <div className="form-group">
+          <label htmlFor="exp-fault-profile" className="form-label">受控故障</label>
+          <select id="exp-fault-profile" className="form-select" value={expFaultProfile}
+            onChange={(e) => setExpFaultProfile(e.target.value)} disabled={isLoading}>
+            <option value="none">无注入</option>
+            <option value="tool_timeout">工具超时</option>
+            <option value="empty_result">查询空结果</option>
+          </select>
+          <p className="metric-sub">两侧使用同一故障任务；结果只用于工程对照。</p>
+        </div>
+        </>
+      )}
+
+      {/* Task Checkbox List */}
+      <div className="form-group" role="group" aria-labelledby="exp-task-label">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span id="exp-task-label" className="form-label">评测任务 (多选)</span>
+          <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.75rem' }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
+              onClick={() => setExpTasks(experimentTasks.map((t) => t.id))}
+            >
+              全选
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
+              onClick={() => setExpTasks([])}
+            >
+              清空
+            </button>
+          </div>
+        </div>
+
+        <div className="checkbox-list" id="task-checkbox-list">
+          {experimentTasks.map((task) => (
+            <label key={task.id} className="checkbox-item">
+              <input
+                type="checkbox"
+                checked={expTasks.includes(task.id)}
+                onChange={() => toggleTaskSelection(task.id)}
+                disabled={isLoading}
+              />
+              <div>
+                <div className="task-name">{task.name}</div>
+                <div className="task-meta">
+                  {task.description}
+                </div>
+              </div>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <details className="advanced-settings experiment-settings">
+        <summary><span>种子与预算设置</span><small>Seed {expSeedsText} · 重复 {expRepeatCount} 次 · {expExecutionSeconds} 秒
+          {expModel !== 'fake' && ` · Token ${expTokenBudget ?? '任务原预算'}${expReferenceBudget ? ` · 原厂参考上限 $${expReferenceBudget}` : ''}`}
+          {expGlobalTokenBudget && ` · 全局 Token ${expGlobalTokenBudget}`}
+        </small></summary>
+      <div className="form-group">
+        <label htmlFor="exp-seed-input" className="form-label">随机种子集合 (Seeds)</label>
+        <input
+          id="exp-seed-input"
+          type="text"
+          className="form-input"
+          value={expSeedsText}
+          onChange={(e) => setExpSeedsText(e.target.value)}
+          placeholder="例如：1, 7, 42"
+          disabled={isLoading}
+        />
+        <p className="metric-sub">使用英文逗号分隔 1–10 个不重复整数。</p>
+      </div>
+
+      <div className="form-group">
+        <label htmlFor="exp-repeat-input" className="form-label">每个 Seed 重复次数</label>
+        <input
+          id="exp-repeat-input"
+          type="number"
+          min={1}
+          max={10}
+          className="form-input"
+          value={expRepeatCount}
+          onChange={(e) => setExpRepeatCount(Number(e.target.value))}
+          disabled={isLoading}
+        />
+        <p className="metric-sub">Fake 通常无需重复；真实模型可用于观察非确定性。</p>
+      </div>
+
+      {expModel !== 'fake' && (
+        <div className="form-group">
+          <label htmlFor="exp-token-budget">每次运行 Token 预算（输入 + 输出）</label>
+          <input id="exp-token-budget" type="number" min={100} max={20000}
+            value={expTokenBudget ?? ''} placeholder="留空使用任务原预算"
+            onChange={(e) => setExpTokenBudget(e.target.value === '' ? null : Number(e.target.value))}
+            disabled={isLoading} />
+          <p className="metric-sub">真实多轮建议 8000；两种策略使用相同预算。免费通道按约 13 秒间隔发起请求，仍可能遇到账户限额。</p>
+        </div>
+      )}
+
+      <div className="form-group">
+        <label htmlFor="exp-time-limit">每次运行时限（秒）</label>
+        <input id="exp-time-limit" className="form-input" type="number" min={1} max={3600}
+          value={expExecutionSeconds} disabled={isLoading}
+          onChange={(event) => setExpExecutionSeconds(Math.max(1, Math.min(3600, Math.floor(Number(event.target.value)) || 1)))} />
+        <p className="metric-sub">两侧使用相同时限；恢复继承已用时间，已开始的工具先保存结果再停止。</p>
+      </div>
+      <div className="form-group">
+        <label htmlFor="exp-global-token-budget">整场实验 Token 预算（可选）</label>
+        <input id="exp-global-token-budget" className="form-input" type="text" inputMode="numeric"
+          value={expGlobalTokenBudget} placeholder="留空不限制，例如 10000"
+          onChange={(event) => setExpGlobalTokenBudget(event.target.value.trim())} disabled={isLoading} />
+        <p className="metric-sub">累计所有任务、两侧、Seed 与重复的输入和输出；达到阈值后不启动或恢复下一运行，在途可能超额。Fake 使用模拟 Token。</p>
+      </div>
+      {expModel !== 'fake' && (
+        <div className="form-group">
+          <label htmlFor="exp-reference-budget">原厂标价参考预算（USD，可选）</label>
+          <input id="exp-reference-budget" type="text" inputMode="decimal"
+            value={expReferenceBudget} placeholder="留空不限制，例如 0.05"
+            onChange={(e) => setExpReferenceBudget(e.target.value.trim())}
+            disabled={isLoading} />
+          <p className="metric-sub">按原厂官网未命中缓存价估算，达到阈值后不启动下一 Episode；这不是 AIHubMix 实付费用上限，也不能保证在途 Episode 不超额。</p>
+        </div>
+      )}
+
+      </details>
+
+      <button
+        id="run-exp-button"
+        className="btn-primary"
+        onClick={handleRunExperiment}
+        disabled={!isExperimentRunReady}
+        aria-describedby={experimentRunHint ? 'experiment-run-hint' : undefined}
+        title={
+          !meta
+            ? '任务元数据尚未就绪'
+            : expTasks.length === 0
+              ? '至少选择 1 个评测任务后才能运行'
+              : parsedExpSeeds === null
+                ? 'Seed 必须是 1–10 个不重复整数'
+              : undefined
+        }
+      >
+        {isLoading ? (
+          <>
+            <div className="spinner" />
+            <span>{loadingActivity === 'history' ? '正在读取历史记录…' : '正在执行实验…'}</span>
+          </>
+        ) : (
+          <>
+            <span>开始运行对照实验 ({expEpisodeCount} 次执行)</span>
+          </>
+        )}
+      </button>
+      {experimentRunHint && <p id="experiment-run-hint" className="inline-note" role="status">{experimentRunHint}</p>}
+      {isLoading && (
+        <p className="loading-note" role="status" aria-live="polite">
+          {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
+        </p>
+      )}
+
+      </details>
+
+      {activeJobId && experimentJob?.experiment_id === activeJobId && (
+        <div className="resumable-panel" role="status" aria-live="polite">
+          <div className="card-title">实验任务：{experimentJobLabels[experimentJob.status]}</div>
+          <p className="card-desc"><code>{activeJobId}</code> · 控制请求在当前 Episode 结束后生效。</p>
+          <div className="resumable-list">
+            {['queued', 'running'].includes(experimentJob.status) && !experimentJob.requested_action && (
+              <>
+                <button className="btn-secondary" onClick={() => handleControlExperimentJob('pause')}>暂停</button>
+                <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消</button>
+              </>
+            )}
+            {experimentJob.requested_action && <span>已请求{experimentJob.requested_action === 'pause' ? '暂停' : '取消'}，等待安全点。</span>}
+            {['paused', 'interrupted'].includes(experimentJob.status) && (
+              <>
+                <button className="btn-secondary" onClick={() => handleControlExperimentJob('resume')}>从安全点恢复</button>
+                <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消实验</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {resumableJobIds.some((id) => id !== activeJobId) && (
+        <section className="resumable-panel" aria-labelledby="resumable-job-title">
+          <div className="card-title" id="resumable-job-title">可恢复的实验任务</div>
+          <p className="card-desc">原计划和已完成 Episode 均保留；继续运行可能重新发送中断中的模型请求。</p>
+          <div className="resumable-list">
+            {resumableJobIds.filter((id) => id !== activeJobId).map((id) => (
+              <button key={id} className="btn-secondary" disabled={isLoading}
+                onClick={() => handleControlExperimentJob('resume', id)}>
+                恢复 Job <code>{id}</code>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {resumableExpIds.length > 0 && (
+        <section className="resumable-panel" aria-labelledby="resumable-exp-title">
+          <div className="card-title" id="resumable-exp-title">待恢复的对照实验</div>
+          <p className="card-desc">继续原实验并复用已完成结果；中断中的模型请求可能重新发送。</p>
+          <div className="resumable-list">
+            {resumableExpIds.map((id) => (
+              <button key={id} className="btn-secondary" disabled={isLoading}
+                onClick={() => handleResumeExperiment(id)}>
+                恢复 Experiment <code>{id}</code>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Recent Experiments History */}
+      {recentExpIds.length > 0 && (
+        <div className="history-panel">
+          <div className="history-panel-title">
+            最近实验历史：
+          </div>
+          <div className="history-list">
+            {recentExpIds.map((rid) => (
+              <button
+                key={rid}
+                className="btn-secondary history-button"
+                onClick={() => loadExperimentById(rid)}
+              >
+                {rid}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
 
   return (
     <div>
@@ -1147,7 +1515,7 @@ export default function App() {
             </h1>
             <p>
               {activeTab === 'experiment'
-                ? '固定任务、模型、种子与预算，分别比较恢复策略或 Runtime 执行框架。'
+                ? '固定任务、模型、种子与预算，每次比较上下文、恢复策略或 Runtime 中的一项。'
                 : '运行一个任务，核查评测结论、环境状态与完整 Trace。'}
             </p>
           </div>
@@ -1166,10 +1534,15 @@ export default function App() {
             <div>{errorMsg}</div>
           </div>
         )}
-        {meta?.model_catalog_status === 'unavailable' && (
+        {(metadataError || meta?.model_catalog_status === 'unavailable') && (
           <div className="alert-box alert-error" role="status">
             <span className="alert-label">模型目录暂不可用</span>
-            <div>无法读取 AIHubMix 模型目录，已暂时隐藏真实模型；可先用 Fake 离线场景。</div>
+            <div>
+              <p>{metadataError ? `目录读取失败：${metadataError}` : '此前未能读取 AIHubMix 模型目录，普通候选暂时隐藏；带日期实测的目录例外可能仍可选，不表示已确认当前可用。'}</p>
+              <p>可先用 Fake，或查看候选说明后尝试；上游失败状态最多缓存 30 秒，连接恢复后请重新读取。</p>
+              <button type="button" className="btn-secondary" disabled={metadataLoading || isLoading}
+                onClick={() => void loadMetadata()}>{metadataLoading ? '正在重新读取…' : '重新读取模型目录'}</button>
+            </div>
           </div>
         )}
         {meta?.model_catalog_status === 'live' && meta.models.some((model) => model.provider === 'aihubmix') && (
@@ -1241,341 +1614,8 @@ export default function App() {
               onRefresh={refreshExperimentDashboard} onOpen={loadExperimentById} />
             </details>
 
-            <div className="dashboard-grid">
-              {/* Left Panel: Experiment Config */}
-              <section className="card" id="exp-config-panel">
-                <div className="card-title">
-                  <span>{experiment ? '下次运行配置' : '配置对照实验'}</span>
-                  <span className="badge badge-purple">受控变量对照</span>
-                </div>
-                <div className="card-desc">
-                  严格固定模型、任务、工具集、种子与预算，每次只比较一种策略变量。
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="comparison-axis" className="form-label">对照变量</label>
-                  <select
-                    id="comparison-axis"
-                    className="form-select"
-                    value={comparisonAxis}
-                    onChange={(e) => setComparisonAxis(e.target.value as 'recovery_policy' | 'runtime_backend')}
-                    disabled={isLoading}
-                  >
-                    <option value="recovery_policy">恢复策略：关闭 vs 一次参数纠错</option>
-                    <option value="runtime_backend">执行框架：手写循环 vs LangGraph</option>
-                  </select>
-                </div>
-
-                {comparisonAxis === 'runtime_backend' ? (
-                  <>
-                    <div className="form-group">
-                      <label htmlFor="runtime-recovery-policy" className="form-label">两组相同的恢复策略</label>
-                      <select id="runtime-recovery-policy" className="form-select" value={expRuntimeStrategy}
-                        onChange={(e) => setExpRuntimeStrategy(e.target.value as 'handwritten' | 'handwritten_recovery')} disabled={isLoading}>
-                        <option value="handwritten">关闭参数纠错</option>
-                        <option value="handwritten_recovery">启用一次参数纠错</option>
-                      </select>
-                    </div>
-                    <div className="strategy-summary" aria-label="Runtime 对照">
-                      <div><strong>Reference</strong><span>Python 手写调度循环</span></div>
-                      <div><strong>LangGraph</strong><span>StateGraph 独立节点调度</span></div>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="form-group">
-                      <label htmlFor="policy-runtime" className="form-label">两组共同使用的 Runtime</label>
-                      <select id="policy-runtime" className="form-select" value={expRuntimeBackend}
-                        onChange={(e) => setExpRuntimeBackend(e.target.value as 'handwritten' | 'langgraph')} disabled={isLoading}>
-                        <option value="handwritten">Reference：Python 手写循环</option>
-                        <option value="langgraph">LangGraph</option>
-                      </select>
-                    </div>
-                    <div className="strategy-summary" aria-label="恢复策略对照">
-                      <div><strong>Baseline</strong><span>参数错误后终止</span></div>
-                      <div><strong>Recovery</strong><span>INVALID_ARGUMENTS 最多纠错一次</span></div>
-                    </div>
-                  </>
-                )}
-
-                {/* Model Selector */}
-                <div className="form-group">
-                  <label htmlFor="exp-model-select" className="form-label">评测模型</label>
-                  <select
-                    id="exp-model-select"
-                    className="form-select"
-                    value={expModel}
-                    onChange={(e) => setExpModel(e.target.value)}
-                    disabled={isLoading}
-                  >
-                    {meta?.models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name} {m.is_default ? '· 目录默认' : ''} {m.is_experimental ? '· 实验性' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Model Notes Box */}
-                <div className="form-group">
-                  <div className="model-note-box">
-                    <strong>说明：</strong>{' '}
-                    {currentExpModelMeta
-                      ? currentExpModelMeta.notes
-                      : '模型元数据未就绪；请刷新目录后选择已列出的模型。'}
-                  </div>
-                </div>
-
-                {/* Scenario selector if Fake model */}
-                {expModel === 'fake' && (
-                  <>
-                  <div className="form-group">
-                    <label htmlFor="exp-scenario-select" className="form-label">
-                      Fake 模拟场景
-                    </label>
-                    <select
-                      id="exp-scenario-select"
-                      className="form-select"
-                      value={expScenario}
-                      onChange={(e) => setExpScenario(e.target.value)}
-                      disabled={isLoading}
-                    >
-                      <option value="invalid-then-success">
-                        invalid-then-success (核心因果场景：Baseline 失败 / Recovery 挽救成功)
-                      </option>
-                      <option value="clean">clean / success (基准全通对照)</option>
-                      <option value="invalid-arguments">invalid-arguments (参数错误且无法纠正)</option>
-                      <option value="wrong-answer">wrong-answer (提交错误答案)</option>
-                      <option value="max-steps">max-steps (步数超限)</option>
-                    </select>
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="exp-fault-profile" className="form-label">受控故障</label>
-                    <select id="exp-fault-profile" className="form-select" value={expFaultProfile}
-                      onChange={(e) => setExpFaultProfile(e.target.value)} disabled={isLoading}>
-                      <option value="none">无注入</option>
-                      <option value="tool_timeout">工具超时</option>
-                      <option value="empty_result">查询空结果</option>
-                    </select>
-                    <p className="metric-sub">两侧使用同一故障任务；结果只用于工程对照。</p>
-                  </div>
-                  </>
-                )}
-
-                {/* Task Checkbox List */}
-                <div className="form-group" role="group" aria-labelledby="exp-task-label">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span id="exp-task-label" className="form-label">评测任务 (多选)</span>
-                    <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.75rem' }}>
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
-                        onClick={() => setExpTasks(experimentTasks.map((t) => t.id))}
-                      >
-                        全选
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
-                        onClick={() => setExpTasks([])}
-                      >
-                        清空
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="checkbox-list" id="task-checkbox-list">
-                    {experimentTasks.map((task) => (
-                      <label key={task.id} className="checkbox-item">
-                        <input
-                          type="checkbox"
-                          checked={expTasks.includes(task.id)}
-                          onChange={() => toggleTaskSelection(task.id)}
-                          disabled={isLoading}
-                        />
-                        <div>
-                          <div className="task-name">{task.name}</div>
-                          <div className="task-meta">
-                            {task.description}
-                          </div>
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <details className="advanced-settings experiment-settings">
-                  <summary><span>种子与预算设置</span><small>Seed {expSeedsText} · 重复 {expRepeatCount} 次 · {expExecutionSeconds} 秒
-                    {expModel !== 'fake' && ` · Token ${expTokenBudget ?? '任务原预算'}${expReferenceBudget ? ` · 原厂参考上限 $${expReferenceBudget}` : ''}`}
-                  </small></summary>
-                <div className="form-group">
-                  <label htmlFor="exp-seed-input" className="form-label">随机种子集合 (Seeds)</label>
-                  <input
-                    id="exp-seed-input"
-                    type="text"
-                    className="form-input"
-                    value={expSeedsText}
-                    onChange={(e) => setExpSeedsText(e.target.value)}
-                    placeholder="例如：1, 7, 42"
-                    disabled={isLoading}
-                  />
-                  <p className="metric-sub">使用英文逗号分隔 1–10 个不重复整数。</p>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="exp-repeat-input" className="form-label">每个 Seed 重复次数</label>
-                  <input
-                    id="exp-repeat-input"
-                    type="number"
-                    min={1}
-                    max={10}
-                    className="form-input"
-                    value={expRepeatCount}
-                    onChange={(e) => setExpRepeatCount(Number(e.target.value))}
-                    disabled={isLoading}
-                  />
-                  <p className="metric-sub">Fake 通常无需重复；真实模型可用于观察非确定性。</p>
-                </div>
-
-                {expModel !== 'fake' && (
-                  <div className="form-group">
-                    <label htmlFor="exp-token-budget">每次运行 Token 预算（输入 + 输出）</label>
-                    <input id="exp-token-budget" type="number" min={100} max={20000}
-                      value={expTokenBudget ?? ''} placeholder="留空使用任务原预算"
-                      onChange={(e) => setExpTokenBudget(e.target.value === '' ? null : Number(e.target.value))}
-                      disabled={isLoading} />
-                    <p className="metric-sub">真实多轮建议 8000；两种策略使用相同预算。免费通道按约 13 秒间隔发起请求，仍可能遇到账户限额。</p>
-                  </div>
-                )}
-
-                <div className="form-group">
-                  <label htmlFor="exp-time-limit">每次运行时限（秒）</label>
-                  <input id="exp-time-limit" className="form-input" type="number" min={1} max={3600}
-                    value={expExecutionSeconds} disabled={isLoading}
-                    onChange={(event) => setExpExecutionSeconds(Math.max(1, Math.min(3600, Math.floor(Number(event.target.value)) || 1)))} />
-                  <p className="metric-sub">两侧使用相同时限；恢复继承已用时间，已开始的工具先保存结果再停止。</p>
-                </div>
-                {expModel !== 'fake' && (
-                  <div className="form-group">
-                    <label htmlFor="exp-reference-budget">原厂标价参考预算（USD，可选）</label>
-                    <input id="exp-reference-budget" type="text" inputMode="decimal"
-                      value={expReferenceBudget} placeholder="留空不限制，例如 0.05"
-                      onChange={(e) => setExpReferenceBudget(e.target.value.trim())}
-                      disabled={isLoading} />
-                    <p className="metric-sub">按原厂官网未命中缓存价估算，达到阈值后不启动下一 Episode；这不是 AIHubMix 实付费用上限，也不能保证在途 Episode 不超额。</p>
-                  </div>
-                )}
-
-                </details>
-
-                <button
-                  id="run-exp-button"
-                  className="btn-primary"
-                  onClick={handleRunExperiment}
-                  disabled={!isExperimentRunReady}
-                  aria-describedby={experimentRunHint ? 'experiment-run-hint' : undefined}
-                  title={
-                    !meta
-                      ? '任务元数据尚未就绪'
-                      : expTasks.length === 0
-                        ? '至少选择 1 个评测任务后才能运行'
-                        : parsedExpSeeds === null
-                          ? 'Seed 必须是 1–10 个不重复整数'
-                        : undefined
-                  }
-                >
-                  {isLoading ? (
-                    <>
-                      <div className="spinner" />
-                      <span>{loadingActivity === 'history' ? '正在读取历史记录…' : '正在执行实验…'}</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>开始运行对照实验 ({expEpisodeCount} 次执行)</span>
-                    </>
-                  )}
-                </button>
-                {experimentRunHint && <p id="experiment-run-hint" className="inline-note" role="status">{experimentRunHint}</p>}
-                {isLoading && (
-                  <p className="loading-note" role="status" aria-live="polite">
-                    {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
-                  </p>
-                )}
-
-                {activeJobId && experimentJob?.experiment_id === activeJobId && (
-                  <div className="resumable-panel" role="status" aria-live="polite">
-                    <div className="card-title">实验任务：{experimentJobLabels[experimentJob.status]}</div>
-                    <p className="card-desc"><code>{activeJobId}</code> · 控制请求在当前 Episode 结束后生效。</p>
-                    <div className="resumable-list">
-                      {['queued', 'running'].includes(experimentJob.status) && !experimentJob.requested_action && (
-                        <>
-                          <button className="btn-secondary" onClick={() => handleControlExperimentJob('pause')}>暂停</button>
-                          <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消</button>
-                        </>
-                      )}
-                      {experimentJob.requested_action && <span>已请求{experimentJob.requested_action === 'pause' ? '暂停' : '取消'}，等待安全点。</span>}
-                      {['paused', 'interrupted'].includes(experimentJob.status) && (
-                        <>
-                          <button className="btn-secondary" onClick={() => handleControlExperimentJob('resume')}>从安全点恢复</button>
-                          <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消实验</button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {resumableJobIds.some((id) => id !== activeJobId) && (
-                  <section className="resumable-panel" aria-labelledby="resumable-job-title">
-                    <div className="card-title" id="resumable-job-title">可恢复的实验任务</div>
-                    <p className="card-desc">原计划和已完成 Episode 均保留；继续运行可能重新发送中断中的模型请求。</p>
-                    <div className="resumable-list">
-                      {resumableJobIds.filter((id) => id !== activeJobId).map((id) => (
-                        <button key={id} className="btn-secondary" disabled={isLoading}
-                          onClick={() => handleControlExperimentJob('resume', id)}>
-                          恢复 Job <code>{id}</code>
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-                )}
-
-                {resumableExpIds.length > 0 && (
-                  <section className="resumable-panel" aria-labelledby="resumable-exp-title">
-                    <div className="card-title" id="resumable-exp-title">待恢复的对照实验</div>
-                    <p className="card-desc">继续原实验并复用已完成结果；中断中的模型请求可能重新发送。</p>
-                    <div className="resumable-list">
-                      {resumableExpIds.map((id) => (
-                        <button key={id} className="btn-secondary" disabled={isLoading}
-                          onClick={() => handleResumeExperiment(id)}>
-                          恢复 Experiment <code>{id}</code>
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-                )}
-
-                {/* Recent Experiments History */}
-                {recentExpIds.length > 0 && (
-                  <div className="history-panel">
-                    <div className="history-panel-title">
-                      最近实验历史：
-                    </div>
-                    <div className="history-list">
-                      {recentExpIds.map((rid) => (
-                        <button
-                          key={rid}
-                          className="btn-secondary history-button"
-                          onClick={() => loadExperimentById(rid)}
-                        >
-                          {rid}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </section>
+            <div className={`dashboard-grid ${hasExperimentResult ? 'saved-experiment-grid' : ''}`}>
+              {!hasExperimentResult && experimentConfigPanel}
 
               {/* Right Panel: Aggregate Metrics + Comparison Table */}
               <div className="single-result-stack">
@@ -1590,82 +1630,32 @@ export default function App() {
                     )}
                   </div>
                   <div className="card-desc">
-                    {activeComparisonAxis === 'runtime_backend'
+                    {activeComparisonAxis === 'context_policy'
+                      ? '只改变模型可见上下文，比较成功率、工具调用、已报告 Token 与耗时；不计算纠错挽救率。'
+                      : activeComparisonAxis === 'runtime_backend'
                       ? '比较两个 Runtime 在相同模型、任务、预算和恢复策略下的成功率、用量与耗时。'
                       : '比较恢复策略的成功率、参数错误挽救转化率与额外用量。'}
                   </div>
 
                   {experiment ? (
                     <div>
-                      {/* Preserved Experiment Configuration Panel */}
-                      <div className="record-summary">
-                        <div className="summary-header">
-                          <strong className="summary-title">
-                            已保存实验配置（固定变量与哈希）
-                          </strong>
-                          <span className="hash-pill">
-                            Hash: {experiment.config_hash ? experiment.config_hash.slice(0, 16) + '...' : 'N/A'}
-                          </span>
-                        </div>
-                        <div className="summary-grid">
-                          <div>
-                            <strong>模型：</strong>{' '}
-                            {typeof experiment.config.model === 'string'
-                              ? experiment.config.model
-                              : experiment.config.model?.model || 'N/A'}
-                          </div>
-                          <div>
-                            <strong>场景：</strong>{' '}
-                            {experiment.config.scenario || 'N/A (真实模型)'}
-                          </div>
-                          <div>
-                            <strong>种子 (Seeds)：</strong>{' '}
-                            {Array.isArray(experiment.config.seeds)
-                              ? experiment.config.seeds.join(', ')
-                              : String(experiment.config.seed ?? 1)}
-                          </div>
-                          <div>
-                            <strong>每个 Seed 重复：</strong>{' '}
-                            {String(experiment.config.repeat_count ?? 1)} 次
-                          </div>
-                          <div>
-                            <strong>每次运行时限：</strong>{' '}
-                            {isRecord(experiment.config.budget) && typeof experiment.config.budget.max_execution_time_ms === 'number'
-                              ? `${experiment.config.budget.max_execution_time_ms / 1000} 秒` : '历史配置未设置'}
-                          </div>
-                          <div>
-                            <strong>数据来源：</strong>{' '}
-                            {experiment.config.provider === 'fake' ? '离线模拟' : '真实 API（探索性）'}
-                          </div>
-                          <div>
-                            <strong>运行时间：</strong>{' '}
-                            {new Date(experiment.created_at).toLocaleString()}
-                          </div>
-                          <div>
-                            <strong>任务数量：</strong>{' '}
-                            {Array.isArray(experiment.config.task_ids)
-                              ? experiment.config.task_ids.length
-                              : experiment.pairs.length}
-                          </div>
-                          <div>
-                            <strong>评测器：</strong>{' '}
-                            {experiment.config.evaluator || 'order_status_v1'}
-                          </div>
-                          <div>
-                            <strong>{armLeftLabel}：</strong>{' '}
-                            {experiment.config.baseline_agent?.runtime_backend || 'handwritten'}
-                            {' / '}
-                            {experiment.config.baseline_agent?.runtime_strategy || 'handwritten'}
-                          </div>
-                          <div>
-                            <strong>{armRightLabel}：</strong>{' '}
-                            {experiment.config.recovery_agent?.runtime_backend || 'handwritten'}
-                            {' / '}
-                            {experiment.config.recovery_agent?.runtime_strategy || 'handwritten_recovery'}
-                          </div>
-                        </div>
+                      {activeComparisonAxis === 'context_policy' && <p className="model-note-box" aria-label="已保存上下文对照">完整历史 vs 最近 {experiment.config.recovery_agent?.context_policy?.max_tool_rounds} 轮 · 保存结果，不随草稿改变</p>}
+                      <div className="episode-provenance" aria-label="已保存实验来源">
+                        <strong>{typeof experiment.config.model === 'string'
+                          ? experiment.config.model : experiment.config.model?.model || '历史模型未提供'}</strong>
+                        <span>{armLeftLabel} ↔ {armRightLabel}</span>
                       </div>
-
+                      <p className="experiment-reading-note">{experiment.config.provider === 'fake'
+                        ? '离线模拟对照 · 用于展示运行与恢复机制，不代表真实模型能力。'
+                        : '真实 API 小样本对照 · 当前结果只描述本次实验，不代表稳定排名。'}</p>
+                      {experiment.config.max_total_tokens != null && (
+                        <p className="experiment-reading-note" aria-label="已保存全局 Token 预算">
+                          全局 Token 边界预算：{experiment.config.max_total_tokens} · 已报告累计：
+                          {experiment.metrics.baseline_total_tokens + experiment.metrics.recovery_total_tokens}
+                          {experiment.metrics.baseline_total_tokens + experiment.metrics.recovery_total_tokens > experiment.config.max_total_tokens
+                            ? ' · 最后一轮在途执行已超额' : ''}。此值来自保存结果，非当前草稿。
+                        </p>
+                      )}
                       <div className="metrics-grid">
                         {/* Baseline Success */}
                         <div className="metric-box">
@@ -1728,6 +1718,10 @@ export default function App() {
                           </div>
                         </div>}
 
+                      </div>
+                      <details className="episode-details experiment-usage">
+                        <summary>查看用量与质量指标<span>Token、步数、耗时、费用与工具调用</span></summary>
+                        <div className="metrics-grid">
                         {/* Total Tokens & Delta */}
                         <div className="metric-box">
                           <div className="metric-label">Token 总消耗 ({armLeftLabel} / {armRightLabel})</div>
@@ -1812,6 +1806,77 @@ export default function App() {
                           </div>
                         </div>
                       </div>
+
+                      </details>
+
+                      <details className="record-summary experiment-record">
+                        <summary>已保存实验配置 · 固定变量与哈希</summary>
+                        <div className="summary-header">
+                          <strong className="summary-title">
+                            已保存实验配置（固定变量与哈希）
+                          </strong>
+                          <span className="hash-pill">
+                            Hash: {experiment.config_hash ? experiment.config_hash.slice(0, 16) + '...' : 'N/A'}
+                          </span>
+                        </div>
+                        <div className="summary-grid">
+                          <div>
+                            <strong>模型：</strong>{' '}
+                            {typeof experiment.config.model === 'string'
+                              ? experiment.config.model
+                              : experiment.config.model?.model || 'N/A'}
+                          </div>
+                          <div>
+                            <strong>场景：</strong>{' '}
+                            {experiment.config.scenario || 'N/A (真实模型)'}
+                          </div>
+                          <div>
+                            <strong>种子 (Seeds)：</strong>{' '}
+                            {Array.isArray(experiment.config.seeds)
+                              ? experiment.config.seeds.join(', ')
+                              : String(experiment.config.seed ?? 1)}
+                          </div>
+                          <div>
+                            <strong>每个 Seed 重复：</strong>{' '}
+                            {String(experiment.config.repeat_count ?? 1)} 次
+                          </div>
+                          <div>
+                            <strong>每次运行时限：</strong>{' '}
+                            {isRecord(experiment.config.budget) && typeof experiment.config.budget.max_execution_time_ms === 'number'
+                              ? `${experiment.config.budget.max_execution_time_ms / 1000} 秒` : '历史配置未设置'}
+                          </div>
+                          <div>
+                            <strong>数据来源：</strong>{' '}
+                            {experiment.config.provider === 'fake' ? '离线模拟' : '真实 API（探索性）'}
+                          </div>
+                          <div>
+                            <strong>运行时间：</strong>{' '}
+                            {new Date(experiment.created_at).toLocaleString()}
+                          </div>
+                          <div>
+                            <strong>任务数量：</strong>{' '}
+                            {Array.isArray(experiment.config.task_ids)
+                              ? experiment.config.task_ids.length
+                              : experiment.pairs.length}
+                          </div>
+                          <div>
+                            <strong>评测器：</strong>{' '}
+                            {experiment.config.evaluator || 'order_status_v1'}
+                          </div>
+                          <div>
+                            <strong>{armLeftLabel}：</strong>{' '}
+                            {experiment.config.baseline_agent?.runtime_backend || 'handwritten'}
+                            {' / '}
+                            {experiment.config.baseline_agent?.runtime_strategy || 'handwritten'}
+                          </div>
+                          <div>
+                            <strong>{armRightLabel}：</strong>{' '}
+                            {experiment.config.recovery_agent?.runtime_backend || 'handwritten'}
+                            {' / '}
+                            {experiment.config.recovery_agent?.runtime_strategy || 'handwritten_recovery'}
+                          </div>
+                        </div>
+                      </details>
 
                       {/* Paired Comparison Table */}
                       <div className="card-title paired-table-title">
@@ -1911,13 +1976,17 @@ export default function App() {
                       </div>
                     </div>
                   ) : (
-                    <div className="empty-state">
-                      <div className="empty-icon">尚无实验结果</div>
-                      <div>选择模型和任务，运行一次对照；也可以读取已保存的实验结果。</div>
+                    <div className="empty-state" aria-label={experimentJob?.status === 'failed' ? '已停止实验说明' : undefined}>
+                      <div className="empty-icon">{experimentJob?.status === 'failed' ? '实验已停止' : '尚无实验结果'}</div>
+                      {experimentJob?.status === 'failed' ? <>
+                        <p>{errorMsg ?? '实验运行失败，已保存记录保留。'}</p>
+                        <p>本次未形成完整成对结果，不显示成功率。原计划与已完成记录保留，可用于审查。</p>
+                      </> : <div>选择模型和任务，运行一次对照；也可以读取已保存的实验结果。</div>}
                     </div>
                   )}
                 </section>
               </div>
+              {hasExperimentResult && experimentConfigPanel}
             </div>
           </div>
         )}
@@ -2310,7 +2379,7 @@ export default function App() {
                 {/* Trace Timeline */}
                 <section className="card" id="trace-panel" ref={tracePanelRef} tabIndex={-1} aria-labelledby="trace-title">
                   <div className="card-title">
-                    <h2 id="trace-title" className="section-heading">{liveRun ? '实时 Trace' : 'Trace Replay'}</h2>
+                    <h2 id="trace-title" className="section-heading">{liveRun ? liveRun.status === 'completed' ? '本次执行过程' : '实时执行过程' : 'Trace Replay'}</h2>
                     {artifact && (
                       <span className="badge" style={{ fontFamily: 'var(--font-mono)' }}>
                         {artifact.events.length} 个事件
@@ -2318,19 +2387,25 @@ export default function App() {
                     )}
                   </div>
                   <div className="card-desc">
-                    {liveRun ? '节点只随已记录的事件出现；结束后保存完整产物供只读回放。'
+                    {liveRun ? liveRun.status === 'completed' ? '执行已完成，停留在最终输出；仅主动查看时进入历史回放。' : '节点随实际事件即时出现；结束后停留在最终输出，不自动重播。'
                       : '仅回放已保存的事件和环境快照，不重新请求模型或执行工具。'}
                   </div>
 
                   {liveRun ? (
                     <>
                       <p className="loading-note" role="status">
-                        {liveRun.status === 'running' ? '正在接收真实 Trace 事件。' : '实时连接已中断，后端运行状态未知。'}
+                        {liveRun.status === 'running' ? '正在接收真实 Trace 事件。' : liveRun.status === 'completed' ? '本次运行已结束，结果已保存。' : '实时连接已中断，后端运行状态未知。'}
                         {liveRun.episodeId && ` Episode ID：${liveRun.episodeId}`}
                       </p>
-                      {liveRun.events.length > 0 && <McpFlowReplay live events={liveRun.events}
+                      {liveRun.events.length > 0 && <McpFlowReplay displayMode={liveRun.status === 'completed' ? 'completed' : 'live'} events={liveRun.events}
                         environmentVersion={liveRun.environmentVersion} model={liveRun.model}
-                        finalState={{}} termination={liveRun.status === 'running' ? '运行中' : '连接中断'} detail="" />}
+                        finalState={artifact?.episode.final_state ?? {}} evaluation={artifact?.evaluation}
+                        termination={artifact?.episode.termination_reason ?? (liveRun.status === 'running' ? '运行中' : '连接中断')}
+                        detail={artifact?.episode.detail ?? ''} />}
+                      {liveRun.status === 'completed' && <button type="button" className="btn-secondary"
+                        onClick={() => { setReplayPlaying(false); setReplayIndex(0); setReplayView('flow'); setLiveRun(null); }}>
+                        查看保存详情与回放
+                      </button>}
                     </>
                   ) : artifact && artifact.events.length > 0 ? (
                     <>
@@ -2342,12 +2417,12 @@ export default function App() {
                         </button>
                         <button type="button" className={replayView === 'story' ? 'active' : ''}
                           aria-pressed={replayView === 'story'}
-                          onClick={() => { setReplayPlaying(false); setReplayIndex(0); setReplayView('story'); }}>
+                          onClick={() => { setReplayPlaying(false); setReplayView('story'); }}>
                           过程概览
                         </button>
                         <button type="button" className={replayView === 'events' ? 'active' : ''}
                           aria-pressed={replayView === 'events'}
-                          onClick={() => { setReplayPlaying(false); setReplayIndex(0); setReplayView('events'); }}>
+                          onClick={() => { setReplayPlaying(false); setEventTypeFilter('ALL'); setReplayView('events'); }}>
                           技术 Trace
                         </button>
                       </div>
@@ -2355,7 +2430,9 @@ export default function App() {
                       {replayView === 'flow' && <McpFlowReplay key={artifact.episode.episode_id}
                         events={artifact.events} environmentVersion={artifact.run_config.environment_version ?? ''}
                         model={artifact.agent.model.model} finalState={artifact.episode.final_state}
-                        termination={artifact.episode.termination_reason} detail={artifact.episode.detail} />}
+                        evaluation={artifact.evaluation}
+                        termination={artifact.episode.termination_reason} detail={artifact.episode.detail}
+                        eventIndex={replayIndex} onSelectEvent={setReplayIndex} />}
                       <div hidden={replayView === 'flow'}>
                       {replayView === 'story' && <div className="step-rail" role="group" aria-label="执行步骤（方向键切换）"
                         onKeyDown={(event) => {
@@ -2367,13 +2444,13 @@ export default function App() {
                           const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
                             : Math.max(0, Math.min(buttons.length - 1, current + (event.key === 'ArrowRight' ? 1 : -1)));
                           setReplayPlaying(false);
-                          setReplayIndex(next);
+                          selectReplayIndex(next);
                           buttons[next]?.focus();
                         }}>
                         {traceSteps.map((group, index) => <button key={`${group.step}-${index}`} type="button"
                           className={`step-card ${safeReplayIndex === index ? 'active' : ''}`}
                           aria-current={safeReplayIndex === index ? 'step' : undefined}
-                          onClick={() => { setReplayPlaying(false); setReplayIndex(index); }}>
+                          onClick={() => { setReplayPlaying(false); selectReplayIndex(index); }}>
                           <span className="step-card-number">{group.step === 0 ? '开始' : `Step ${group.step}`}</span>
                           <strong>{stepTitle(group.events)}</strong>
                           <small>{stepOutcome(group.events)}</small>
@@ -2389,7 +2466,8 @@ export default function App() {
                             onChange={(event) => {
                               setReplayPlaying(false);
                               setEventTypeFilter(event.target.value);
-                              setReplayIndex(0);
+                              const first = artifact.events.findIndex((candidate) => event.target.value === 'ALL' || candidate.event_type === event.target.value);
+                              setReplayIndex(Math.max(first, 0));
                             }}
                           >
                             <option value="ALL">全部事件</option>
@@ -2413,7 +2491,7 @@ export default function App() {
                               const index = visibleEvents.findIndex(
                                 (candidate) => candidate.step_index === step,
                               );
-                              setReplayIndex(Math.max(index, 0));
+                              selectReplayIndex(Math.max(index, 0));
                             }}
                           >
                             {replaySteps.map((step) => (
@@ -2430,7 +2508,7 @@ export default function App() {
                             disabled={safeReplayIndex <= 0 || visibleEvents.length === 0}
                             onClick={() => {
                               setReplayPlaying(false);
-                              setReplayIndex((index) => Math.max(index - 1, 0));
+                              selectReplayIndex(Math.max(safeReplayIndex - 1, 0));
                             }}
                           >
                             ← 上一步
@@ -2449,9 +2527,7 @@ export default function App() {
                             }
                             onClick={() => {
                               setReplayPlaying(false);
-                              setReplayIndex((index) =>
-                                Math.min(index + 1, visibleEvents.length - 1),
-                              );
+                              selectReplayIndex(Math.min(safeReplayIndex + 1, visibleEvents.length - 1));
                             }}
                           >
                             下一步 →
@@ -2463,7 +2539,7 @@ export default function App() {
                             aria-label={replayPlaying ? '暂停回放' : '自动播放回放'}
                             onClick={() => {
                               if (!replayPlaying && safeReplayIndex >= visibleEvents.length - 1) {
-                                setReplayIndex(0);
+                                selectReplayIndex(0);
                               }
                               setReplayPlaying(!replayPlaying);
                             }}
@@ -2605,7 +2681,7 @@ export default function App() {
                                   className="event-header"
                                   aria-expanded={isExpanded}
                                   onClick={() => {
-                                    setReplayIndex(index);
+                                    selectReplayIndex(index);
                                     toggleEventExpand(ev.event_id);
                                   }}
                                 >

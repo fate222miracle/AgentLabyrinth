@@ -2,6 +2,8 @@
 
 唯一权威需求是 `docs/product/requirements.md`，已核对版本 **V0.6**。本文件和任务卡只指导执行，不替代需求。
 
+负责人2026-10-11明确授权提交并推送当前最新代码，要求后续任务完成后及时同步GitHub。执行前核对差异与远端、运行相关质量门禁、扫描暂存内容的凭据；仅提交已完成且验证的源码/测试/文档，不提交本机配置或实验产物。此授权不包含强制推送、覆盖未知改动、打Tag或部署；验证失败先修复并记录，网络失败如实交接。
+
 负责人2026-10-04选定D / Wayfinder为图标初版，授权优化和Logo动态展示，随后授权接入项目并提交/推送最新代码。导航SVG初次有限播放，点击品牌打开完整展示；favicon静态，reduce即时降级，不代表Trace。资产/验证见 `docs/design/wayfinder-v1/README.md` 与 `docs/tasks/logo-wayfinder-20261004.md`，原四候选保留。此为品牌呈现，不改契约/产品阶段；提交前完整门禁与密钥扫描，不推送本机配置/实验产物。
 
 负责人2026-10-04授权继续从前端页面角度复核优化。范围是历史读取/导航语义、先配置后运行、保存结果分层与对照高级配置；不改变API/Schema/评分/运行条件。见 `docs/tasks/frontend-usability-20261004.md`、`docs/learning/frontend-usability-20261004.md` 和current-state；Fake/未知费用与失败仍明确，键盘与四视口自动验证不替代实机签收。
@@ -11,6 +13,10 @@
 负责人2026-10-04暂无时间人工验收，授权优化已实现能力。按Accepted ADR-024补历史上下文比较指纹、完整结果/安全点来源保护、CLI Fake重跑来源、报告与实际Trace交叉核验、投影后的时限检查及减少动效/四视口自动验证。见 `docs/tasks/optimization-20261004.md`、`docs/learning/existing-capabilities-optimization-20261004.md` 与current-state；自动验证不替代人工版本签收，不因额度充足扩大数据库/框架范围或发布代码。
 
 负责人2026-10-04授权按Accepted ADR-023受控启动V0.3上下文管理首切片；V0.2仍待整版签收。ContextPolicy仅投影Provider输入，Checkpoint/Trace保持完整历史；旧Agent哈希不改写。CLI Fake消融与学习交接见 `docs/tasks/V0.3-context-management-first-slice.md`、`docs/learning/V0.3-context-management.md`。消息字节数不是Token或HTTP包大小，Fake遗忘失败不是实际模型能力结论；API/Web新建对照入口、真实小样本和其余V0.3能力留待后续ADR切片。
+
+负责人2026-10-09授权接续上下文API/Web对照，按Accepted ADR-026实现full vs recent_tool_rounds，复用冻结计划和完整历史。新请求版本与新轴结果必须校验；旧轴不混变量，挽救率不适用于上下文轴。源码与验证见任务卡和current-state，不自动扩长链任务/真实批量或发布。
+
+负责人2026-10-11授权修复模型目录误拦截与通用提交说明，按Accepted ADR-027，仅后端配置的实测型号可显式允许目录缺失。新API ToolLab使用v1.1.0工具说明，旧安全点/失败重跑/冻结计划保持保存版本，BFCL评分与权限不变；见current-state及对应学习交接，不把单次成功宣称持续可用。
 
 开始工作依次阅读：需求全文 → AGENTS.md → 相关 ADR → `docs/handoffs/current-state.md` → 当前任务卡 → 测试与源码。不得依赖旧聊天；需求版本不符时停止并同步。
 

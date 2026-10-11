@@ -146,7 +146,7 @@ def write_artifact(artifact: EpisodeArtifact, path: Path) -> None:
 def write_text_atomically(path: Path, content: str) -> None:
     """Publish a complete UTF-8 artifact without exposing a partial final file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.stem}.{uuid4().hex}.tmp")
+    temporary = path.with_name(f".{uuid4().hex}.tmp")
     try:
         with temporary.open("w", encoding="utf-8") as output:
             output.write(content)

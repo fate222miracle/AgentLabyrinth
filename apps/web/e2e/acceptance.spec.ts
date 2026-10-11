@@ -101,6 +101,10 @@ test('new Episode → independent evaluation → saved Trace → replay with no 
   page.on('request', (value) => {
     if (value.url().includes('/api/') && value.method() !== 'GET') mutations.push(value.url());
   });
+  const completed = page.getByRole('region', { name: '本次工具执行过程' });
+  await expect(completed.getByLabel('最终输出')).toContainText('shipped');
+  await expect(completed.getByRole('slider', { name: '动画进度' })).toHaveCount(0);
+  await page.getByRole('button', { name: '查看保存详情与回放', exact: true }).click();
   const flow = page.getByRole('region', { name: '工具调用动画回放' });
   await expect(flow.getByLabel('最初输入')).toBeVisible();
   await expect(flow.getByLabel('最终输出')).toContainText('shipped');
@@ -143,8 +147,8 @@ test('saved flow stays readable across viewports and respects dynamic reduced mo
     await expect(flow.locator('.flow-position')).not.toHaveText(before ?? '');
     await expect.poll(() => flow.evaluate((element) => {
       const canvas = element.querySelector('.flow-canvas')?.getBoundingClientRect();
-      const nodes = Array.from(element.querySelectorAll('.react-flow__node'));
-      return Boolean(canvas && nodes.length >= 3 && nodes.every((node) => {
+      const nodes = Array.from(element.querySelectorAll('.react-flow__node')).filter((node) => node.querySelector('.flow-node.current'));
+      return Boolean(canvas && nodes.length === 1 && nodes.every((node) => {
         const box = node.getBoundingClientRect();
         return box.width > 0 && box.left >= canvas.left - 2 && box.right <= canvas.right + 2
           && box.top >= canvas.top - 2 && box.bottom <= canvas.bottom + 2;
@@ -225,6 +229,8 @@ test('delayed accepted Job cannot reclaim a page opened from dashboard history',
     await page.evaluate(() => new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     }));
+    await expect(page.locator('.experiment-draft')).not.toHaveAttribute('open');
+    await page.locator('.experiment-draft > summary').press('Enter');
     await expect(page.getByRole('button', { name: /开始运行对照实验/ })).toBeEnabled();
     await expect(page).toHaveURL(new RegExp(`experiment_id=${historical}`));
     expect(new URL(page.url()).searchParams.has('experiment_job_id')).toBe(false);

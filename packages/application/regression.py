@@ -67,6 +67,8 @@ def fixed_config(artifact: ExperimentArtifact) -> dict[str, Any]:
     if any(field not in config for field in required):
         raise ValueError("Experiment lacks required regression provenance")
     result = {field: config.get(field) for field in FIXED_FIELDS}
+    if config.get("max_total_tokens") is not None:
+        result["max_total_tokens"] = config["max_total_tokens"]
     for arm in ("baseline_agent", "recovery_agent"):
         agent = config.get(arm)
         if not isinstance(agent, dict) or any(key not in agent for key in ARM_FIELDS):

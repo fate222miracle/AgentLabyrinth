@@ -1,11 +1,10 @@
 """Local, atomic episode checkpoints for the currently supported environments."""
 
 import json
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
@@ -16,6 +15,7 @@ from packages.application.trace import (
     read_artifact,
     sanitize,
     write_artifact,
+    write_text_atomically,
 )
 from packages.domain.models import AgentSpec, EpisodeArtifact, RunConfig, TaskSpec, TraceEvent
 from packages.domain.ports import AgentRuntime, Environment, Evaluator
@@ -94,17 +94,8 @@ class CheckpointStore:
         safe = sanitize(checkpoint.model_dump(mode="json"))
         serialized = json.dumps(safe, ensure_ascii=False, indent=2) + "\n"
         EpisodeCheckpoint.model_validate_json(serialized)
-        self.directory.mkdir(parents=True, exist_ok=True)
         target = self.path(recorder.episode_id)
-        temporary = self.directory / f".{recorder.episode_id}.{uuid4().hex}.tmp"
-        try:
-            with temporary.open("w", encoding="utf-8") as output:
-                output.write(serialized)
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary, target)
-        finally:
-            temporary.unlink(missing_ok=True)
+        write_text_atomically(target, serialized)
 
     def load(self, episode_id: UUID) -> EpisodeCheckpoint:
         """Fail closed on corrupt or foreign checkpoints."""

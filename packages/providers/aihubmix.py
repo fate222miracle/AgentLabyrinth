@@ -87,6 +87,8 @@ def list_available_model_ids(timeout: float = 4.0) -> set[str]:
         else:
             code = "CLIENT_REQUEST_FAILED"
         raise ModelProviderError(code) from None
+    except TimeoutError:
+        raise ModelProviderError("REQUEST_TIMEOUT") from None
     except urllib.error.URLError:
         raise ModelProviderError("NETWORK_CONNECTION_FAILED") from None
     except (ValueError, UnicodeError):

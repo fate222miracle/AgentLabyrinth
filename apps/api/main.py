@@ -22,6 +22,7 @@ from apps.api.schemas import (
 )
 from apps.api.service import EpisodeService, ExperimentJobStopped
 from packages.application.experiment import (
+    ExperimentTokenBudgetError,
     ReferenceCostBudgetExceeded,
     experiment_checkpoint_path,
     read_experiment_checkpoint,
@@ -94,6 +95,8 @@ async def _run_experiment_job(
         service.update_experiment_job(
             experiment_id, status="failed", error_code="REFERENCE_COST_BUDGET_EXCEEDED"
         )
+    except ExperimentTokenBudgetError as exc:
+        service.update_experiment_job(experiment_id, status="failed", error_code=exc.code)
     except Exception:
         service.update_experiment_job(
             experiment_id, status="failed", error_code="EXPERIMENT_FAILED"

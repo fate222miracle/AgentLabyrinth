@@ -72,8 +72,8 @@ class MCPToolLabEnvironment(ToolLabEnvironment):
     tool_transport = "mcp"
     remote_tools = ("search_documents", "read_document")
 
-    def __init__(self, url: str | None = None) -> None:
-        super().__init__()
+    def __init__(self, url: str | None = None, *, tool_set_version: str = "v1.0.0") -> None:
+        super().__init__(tool_set_version=tool_set_version)
         self._remote_task_name = ""
         if url not in (None, MCP_DISCONNECTED_URL):
             raise ValueError("Only the fixed MCP endpoint and test disconnect are allowed")

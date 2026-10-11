@@ -24,6 +24,7 @@ from packages.domain.models import (  # noqa: E402
     ModelConfig,
     ModelResponse,
     RunConfig,
+    TaskSpec,
     ToolSchema,
 )
 from packages.domain.ports import Environment, Evaluator  # noqa: E402
@@ -90,14 +91,39 @@ def main() -> None:
         with patch.object(FakeModelProvider, "generate", blocked):
             asyncio.run(queue_and_exit())
         raise AssertionError("Queued worker did not exit")
-    if suite == "experiment":
+    if suite in {"experiment", "experiment-tokens", "experiment-tokens-end"}:
         request = CreateExperimentRequest(
-            provider="fake", model="fake-model", scenario="success", task_ids=["order-status-001"]
+            provider="fake",
+            model="fake-model",
+            scenario="success",
+            task_ids=["order-status-001"],
+            max_total_tokens=int(sys.argv[3]) if suite.startswith("experiment-tokens") else None,
+            repeat_count=2 if suite.startswith("experiment-tokens") else 1,
         )
         service.reserve_experiment_job(request.request_id)
         service.update_experiment_job(request.request_id, status="running")
         original = FakeModelProvider.generate
         calls = 0
+
+        if suite == "experiment-tokens-end":
+            original_save = CheckpointStore.save
+
+            def end_save(
+                self: CheckpointStore,
+                state: SessionState,
+                agent: AgentSpec,
+                task: TaskSpec,
+                config: RunConfig,
+                recorder: JsonTraceRecorder,
+                fake_scenario: str | None = None,
+            ) -> None:
+                original_save(self, state, agent, task, config, recorder, fake_scenario)
+                if state.next_node == "end":
+                    os._exit(0)
+
+            with patch.object(CheckpointStore, "save", end_save):
+                asyncio.run(service.execute_experiment(request, job_id=request.request_id))
+            raise AssertionError("Experiment did not stop after a terminal safe point")
 
         async def interrupt(
             provider: FakeModelProvider,
@@ -107,7 +133,7 @@ def main() -> None:
         ) -> ModelResponse:
             nonlocal calls
             calls += 1
-            if calls == 3:
+            if calls == (4 if suite == "experiment-tokens" else 3):
                 os._exit(0)
             return await original(provider, messages, tools, config)
 

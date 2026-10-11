@@ -18,6 +18,9 @@ from packages.domain.ports import Environment
 from packages.tools.executor import ToolExecutor
 from packages.tools.registry import DefaultToolValidator, ToolRegistry
 
+TOOL_LAB_TOOL_SET_VERSION = "v1.1.0"
+TOOL_LAB_TOOL_SET_VERSIONS = frozenset({"v1.0.0", "v1", "tool-lab-v1", TOOL_LAB_TOOL_SET_VERSION})
+
 
 class QueryFilters(BaseModel):
     """The only supported query filter."""
@@ -101,6 +104,22 @@ class SubmitAnswerArgs(BaseModel):
         return v
 
 
+class _GroundedSubmitAnswerArgs(SubmitAnswerArgs):
+    """Strict schema for submitting task answer and evidence."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True, title="SubmitAnswerArgs")
+    answer: str = Field(
+        min_length=1,
+        description="Exact task answer copied from a queried record or a document read; no prose.",
+    )
+    evidence: list[str] = Field(
+        description=(
+            "Exact evidence_id values acquired from successful query_records or read_document; "
+            "never invent IDs. Search summaries are not acquired document evidence."
+        )
+    )
+
+
 class _Order(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
     order_id: str
@@ -153,7 +172,11 @@ class ToolLabEnvironment(Environment):
         registry: ToolRegistry | None = None,
         executor: ToolExecutor | None = None,
         validator: DefaultToolValidator | None = None,
+        tool_set_version: str = "v1.0.0",
     ) -> None:
+        if tool_set_version not in TOOL_LAB_TOOL_SET_VERSIONS:
+            raise ValueError("Unsupported ToolLab tool description version")
+        self._grounded_descriptions = tool_set_version == TOOL_LAB_TOOL_SET_VERSION
         self._registry = registry or create_tool_lab_registry()
         self._validator = validator or DefaultToolValidator(self._registry)
         self._executor = executor or ToolExecutor(self._registry, self._validator)
@@ -174,6 +197,11 @@ class ToolLabEnvironment(Environment):
         self._timeout_tool: str | None = None
 
         self._register_handlers()
+        submit_schema = self._registry.get_schema("submit_answer")
+        if submit_schema is None or submit_schema.version != (
+            "1.1.0" if self._grounded_descriptions else "1.0.0"
+        ):
+            raise ValueError("ToolLab registry tool description version mismatch")
 
     def _register_handlers(self) -> None:
         """Register environment-bound tool handlers if not already registered."""
@@ -190,10 +218,17 @@ class ToolLabEnvironment(Environment):
         if not self._registry.has_tool("submit_answer"):
             self._registry.register(
                 name="submit_answer",
-                description="Submit the exact status value and evidence IDs returned by the query.",
+                description=(
+                    "Submit the task answer and evidence IDs acquired by querying records "
+                    "or reading documents."
+                    if self._grounded_descriptions
+                    else "Submit the exact status value and evidence IDs returned by the query."
+                ),
                 risk_level="LOW_RISK_WRITE",
-                version="1.0.0",
-                param_model=SubmitAnswerArgs,
+                version="1.1.0" if self._grounded_descriptions else "1.0.0",
+                param_model=_GroundedSubmitAnswerArgs
+                if self._grounded_descriptions
+                else SubmitAnswerArgs,
                 handler=self._handle_submit_answer,
             )
 

@@ -8,7 +8,7 @@
       "provider": "aihubmix",
       "is_default": true,
       "is_experimental": false,
-      "notes": "2026-09-21 旧 Key 的两条真实工具任务通过；2026-10-01 新 Key 允许范围未包含此型号。目录默认只供候选展示，不能证明当前 Key 可调用。"
+      "notes": "2026-10-08 当前账号实测：BFCL、订单任务通过，LangGraph 多轮文档任务通过（4 次模型/4 次工具调用）。默认演示候选；免费通道仍受账号配额与上游波动影响，不保证持续可用。"
     },
     {
       "id": "xiaomi-mimo-v2.6-pro-free",
@@ -16,7 +16,7 @@
       "provider": "aihubmix",
       "is_default": false,
       "is_experimental": true,
-      "notes": "2026-09-23 旧 Key 的 BFCL 与 ToolLab 各一题通过；2026-10-01 新 Key 两次最小请求均返回 429。当前可见不等于可调用。"
+      "notes": "2026-10-08 当前目录可见，但 BFCL 与订单任务均返回供应商 HTTP 429（限流/配额类错误），未执行工具。本次不推荐现场使用；目录可见不等于可调用，不能据此认定永久下线。"
     },
     {
       "id": "coding-glm-5.3-free",
@@ -24,7 +24,7 @@
       "provider": "aihubmix",
       "is_default": false,
       "is_experimental": true,
-      "notes": "2026-10-01 新 Key 的 BFCL 与 ToolLab 各一题真实通过；仅是带日期的小样本，不代表持续可用或长期额度。"
+      "notes": "2026-10-08 当前账号实测：BFCL 与订单任务各一题通过，可作为真实模型备用。仅是带日期的小样本，不代表持续可用、长期额度或长序列能力。"
     },
     {
       "id": "xiaomi-mimo-v2.5-pro-free",
@@ -32,7 +32,24 @@
       "provider": "aihubmix",
       "is_default": false,
       "is_experimental": true,
-      "notes": "2026-09-23 旧 Key 目录曾列出此模型；2026-10-01 新 Key 允许范围未包含它。历史目录记录不能证明当前调用权限。"
+      "notes": "2026-10-08 当前目录可见，但 BFCL 与订单任务均返回供应商 HTTP 429（限流/配额类错误），未执行工具。本次不推荐现场使用；具体限额原因需检查供应商账号，不能靠放宽平台工具校验解决。"
+    },
+    {
+      "id": "coding-minimax-m3-free",
+      "name": "Coding MiniMax M3 Free",
+      "provider": "aihubmix",
+      "is_default": false,
+      "is_experimental": true,
+      "notes": "2026-10-11 当前账号实测：BFCL、订单任务通过；v1.1.0 文档任务完成搜索、阅读与提交，但答案包含多余原文，精确评测未通过。可调用的实验候选，不推荐作为文档演示首选；旧 v1.0.0 文档失败记录保留。"
+    },
+    {
+      "id": "coding-glm-5.3-flash-free",
+      "name": "Coding GLM 5.3 Flash Free",
+      "provider": "aihubmix",
+      "is_default": false,
+      "is_experimental": true,
+      "allow_catalog_missing": true,
+      "notes": "2026-10-11 当前账号实测：BFCL、订单、文档各一题通过；v1.1.0 文档经正式实时接口复测通过。账号 /v1/models 目录缺失但真实请求成功，允许显式目录例外尝试。仅小样本，仍受账号配额与上游通道波动影响。"
     },
     {
       "id": "fake",

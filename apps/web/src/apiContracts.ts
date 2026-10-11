@@ -125,19 +125,29 @@ const metricsSchema = z.looseObject({
   recovery_total_reference_cost: armMetricFields.total_reference_cost,
 });
 const experimentConfig = z.looseObject({
-  comparison_axis: z.optional(z.enum(['recovery_policy', 'runtime_backend'])),
+  comparison_axis: z.optional(z.enum(['recovery_policy', 'runtime_backend', 'context_policy'])),
   model: z.optional(z.union([z.string(), z.looseObject({ model: z.string() })])),
   provider: z.optional(z.string()), scenario: z.optional(z.nullable(z.string())),
   seeds: z.optional(z.array(z.int())), seed: z.optional(z.int()),
   repeat_count: z.optional(count), task_ids: z.optional(z.array(z.string())), evaluator: z.optional(z.string()),
+  max_total_tokens: z.optional(z.int().check(z.minimum(1), z.maximum(1_000_000_000))),
   budget: z.optional(z.looseObject({ max_execution_time_ms: z.optional(count) })),
-  baseline_agent: z.optional(z.looseObject(runtimeFields)), recovery_agent: z.optional(z.looseObject(runtimeFields)),
+  baseline_agent: z.optional(z.looseObject({ ...runtimeFields, context_policy: z.nullish(contextPolicy) })), recovery_agent: z.optional(z.looseObject({ ...runtimeFields, context_policy: z.nullish(contextPolicy) })),
 });
 export const experimentArtifactSchema = z.looseObject({
-  schema_version: z.enum(['1.0', '1.1', '1.2']), experiment_id: uuid, created_at: utc,
+  schema_version: z.enum(['1.0', '1.1', '1.2', '1.3', '1.4']), experiment_id: uuid, created_at: utc,
   config: experimentConfig, config_hash: hash, episode_ids: z.array(uuid),
   pairs: z.array(pairSchema), metrics: metricsSchema,
-}).check(z.refine((value) => value.pairs.length === value.metrics.total_pairs
+}).check(z.refine((value) => (value.config.max_total_tokens == null || ['1.3', '1.4'].includes(value.schema_version))
+  && (value.config.comparison_axis !== 'context_policy' || (value.schema_version === '1.4'
+    && value.config.baseline_agent?.context_policy?.mode === 'full'
+    && value.config.recovery_agent?.context_policy?.mode === 'recent_tool_rounds'
+    && value.config.baseline_agent.runtime_backend === value.config.recovery_agent.runtime_backend
+    && value.config.baseline_agent.runtime_strategy === value.config.recovery_agent.runtime_strategy
+    && value.metrics.retry_eligible_count == null && value.metrics.retry_recovery_count == null
+    && value.metrics.retry_recovery_rate == null
+    && value.pairs.every((pair) => pair.retry_eligible == null && !pair.recovered)))
+  && value.pairs.length === value.metrics.total_pairs
   && value.episode_ids.length === value.pairs.length * 2
   && new Set(value.episode_ids).size === value.episode_ids.length
   && new Set(value.pairs.flatMap((pair) => [pair.baseline_episode_id, pair.recovery_episode_id])).size

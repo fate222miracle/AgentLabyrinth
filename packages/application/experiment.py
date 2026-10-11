@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -10,20 +9,24 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4, uuid5
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from packages.application.checkpoint import (
     CheckpointStore,
+    read_completed_episode,
     resume_checkpointed_episode,
     run_checkpointed_episode,
 )
 from packages.application.trace import read_artifact, write_text_atomically
 from packages.domain.models import (
     AgentSpec,
+    ContextPolicy,
     EpisodeArtifact,
+    EventType,
     RunConfig,
     TaskSpec,
     TerminationReason,
+    TraceEvent,
 )
 from packages.domain.ports import ModelProvider
 from packages.environments.tool_lab.environment import (
@@ -35,7 +38,7 @@ from packages.runtime.factory import create_runtime, runtime_version
 from packages.tools.executor import ToolExecutor
 from packages.tools.registry import DefaultToolValidator
 
-ComparisonAxis = Literal["recovery_policy", "runtime_backend"]
+ComparisonAxis = Literal["recovery_policy", "runtime_backend", "context_policy"]
 
 
 class PairComparison(BaseModel):
@@ -114,12 +117,28 @@ class ReferenceCostBudgetExceeded(ValueError):
     """The configured model-maker reference budget cannot admit another Episode."""
 
 
+class ExperimentTokenBudgetError(ValueError):
+    """A reported-token boundary or unknown usage prevents further execution."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+def _global_token_limit(metadata: dict[str, Any]) -> int | None:
+    """Validate the optional global threshold without coercing old inputs."""
+    value = metadata.get("max_total_tokens")
+    if value is not None and (type(value) is not int or not 1 <= value <= 1_000_000_000):
+        raise ValueError("Global Token budget must be an integer between 1 and 1000000000")
+    return value
+
+
 class ExperimentArtifact(BaseModel):
     """Immutable persistent artifact of a complete paired comparison experiment."""
 
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = "1.2"
     experiment_id: UUID
     created_at: str
     config: dict[str, Any]
@@ -128,12 +147,47 @@ class ExperimentArtifact(BaseModel):
     pairs: list[PairComparison]
     metrics: ExperimentAggregateMetrics
 
+    @model_validator(mode="after")
+    def token_budget_revision(self) -> "ExperimentArtifact":
+        """Require the new artifact revision for explicit global budget semantics."""
+        if _global_token_limit(self.config) is not None and self.schema_version not in (
+            "1.3",
+            "1.4",
+        ):
+            raise ValueError("Global Token budget requires experiment revision 1.3")
+        if self.config.get("comparison_axis") == "context_policy":
+            if self.schema_version != "1.4":
+                raise ValueError("Context comparison requires experiment revision 1.4")
+            left = ContextPolicy.model_validate(
+                self.config.get("baseline_agent", {}).get("context_policy")
+            )
+            right = ContextPolicy.model_validate(
+                self.config.get("recovery_agent", {}).get("context_policy")
+            )
+            if any(
+                self.config["baseline_agent"].get(field) != self.config["recovery_agent"].get(field)
+                for field in ("runtime_backend", "runtime_strategy", "runtime_version")
+            ):
+                raise ValueError("Context comparison requires the same Runtime and recovery policy")
+            if left.mode != "full" or right.mode != "recent_tool_rounds":
+                raise ValueError("Context comparison requires full/recent_tool_rounds")
+            if any(pair.retry_eligible is not None or pair.recovered for pair in self.pairs) or any(
+                value is not None
+                for value in (
+                    self.metrics.retry_eligible_count,
+                    self.metrics.retry_recovery_count,
+                    self.metrics.retry_recovery_rate,
+                )
+            ):
+                raise ValueError("Context comparison has no recovery metrics")
+        return self
+
 
 class ExperimentCheckpoint(BaseModel):
     """Frozen paired-run plan; completed Episode artifacts are the progress ledger."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     experiment_id: UUID
     created_at: str
     baseline_agent: AgentSpec
@@ -150,6 +204,15 @@ class ExperimentCheckpoint(BaseModel):
         fields = self.model_dump(mode="json", exclude={"plan_hash"})
         if compute_config_hash(fields) != self.plan_hash:
             raise ValueError("Experiment checkpoint provenance mismatch")
+        if _global_token_limit(self.config_metadata) is not None and self.schema_version not in (
+            "1.1",
+            "1.2",
+        ):
+            raise ValueError("Global Token budget requires experiment plan revision 1.1")
+        if self.comparison_axis == "context_policy" and self.schema_version != "1.2":
+            raise ValueError("Context comparison requires plan revision 1.2")
+        if self.comparison_axis == "context_policy":
+            _validate_context_agents(self.baseline_agent, self.recovery_agent)
 
 
 def experiment_checkpoint_path(artifacts_dir: Path, experiment_id: UUID) -> Path:
@@ -167,22 +230,28 @@ def read_experiment_checkpoint(path: Path) -> ExperimentCheckpoint:
 def write_experiment_checkpoint(path: Path, state: ExperimentCheckpoint) -> None:
     """Publish a complete plan before launching the first matrix cell."""
     state.verify()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.stem}.{uuid4().hex}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8") as output:
-            output.write(state.model_dump_json(indent=2) + "\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    write_text_atomically(path, state.model_dump_json(indent=2) + "\n")
 
 
 def compute_config_hash(data: dict[str, Any]) -> str:
     """Compute deterministic SHA-256 hash of experiment input configuration."""
     canonical = json.dumps(data, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _validate_context_agents(baseline_agent: AgentSpec, recovery_agent: AgentSpec) -> None:
+    """Reject mixed context comparisons before creation or recovery."""
+    if (
+        baseline_agent.context_policy is None
+        or baseline_agent.context_policy.mode != "full"
+        or recovery_agent.context_policy is None
+        or recovery_agent.context_policy.mode != "recent_tool_rounds"
+        or baseline_agent.runtime_backend != recovery_agent.runtime_backend
+        or baseline_agent.runtime_strategy != recovery_agent.runtime_strategy
+    ):
+        raise ValueError(
+            "Context comparison requires full/recent with the same backend and recovery policy"
+        )
 
 
 def create_experiment_plan(
@@ -198,7 +267,9 @@ def create_experiment_plan(
     """Validate and freeze a paired matrix before accepting or executing work."""
     if not tasks or not seeds or len(set(seeds)) != len(seeds) or repeat_count < 1:
         raise ValueError("Experiment requires tasks, unique seeds and a positive repeat count")
-    for field in ("model", "prompt_version", "tool_set_version", "budget", "context_policy"):
+    for field in ("model", "prompt_version", "tool_set_version", "budget") + (
+        () if comparison_axis == "context_policy" else ("context_policy",)
+    ):
         if getattr(baseline_agent, field) != getattr(recovery_agent, field):
             raise ValueError(f"Paired agents must share {field}")
     if comparison_axis == "runtime_backend":
@@ -215,6 +286,8 @@ def create_experiment_plan(
             or recovery_agent.recovery_policy != "invalid_arguments_once"
         ):
             raise ValueError("Recovery comparison requires the same backend and baseline/recovery")
+    elif comparison_axis == "context_policy":
+        _validate_context_agents(baseline_agent, recovery_agent)
     else:
         raise ValueError("Unknown comparison axis")
     raw_limit = config_metadata.get("max_reference_cost_usd")
@@ -222,8 +295,13 @@ def create_experiment_plan(
         Decimal(str(raw_limit)) <= 0 or not config_metadata.get("reference_price_version")
     ):
         raise ValueError("Reference cost budget requires a positive limit and price version")
+    token_limit = _global_token_limit(config_metadata)
     plan = {
-        "schema_version": "1.0",
+        "schema_version": "1.2"
+        if comparison_axis == "context_policy"
+        else "1.1"
+        if token_limit is not None
+        else "1.0",
         "experiment_id": str(experiment_id or uuid4()),
         "created_at": datetime.now(UTC).isoformat(),
         "baseline_agent": baseline_agent.model_dump(mode="json"),
@@ -298,10 +376,84 @@ async def run_experiment(
         ):
             raise ValueError("Experiment resume configuration mismatch")
     experiment_id = checkpoint_state.experiment_id
+    if (config_metadata or {}) != checkpoint_state.config_metadata:
+        raise ValueError("Experiment resume metadata mismatch")
     created_at = checkpoint_state.created_at
     episode_ids: list[UUID] = []
     pairs: list[PairComparison] = []
     committed_reference_cost = Decimal("0")
+    token_limit = _global_token_limit(checkpoint_state.config_metadata)
+    token_ledger: dict[UUID, int] = {}
+
+    def reported_tokens(
+        events: tuple[TraceEvent, ...] | list[TraceEvent], calls: int, total: int
+    ) -> int:
+        """Fail closed if any requested response lacks trustworthy accounting."""
+        requests = [event for event in events if event.event_type == EventType.MODEL_REQUESTED]
+        responses = [event for event in events if event.event_type == EventType.MODEL_RESPONDED]
+        measured = sum(
+            event.token_usage.prompt_tokens + event.token_usage.completion_tokens
+            for event in responses
+        )
+        if len(requests) != calls or len(responses) != calls or measured != total:
+            raise ExperimentTokenBudgetError("EXPERIMENT_TOKEN_USAGE_UNKNOWN")
+        return total
+
+    runs = [
+        (task, current_seed, repeat_index)
+        for current_seed in resolved_seeds
+        for repeat_index in range(1, repeat_count + 1)
+        for task in tasks
+    ]
+    if token_limit is not None:
+        # Rebuild once; later completions replace their own safe-point count.
+        store = CheckpointStore(artifacts_dir / "checkpoints")
+        for pair_index, (task, current_seed, _) in enumerate(runs):
+            for arm, agent in (("baseline", baseline_agent), ("recovery", recovery_agent)):
+                arm_id = uuid5(experiment_id, f"{pair_index}:{arm}")
+                expected_config = RunConfig(
+                    seed=current_seed, runtime_version=runtime_version(agent.runtime_backend)
+                )
+                artifact = read_completed_episode(arm_id, artifacts_dir)
+                if artifact is not None:
+                    if (
+                        artifact.agent != agent
+                        or artifact.task != task
+                        or artifact.run_config != expected_config
+                    ):
+                        raise ValueError("Saved experiment Episode provenance mismatch")
+                    usage = artifact.episode.token_usage
+                    token_ledger[arm_id] = reported_tokens(
+                        artifact.events,
+                        artifact.episode.model_call_count,
+                        usage.prompt_tokens + usage.completion_tokens,
+                    )
+                elif store.path(arm_id).is_file():
+                    saved = store.load(arm_id)
+                    if (
+                        saved.agent != agent
+                        or saved.task != task
+                        or saved.run_config != expected_config
+                    ):
+                        raise ValueError("Saved experiment checkpoint provenance mismatch")
+                    budget = saved.session.budget
+                    token_ledger[arm_id] = reported_tokens(
+                        saved.events,
+                        budget.model_call_count,
+                        budget.prompt_tokens + budget.completion_tokens,
+                    )
+                elif (artifacts_dir / f"{arm_id}.json").is_file():
+                    raise ValueError("Malformed experiment result has no valid safe point")
+
+    def record_tokens(artifact: EpisodeArtifact) -> None:
+        """Replace one Episode's accumulated usage, never add it twice on resume."""
+        if token_limit is not None:
+            usage = artifact.episode.token_usage
+            token_ledger[artifact.episode.episode_id] = reported_tokens(
+                artifact.events,
+                artifact.episode.model_call_count,
+                usage.prompt_tokens + usage.completion_tokens,
+            )
 
     def check_reference_budget() -> None:
         if reference_limit is not None and committed_reference_cost >= reference_limit:
@@ -331,6 +483,7 @@ async def run_experiment(
             registry=registry,
             executor=ToolExecutor(registry, validator),
             validator=validator,
+            tool_set_version=agent.tool_set_version,
         )
         artifact_path = artifacts_dir / f"{episode_id}.json"
         store = CheckpointStore(artifacts_dir / "checkpoints")
@@ -350,12 +503,20 @@ async def run_experiment(
                     raise ValueError("Saved experiment Episode provenance mismatch")
                 return artifact
         check_reference_budget()
-        if store.path(episode_id).is_file():
+        saved = store.load(episode_id) if store.path(episode_id).is_file() else None
+        if saved is not None and (
+            saved.agent != agent or saved.task != task or saved.run_config != config
+        ):
+            raise ValueError("Saved experiment checkpoint provenance mismatch")
+        if (
+            token_limit is not None
+            and sum(token_ledger.values()) >= token_limit
+            and (saved is None or saved.session.next_node != "end")
+        ):
+            raise ExperimentTokenBudgetError("EXPERIMENT_TOKEN_BUDGET_EXCEEDED")
+        if saved is not None:
             if resume_provider_factory is None:
                 raise ValueError("A resumable provider factory is required")
-            saved = store.load(episode_id)
-            if saved.agent != agent or saved.task != task or saved.run_config != config:
-                raise ValueError("Saved experiment checkpoint provenance mismatch")
             return await resume_checkpointed_episode(
                 episode_id,
                 create_runtime(
@@ -379,13 +540,6 @@ async def run_experiment(
             episode_id=episode_id,
         )
 
-    runs = (
-        (task, current_seed, repeat_index)
-        for current_seed in resolved_seeds
-        for repeat_index in range(1, repeat_count + 1)
-        for task in tasks
-    )
-
     # Run every matrix cell serially: Baseline then Recovery under exact same conditions.
     for pair_index, (task, current_seed, repeat_index) in enumerate(runs):
         # 1. Execute Baseline Episode
@@ -394,6 +548,7 @@ async def run_experiment(
         base_id = uuid5(experiment_id, f"{pair_index}:baseline")
         art_base = await run_arm(baseline_agent, task, current_seed, base_id)
         episode_ids.append(base_id)
+        record_tokens(art_base)
         record_reference_cost(art_base)
 
         # 2. Execute Recovery Episode
@@ -402,6 +557,7 @@ async def run_experiment(
         rec_id = uuid5(experiment_id, f"{pair_index}:recovery")
         art_rec = await run_arm(recovery_agent, task, current_seed, rec_id)
         episode_ids.append(rec_id)
+        record_tokens(art_rec)
         record_reference_cost(art_rec)
 
         # 3. Assess paired outcome
@@ -623,6 +779,8 @@ async def run_experiment(
         "arm_labels": (
             {"baseline": "Reference Runtime", "recovery": "LangGraph Runtime"}
             if comparison_axis == "runtime_backend"
+            else {"baseline": "Full Context", "recovery": "Recent Tool Rounds"}
+            if comparison_axis == "context_policy"
             else {"baseline": "Baseline Policy", "recovery": "Recovery Policy"}
         ),
         "baseline_agent": {
@@ -670,6 +828,12 @@ async def run_experiment(
         "repeat_count": repeat_count,
     }
 
+    for arm, agent in (("baseline", baseline_agent), ("recovery", recovery_agent)):
+        if agent.context_policy is not None:
+            exp_config[f"{arm}_agent"]["context_policy"] = agent.context_policy.model_dump(
+                mode="json"
+            )
+
     if config_metadata:
         # Execution inputs remain authoritative, including for non-API callers.
         for key, value in config_metadata.items():
@@ -679,7 +843,11 @@ async def run_experiment(
     config_hash = compute_config_hash(exp_config)
 
     experiment_artifact = ExperimentArtifact(
-        schema_version="1.2",
+        schema_version="1.4"
+        if comparison_axis == "context_policy"
+        else "1.3"
+        if token_limit is not None
+        else "1.2",
         experiment_id=experiment_id,
         created_at=created_at,
         config=exp_config,
