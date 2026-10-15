@@ -1,0 +1,82 @@
+{
+  "schema_version": "1.0",
+  "id": "38556389-4b27-4549-b4fc-077c57e8a202",
+  "name": "delivery-evidence-chain-002",
+  "version": "1.3.0",
+  "category": "evidence_chain",
+  "description": "自建仿真：核验 SHIP-872 配送争议。定位投诉登记，沿引用核对配送日志、签收复核与最终处理；仅提交该案最终 Status 值，完整引用四份有效依据。已撤销的初次结论和其他包裹的记录不能替代本案证据。",
+  "initial_state": {
+    "task_kind": "document_chain",
+    "document_query": "SHIP-872 complaint",
+    "documents": [
+      {
+        "document_id": "SHIP-ENTRY",
+        "title": "SHIP-872 complaint · 投诉登记",
+        "content": "SHIP-872: customer reports package not received despite delivered scan. Review the carrier log. Next document: SHIP-LOG",
+        "evidence_id": "document:SHIP-ENTRY"
+      },
+      {
+        "document_id": "SHIP-OLD",
+        "title": "SHIP-872初次处理（已撤销）",
+        "content": "Superseded by signature review; do not use as the final decision. Status: closed",
+        "evidence_id": "document:SHIP-OLD"
+      },
+      {
+        "document_id": "SHIP-LOG",
+        "title": "SHIP-LOG · 配送日志",
+        "content": "SHIP-872 scan: delivered to reception at 15:42. Signature identity is disputed and requires review. Next document: SHIP-REVIEW",
+        "evidence_id": "document:SHIP-LOG"
+      },
+      {
+        "document_id": "SHIP-OTHER",
+        "title": "SHIP-873配送记录",
+        "content": "SHIP-873 was signed by its intended recipient. Status: delivered",
+        "evidence_id": "document:SHIP-OTHER"
+      },
+      {
+        "document_id": "SHIP-REVIEW",
+        "title": "SHIP-REVIEW · 签收复核",
+        "content": "SHIP-872 signature belongs to the wrong building's reception. The carrier has approved escalation to a replacement decision. Next document: SHIP-DECISION",
+        "evidence_id": "document:SHIP-REVIEW"
+      },
+      {
+        "document_id": "SHIP-DECISION",
+        "title": "SHIP-DECISION · 最终处理",
+        "content": "SHIP-872 final decision incorporates complaint, delivery log and signature review. Status: replacement_approved",
+        "evidence_id": "document:SHIP-DECISION"
+      }
+    ]
+  },
+  "goal_conditions": {
+    "answer": "replacement_approved",
+    "evidence": [
+      "document:SHIP-DECISION",
+      "document:SHIP-ENTRY",
+      "document:SHIP-LOG",
+      "document:SHIP-REVIEW"
+    ]
+  },
+  "constraints": [
+    "提交完整有效依据链，证据须来自成功阅读",
+    "不强制固定工具轨迹",
+    "每轮只提出一个工具调用，收到结果后再决定下一步；禁止同时提交多个调用。",
+    "仅使用文档搜索、文档阅读和答案提交；从搜索或已读正文复制文档ID，不查询订单记录。",
+    "证据排列顺序不限，但必须完整、无重复、无多余项且确实成功阅读。"
+  ],
+  "expected_tools": [
+    "search_documents",
+    "read_document",
+    "submit_answer"
+  ],
+  "forbidden_tools": [],
+  "max_steps": 10,
+  "token_budget": 20000,
+  "evaluator_config": {
+    "name": "order_status_v2",
+    "split": "development",
+    "origin": "native_long_chain",
+    "dataset_version": "linked-evidence-v1",
+    "evidence_order": "unordered-v1",
+    "document_reference_protocol": "direct-reference-v1"
+  }
+}

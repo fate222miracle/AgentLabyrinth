@@ -33,7 +33,12 @@ from packages.evaluation.order_status import OrderStatusEvaluator  # noqa: E402
 from packages.providers.fake import FakeModelProvider  # noqa: E402
 from packages.runtime.factory import create_runtime  # noqa: E402
 from packages.runtime.session import EpisodeSession, SessionState  # noqa: E402
-from scripts.context_ablation import ContextReport, load_inputs, run_ablation  # noqa: E402
+from scripts.context_ablation import (  # noqa: E402
+    ContextReport,
+    diagnostic_count,
+    load_inputs,
+    run_ablation,
+)
 from scripts.course_demo import validate_preview_directory  # noqa: E402
 
 
@@ -41,7 +46,15 @@ def configured(backend: RuntimeBackend, window: int) -> AgentSpec:
     """Window zero denotes the explicit full-history baseline."""
     agent, _, _ = load_inputs(backend)
     policy = (
-        ContextPolicy()
+        ContextPolicy(
+            schema_version="1.1",
+            algorithm_version="tool-round-window-memory-v1",
+            mode="recent_tool_rounds",
+            max_tool_rounds=1,
+            memory_max_bytes=8192,
+        )
+        if window == -1
+        else ContextPolicy()
         if window == 0
         else ContextPolicy(mode="recent_tool_rounds", max_tool_rounds=window)
     )
@@ -49,7 +62,7 @@ def configured(backend: RuntimeBackend, window: int) -> AgentSpec:
 
 
 @pytest.mark.parametrize("backend", ["handwritten", "langgraph"])
-@pytest.mark.parametrize("window", [0, 1, 2])
+@pytest.mark.parametrize("window", [0, 1, 2, -1])
 def test_document_loss_is_visible_and_budget_bounded(backend: RuntimeBackend, window: int) -> None:
     """Window one forgets the earlier search; this is a Fake engineering outcome."""
     agent = configured(backend, window)
@@ -71,7 +84,7 @@ def test_document_loss_is_visible_and_budget_bounded(backend: RuntimeBackend, wi
     assert artifact.episode.model_call_count == (6 if window == 1 else 3)
     requests = [event for event in artifact.events if event.event_type == EventType.MODEL_REQUESTED]
     assert [event.payload["messages_count"] for event in requests] == (
-        [2, 4, 4, 4, 4, 4] if window == 1 else [2, 4, 6]
+        [2, 4, 4, 4, 4, 4] if window == 1 else [2, 4, 4] if window == -1 else [2, 4, 6]
     )
     assert sum(event.event_type == EventType.EPISODE_FINISHED for event in artifact.events) == 1
     assert artifact.config_hashes["agent"] == content_hash(agent)
@@ -105,7 +118,7 @@ def child(backend: RuntimeBackend, window: int, directory: Path) -> None:
 
 
 @pytest.mark.parametrize("backend", ["handwritten", "langgraph"])
-@pytest.mark.parametrize("window", [0, 1, 2])
+@pytest.mark.parametrize("window", [0, 1, 2, -1])
 def test_projection_survives_process_exit_with_full_history(
     backend: RuntimeBackend, window: int, tmp_path: Path
 ) -> None:
@@ -149,7 +162,11 @@ def test_projection_survives_process_exit_with_full_history(
         for event in artifact.events
         if event.event_type == EventType.MODEL_REQUESTED and event.step_index == 3
     )
-    assert resumed_request.payload["messages_count"] == (4 if window == 1 else 6)
+    assert resumed_request.payload["messages_count"] == (4 if window in (1, -1) else 6)
+    if window == -1:
+        context = resumed_request.payload["context"]
+        assert isinstance(context, dict)
+        assert context["memory_source_call_ids"] == ["call_search_1"]
     assert artifact.episode.token_usage.prompt_tokens == (240 if window == 1 else 120)
     altered = json.loads(checkpoint.model_dump_json())
     altered["agent"]["context_policy"] = json.loads(
@@ -174,6 +191,45 @@ def test_invalid_history_stops_before_calling_provider() -> None:
     assert session.budget.model_call_count == 0
     assert not any(
         event.event_type == EventType.MODEL_REQUESTED for event in session.recorder.events
+    )
+
+
+@pytest.mark.parametrize("backend", ["handwritten", "langgraph"])
+def test_too_small_memory_is_a_visible_failure_not_an_automatic_full_fallback(
+    backend: RuntimeBackend,
+) -> None:
+    """Size pressure cannot silently inflate the memory or model budget."""
+    agent = configured(backend, -1)
+    assert agent.context_policy is not None
+    policy = ContextPolicy.model_validate(
+        {**agent.context_policy.model_dump(), "memory_max_bytes": 256}
+    )
+    agent = agent.model_copy(update={"context_policy": policy})
+    _, tasks, config = load_inputs(backend)
+    artifact = asyncio.run(
+        run_episode(
+            agent,
+            tasks[1],
+            config,
+            create_runtime(agent, FakeModelProvider()),
+            ToolLabEnvironment(),
+            OrderStatusEvaluator(),
+        )
+    )
+    assert not artifact.evaluation.success
+    assert artifact.episode.termination_reason == TerminationReason.MAX_STEPS
+    contexts = [
+        event.payload["context"]
+        for event in artifact.events
+        if event.event_type == EventType.MODEL_REQUESTED
+    ]
+    assert any(
+        isinstance(context, dict) and diagnostic_count(context["memory_omitted_entries_count"]) > 0
+        for context in contexts
+    )
+    assert all(
+        isinstance(context, dict) and diagnostic_count(context["memory_bytes"]) <= 256
+        for context in contexts
     )
 
 

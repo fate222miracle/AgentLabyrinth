@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { Background, BaseEdge, Controls, Handle, MarkerType, Position, ReactFlow, getBezierPath, getNodesBounds, getViewportForBounds, useReactFlow,
   type Edge, type EdgeProps, type Node, type NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { flowFrames, flowPath, frameIndexAt, type FlowFrame } from './flowFrames';
+import { documentEvidence, flowFrames, flowPath, frameIndexAt, type FlowFrame } from './flowFrames';
+import { DocumentEvidence } from './DocumentEvidence';
 import type { TraceStepEvent } from './traceSteps';
 import { ReadableFields } from './ReadableFields';
 import { useContentMotion } from './useContentMotion';
@@ -161,6 +162,8 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
     { label: '目标订单', value: initialInput.target_order_id },
   ].filter((item): item is { label: string; value: string } => typeof item.value === 'string' && item.value.length > 0);
   const cutoff = following ? frame?.eventIndex ?? -1 : eventIndex;
+  const documents = useMemo(() => documentEvidence(isToolLab ? events : [], cutoff), [events, cutoff, isToolLab]);
+  const hasDocuments = documents.documents.length > 0;
   const path = useMemo(() => flowPath(frames, cutoff), [frames, cutoff]);
   const recordedState = savedRecord(frames.filter((beat) => beat.eventIndex <= cutoff
     && beat.phase === 'update').at(-1)?.payload.state);
@@ -205,7 +208,7 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
       targetPosition: columns === 1 ? Position.Top : row % 2 ? Position.Right : Position.Left,
       width: 224, height: 152, type: 'visual', ariaLabel: `Step ${beat.step} · ${node.kind === 'tool' ? beat.tool ?? '调用校验' : node.kind === 'model' ? '模型请求' : node.kind === 'task' ? '接收任务' : '运行结束'} · ${status}`,
       data: { title: node.kind === 'model' ? '模型请求' : node.kind === 'task' ? '接收任务' : node.kind === 'finish' ? isBfcl && hasRecordedCall ? '函数调用输出' : recordedAnswer !== null ? '任务答案' : '运行结束' : toolLabels[beat.tool ?? ''] ?? beat.tool ?? '调用校验',
-        subtitle: node.kind === 'model' ? model : node.kind === 'task' ? '任务输入与初始观察' : node.kind === 'finish' ? isBfcl && hasRecordedCall ? callLabel(recordedCall) : recordedAnswer ?? String(beat.payload.termination_reason ?? '终止原因未记录') : beat.tool ?? '工具名未记录',
+        subtitle: node.kind === 'model' ? model : node.kind === 'task' ? '任务输入与初始观察' : node.kind === 'finish' ? isBfcl && hasRecordedCall ? callLabel(recordedCall) : recordedAnswer ?? String(beat.payload.termination_reason ?? '终止原因未记录') : beat.tool === 'read_document' && typeof beat.arguments?.document_id === 'string' ? beat.arguments.document_id : beat.tool ?? '工具名未记录',
         kind: node.kind === 'tool' ? beat.tool ?? 'gateway' : node.kind, step: beat.step, status, active: activeNode === node.id,
         complete: !beat.failed && ['respond', 'return', 'observe'].includes(beat.phase), failed: beat.failed, frameIndex: node.frameIndex,
         transport: node.kind !== 'tool' || isBfcl ? '' : beat.phase === 'reject' ? '未执行' : beat.phase === 'choose' ? '待校验'
@@ -249,7 +252,7 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
     <div className="flow-call-trail" aria-label="已记录执行节点">{path.map((node) => <button key={node.id} type="button" disabled={following}
       className={`${node.id === activeNode ? 'active' : ''} ${node.frame.failed ? 'failed' : ''}`} aria-current={node.id === activeNode ? 'step' : undefined}
       onClick={() => { setPlaying(false); selectFrame(node.frameIndex); }}>{node.kind === 'tool' ? toolLabels[node.frame.tool ?? ''] ?? node.frame.tool ?? '调用校验' : node.kind === 'model' ? `模型 ${node.frame.step}` : node.kind === 'task' ? '任务' : '结束'}{node.frame.failed ? ' · 失败' : ''}</button>)}</div></div>
-    <div className="flow-workspace">
+    <div className={`flow-workspace ${hasDocuments ? 'with-documents' : ''}`}>
     <div className="flow-canvas" ref={canvas}>
       {path.length === 0 && <p className="flow-empty-path">当前记录尚未出现模型请求或工具调用。</p>}
       <ReactFlow key={`${compact ? 'mobile' : 'desktop'}-${focused}`} nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
@@ -261,6 +264,8 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
         <Background gap={24} size={1} color="var(--border-highlight)" /><Controls showInteractive={false} />
       </ReactFlow>
     </div>
+    <div className="flow-sidebar">
+    {hasDocuments && <DocumentEvidence source={documents} running={live && termination !== '连接中断'} />}
     <aside ref={inspector} className={`flow-inspector ${frame.failed ? 'failed' : ''}`} aria-label="当前阶段摘要" tabIndex={0}>
       <span className="story-section-label">Step {frame.step} · 当前阶段</span>
       <h3>{phaseLabels[frame.phase]}</h3>
@@ -270,7 +275,8 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
       {frame.phase === 'request' && Object.keys(savedRecord(frame.payload.context)).length > 0 && <section aria-label="已保存模型输入诊断">
         <h4>模型可见上下文</h4>
         <ReadableFields entries={Object.entries(savedRecord(frame.payload.context)).filter(([key]) =>
-          ['mode', 'max_tool_rounds', 'history_messages_count', 'visible_messages_count', 'dropped_messages_count', 'input_messages_bytes'].includes(key))} />
+          ['mode', 'max_tool_rounds', 'history_messages_count', 'visible_messages_count', 'dropped_messages_count', 'input_messages_bytes',
+            'memory_max_bytes', 'memory_entries_count', 'memory_omitted_entries_count', 'memory_bytes', 'memory_source_call_ids'].includes(key))} />
         <p>字节仅为序列化消息 UTF-8 大小，不是 Token 或 HTTP 包大小；完整历史仍保留。</p>
       </section>}
       {frame.phase === 'respond' && <p>已收到模型响应，后续调用以记录的校验与执行事件为准。</p>}
@@ -297,6 +303,7 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
       {frame.durationMs !== null && <p className="flow-recorded-duration">本事件记录耗时 {frame.durationMs} ms</p>}
       <p className="flow-inspector-note">摘要取自当前保存事件；完整数据可在技术 Trace 中核查。</p>
     </aside>
+    </div>
     </div>
     {displayMode === 'replay' && <div className="flow-player">
       <button type="button" className="btn-secondary" disabled={index === 0} onClick={() => { setPlaying(false); selectFrame(index - 1); }} aria-label="动画上一帧">←</button>

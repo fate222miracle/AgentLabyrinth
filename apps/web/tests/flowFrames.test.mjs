@@ -1,8 +1,61 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { flowFrames, flowPath, frameIndexAt } from '../src/flowFrames.ts';
+import { documentEvidence, flowFrames, flowPath, frameIndexAt } from '../src/flowFrames.ts';
 
 const event = (event_type, payload, step_index = 1) => ({ event_type, payload, step_index });
+test('document shelf uses only arrived outcomes; failed, null and forged citations never acquire evidence', () => {
+  const events = [
+    event('OBSERVATION_CREATED', {initial_state:{documents:[
+      {document_id:'policy',title:'Policy',content:'Original document',evidence_id:'doc:policy'},
+      {document_id:'old',title:'Archived',content:'Distractor',evidence_id:'doc:old'},
+      {document_id:3,content:'malformed'},
+    ]}},0),
+    event('TOOL_CALL_PROPOSED',{call_id:'search',name:'search_documents'}),
+    event('TOOL_SUCCEEDED',{call_id:'search',observation:{result:{documents:[{document_id:'policy',title:'Policy'}]}}}),
+    event('TOOL_CALL_PROPOSED',{call_id:'read',name:'read_document',arguments:{document_id:'policy'}}),
+    event('TOOL_STARTED',{call_id:'read',transport:'mcp'}),
+    event('TOOL_SUCCEEDED',{call_id:'read',observation:{result:{document:{document_id:'policy',content:'Actual returned body',evidence_id:'doc:policy'}}}}),
+    event('TOOL_CALL_PROPOSED',{call_id:'submit',name:'submit_answer',arguments:{evidence:['doc:policy','doc:old']}}),
+    event('TOOL_SUCCEEDED',{call_id:'submit',observation:{result:{feedback:'submitted'}}}),
+    event('TOOL_CALL_PROPOSED',{call_id:'retry',name:'read_document',arguments:{document_id:'policy'}}),
+    event('TOOL_STARTED',{call_id:'retry'}),
+    event('TOOL_FAILED',{call_id:'retry',error:{code:'TOOL_TIMEOUT'}}),
+    event('TOOL_CALL_PROPOSED',{call_id:'missing',name:'read_document',arguments:{document_id:'missing'}}),
+    event('TOOL_STARTED',{call_id:'missing'}),
+    event('TOOL_SUCCEEDED',{call_id:'missing',observation:{result:{document:null}}}),
+    event('TOOL_CALL_PROPOSED',{call_id:'denied',name:'read_document',arguments:{document_id:'old'}}),
+    event('TOOL_CALL_VALIDATED',{call_id:'denied',permitted:false,error_code:'FORBIDDEN_TOOL'}),
+    event('ENVIRONMENT_UPDATED',{state:{acquired_evidence:['doc:old'],submission:{evidence:['doc:old']}}}),
+    event('TOOL_CALL_PROPOSED',{call_id:'again',name:'read_document',arguments:{document_id:'policy'}},2),
+    event('TOOL_STARTED',{call_id:'again'},2),
+    event('TOOL_SUCCEEDED',{call_id:'again',observation:{result:{document:{document_id:'policy',content:'Actual second return'}}}},2),
+  ];
+  const at = index => documentEvidence(events,index);
+  assert.deepEqual(at(-1).documents,[]);
+  assert.equal(at(0).documents.length,2);
+  assert.ok(at(0).documents.every(doc => !doc.read && !doc.cited));
+  assert.equal(at(2).documents[0].status,'found');
+  assert.equal(at(3).activeId,null); // A proposal is not execution.
+  assert.equal(at(4).activeId,'policy');
+  assert.equal(at(4).documents[0].status,'reading');
+  assert.equal(at(4).documents[0].read,false);
+  assert.equal(at(5).documents[0].content,'Actual returned body');
+  assert.equal(at(6).documents[0].cited,false); // Submission proposal is not accepted yet.
+  assert.equal(at(7).documents[0].cited,true);
+  assert.equal(at(7).documents[1].read,false);
+  assert.equal(at(10).documents[0].status,'failed');
+  assert.equal(at(10).documents[0].read,true); // A later failure does not erase earlier success.
+  assert.notEqual(at(4).readCursor,at(9).readCursor);
+  assert.equal(at(13).documents.find(doc => doc.id === 'missing').read,false);
+  assert.equal(at(16).documents.find(doc => doc.id === 'old').status,'failed');
+  assert.equal(at(16).documents.find(doc => doc.id === 'old').read,false);
+  assert.equal(at(0).documents[0].readCount,0);
+  assert.equal(at(16).documents[0].readCount,1); // Failed retry and fake snapshot do not count.
+  assert.equal(at(13).documents.find(doc => doc.id === 'missing').readCount,0);
+  assert.equal(at(18).documents[0].readCount,1); // Started again, no returned document yet.
+  assert.equal(at(19).documents[0].readCount,2);
+  assert.deepEqual(documentEvidence([event('MODEL_REQUESTED',{})],10).documents,[]);
+});
 test('MCP beats preserve recorded order and distinguish local submission', () => {
   const frames = flowFrames([
     event('TOOL_CALL_PROPOSED', {call_id:'a', name:'search_documents'}),

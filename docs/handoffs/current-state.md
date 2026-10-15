@@ -1,6 +1,186 @@
 # Current state
 
-更新：2026-10-11。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+更新：2026-10-15。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+
+## 2026-10-15 本次GitHub提交授权
+
+负责人明确要求先提交GitHub，再开展其所读论文的精读。本次授权提交/推送已验收的本地源码、任务、测试、研究/交接文档及狐狸品牌资源；此前禁止自动提交仍作为后续默认，不把本次授权延长为自动发布。最终完整门禁证据沿下节395 Python/38 Node/47 Edge，提交前检查远端差异、diff格式与敏感数据；本机.env、缓存及实验产物不纳入Git。提交与推送完成状态以Git提交历史和远端校验为准，本文不提前声称成功。论文范围待负责人提供标题/链接/PDF，不从旧讨论猜测。
+
+## 2026-10-15 Codex验收Trae并接管主要技术开发
+
+负责人要求复核Trae已完成内容并由Codex承担后续主要技术开发。本轮沿ADR-031验收已经落地的同窗口记忆正式Experiment，不转而实施多Agent或其他新核心协议。Trae主流程可用，但Codex复现并修复三类校验缺口：①冻结计划verify未重复检查模型/Prompt/工具/预算等固定变量，改后重算plan_hash也曾通过；现共享记忆校验比较除id/name/context_policy外的完整Agent配置。②请求已有双向版本门，但计划1.3/结果1.5尚可挂旧轴；补后端与Web的反向拒绝，仅新轴使用新版本。③新轴结果漏查recovery_policy，Web漏查runtime_version，两侧同时缺字段也曾被视为一致；现必需且匹配Runtime来源、校验策略与恢复标签一致，并让null/数组臂配置产生正常ValidationError，而不是拖垮历史看板。
+
+两项新增失败测试在原实现实测均DID NOT RAISE，修复后相关Python33项通过；后续追加损坏配置/无效Runtime来源拒绝。首次普通权限运行因测试父目录缺失/沙箱缓存权限未能执行，建隔离目录并使用本机测试权限后才复现；保留失败记录。完整门禁首轮退出0：395 Python/58.73s、mypy104、四套22格回归零退化、旧24格上下文、Node38、Edge47/47（1.9m）、audit0，日志.uv-cache/codex-memory-review-20261015.log，产物artifacts/quality/8cc7224a-fb6a-4419-ae37-ee8cd7edd79a/。补完最后的损坏配置/Runtime来源检查后，**最终代码再次完整门禁退出0**：395 Python/60.48s（含18项新轴用例）、Node38/38、完整Edge47/47（1.9m），格式/lint/mypy104、四套22格回归/旧24格上下文、构建及audit0均通过。最终日志.uv-cache/codex-memory-review-final-20261015.log，产物artifacts/quality/9c8f141b-0ec7-4930-a42e-0b4dd63b45b6/。本机Edge通道，不冒称未运行的Chromium/远端CI通过。
+
+浏览器覆盖新轴显式运行、非法N/M、CSV既有列、刷新/前后导航仅GET、草稿隔离和Trace记忆来源。四视口自动检查通过；Codex实际查看首轮1440/1280/768/390结果截图（playwright/81946a66-7fc2-4a73-a0d6-5768a450a927/），无整体溢出。只是自动化及截图技术复核，不替代现场投影/操作手感签收。本轮没有新真实模型推理；既有MiniMax单对CLI证据不伪装为新正式Experiment或稳定收益。
+
+[源码阅读/调用链/失败路径/防错交接](../learning/V0.3-memory-ablation-20261015.md)已新增，README、AGENTS、需求§0.5同步。ADR-031与任务卡顶部改为Implemented/待负责人验收，明确已实现事实，不自行标Accepted或签收整版V0.2/V0.3。下一步先负责人查看当前入口；新的V0.3能力由实际失败驱动并另提具体ADR，不自动引入摘要模型/数据库/多Agent。接手时8000/5173/8765没有监听服务；本轮测试仅启动独立Fake服务，不主动改正常服务配置。HEAD998ff6e与全部先前未提交/未跟踪交付保留，没有GitHub提交/推送。
+
+## 2026-10-15 按修订ADR-031实施同窗口记忆对照（本地完成，成品入口）
+
+负责人确认“按修订 ADR-031 开始开发”，按指定顺序完成后端→网页→验收。本轮新增**独立轴**`memory_ablation`，不改旧三轴与旧产物：请求`CreateExperimentRequest`1.6、冻结计划`ExperimentCheckpoint`1.3、结果`ExperimentArtifact`1.5，均为**仅新轴**使用的版本；旧默认请求仍1.5、单次运行仍默认full。
+
+后端：`ComparisonAxis`加`memory_ablation`；`_validate_memory_agents`+`_require_memory_arm_pair`严格校验两侧均recent、同N、左无记忆(1.0/`tool-round-window-v1`)、右有记忆(1.1/`tool-round-window-memory-v1`)、同backend/strategy/recovery_policy，创建/冻结`verify()`/恢复都执行；`ExperimentArtifact.token_budget_revision`加1.5分支(同backend/strategy、同N、左无右有、挽救指标全空、`recovered is False`)。`prepare_experiment`新分支服务端确定性派生左=同N无记忆、右=请求记忆策略，两侧除`context_policy`记忆子版本外完全一致(单变量哈希对比通过)。`run_experiment`臂标签左`Recent Window`/右`Recent Window + Memory`。请求1.6仅允许新轴，显式记忆与全局预算共享版本门同步加入(1.6)；旧轴接受规则不变。回归`preflight`按新轴派生两侧策略(左无记忆/右记忆、Runtime strategy按轴推导)，`fixed_config`/`comparison_key`无需改动；`ExperimentDashboard`/`ExperimentCharts`新轴标签就位，读保存轴不从草稿推断。
+
+Web：对照轴下拉加“工具记忆：相同近期窗口 vs 相同窗口+记忆”，选中后显示**相同窗口轮次N(1–100，两侧共用)**与**右侧记忆上限M(256–32768字节)**，复用`.context-settings`/数字/折叠帮助，不缩字体/不重置草稿；默认演示N1/M8192。结果区显示保存的两臂策略、成对结论标签(有/无记忆均通过等)、育人解读块(“左右窗口相同，仅记忆配置变化”“字节不是Token”)，刷新/前进/后退只GET。CSV列序/列集不变，仅填充既有`context_*`列(左`memory_max_bytes`空、右=M)。Trace穿透沿用`McpFlowReplay`请求诊断(记忆条数/字节/跳过/源call_id)与`DocumentEvidence`阅读计数。`apiContracts.ts`加轴值与1.5 refine。
+
+实际Fake结果(机制事实，非成功率)：原生`order-status-007`+N1/M8192，handwritten与langgraph两Runtime均左`MAX_STEPS`失败、右`SUCCESS`通过；N5/M32768两侧均通过；N1/M256两侧均失败(容量不足右侧也失败)。同一受控结果只对该任务/N/M成立，其他组合不套用。
+
+验收：新增`tests/integration/test_memory_ablation_experiment.py`(16项，计划/校验/双Runtime执行/保存回读/恢复不重跑左/失败重跑沿用原策略/全局Token拒绝/API接受与错配拒绝)、`apps/web/tests/apiContracts.test.mjs`新轴结果校验、`apps/web/e2e/memoryAblation.spec.ts`(配置/非法拒绝/只读/草稿隔离/CSV/URL GET/Trace穿透/四视口)。完整门禁`uv --cache-dir .uv-cache run --locked python -m scripts.check`设`AGENTLABYRINTH_E2E_CHANNEL=msedge`**退出0**：Python393项(61.72s)、Node38/38、Edge47/47(1.9m)，产物`artifacts/quality/409becda-bca8-452a-a47f-2c0ac041ec4e`。首轮因新增测试文件`ruff format`/`mypy`未过而失败，修正后重跑通过，失败历史不隐匿。默认chromium未装仍属环境限制。
+
+本轮仅Fake端到端；无新真实模型调用、不批量Seed×Repeat。ADR-031仍标**Proposed**(未自标Accepted，实施记录见其§12)，不签收V0.2/V0.3整版；不新增数据库/摘要/多Agent；HEAD998ff6e及全部未提交/未跟踪改动保留，不提交/推送GitHub。
+
+## 2026-10-14 Codex复核Trae交付与下一步（方案仍待批准）
+
+负责人询问Trae完成后下一步。已核对交付任务、ADR-031、实施方案和实际源码调用点，并读取最终完整门禁日志：376 Python（62.20s）、mypy103、四套22格回归零退化、Node37、Edge46/46（1.9m）、Quality gate passed；首轮日志为376/92.27s及Chromium缺二进制导致46项launch失败，保留首轮失败。此为复核Trae记录，本轮没有重新运行这些测试或新真实模型调用。
+
+现有记忆收尾交付有完整门禁证据；新memory_ablation尚未实现，ComparisonAxis仍原三轴。独立新轴/请求1.6/计划1.3/结果1.5方向可以进入负责人审核，Codex先修订Proposed ADR-031和对应实施卡：补全局预算/显式context共享版本门、严格创建/恢复固定变量、scripts.run_regression.preflight的左右策略/Runtime推导以及Dashboard/Charts标签；修正recovered必须False（不是None）、旧轴允许相同已有记忆、固定Fake结果只适用于特定任务/N/M，说明单对随机性，不声明已证明因果收益。
+
+下一步建议批准**修订后的ADR-031**，然后实施完整API/Application/Web同窗口记忆对照：冻结/恢复/重跑/版本拒绝/回归/历史只读/CSV一起交付，默认演示N1/M8192，单次仍默认full；先Fake端到端与完整门禁，已有真实探索只读核验，不扩大真实批量。当前状态仍Proposed；按AGENTS与需求§0.3/§29，负责人确认具体新公开协议方案后才实施，本轮不自行Accepted。仅文档修订，链接/路径与diff检查，无业务代码/GitHub提交，多Agent仍未来研究。
+
+## 2026-10-14 Trae 接手复核与同窗口记忆对照方案（最新，本地完成）
+
+Trae按[交接入口](trae-20261014.md)复核现有V0.3单任务工具记忆/阅读统计/历史隔离与恢复，逐项核对投影(全历史先校验再投影、仅窗口外成功result整条准入、含实际call来源、UTF-8整包预算、超大整条跳过、256字节不足仍失败、保留字段拒绝)、两Runtime恢复一致性、原生007与三跨文档任务证据评分、资料readCount仅实际匹配正文才计读(空文档/失败/未返回/预览不计、重复成功读同ID才计重复)、草稿/历史/只GET隔离、full与旧恢复/Runtime轴、CLI逐侧保存回读与禁止覆盖。未复现需改动已批准算法的缺陷，故本轮不改算法、不动旧1.0序列化/哈希与旧产物。
+
+直接相关全通过：Python77项(39.80s)、CLI六格Fake(window失败/memory通过)、Web类型、Node37/37、构建298模块(JS gzip164.71KB/CSS14.05KB)、Edge相关7/7(22.9s)。完整门禁`uv --cache-dir .uv-cache run --locked python -m scripts.check`首轮Python376(92.27s)、ruff/mypy103文件、四套回归零退化、旧24格上下文、Type/Build/Node/audit通过；**首轮E2E因本机缺默认chromium-1243二进制出现46项launch失败**(环境限制，非代码回归)。设`AGENTLABYRINTH_E2E_CHANNEL=msedge`后重跑同一完整命令**退出0**，最终Python376(62.20s)，完整Edge46/46(1.9m)，Python/回归产物artifacts/quality/373d8d62-98d3-43d5-b596-7262ad32cbbf/。失败日志.uv-cache/full-gate-trae.log保留，最终.uv-cache/full-gate-trae-msedge.log；不跳过后宣称通过，默认chromium未装如实记录。
+
+随后交付[Proposed ADR-031](../adr/ADR-031-same-window-memory-ablation.md)与[实施/界面信息设计](../tasks/V0.3-memory-ablation-20261014.md)：新增**独立轴**`memory_ablation`(左=同N轮近期窗口无记忆，右=同N轮+记忆M字节)，请求1.6/冻结计划1.3/结果1.5，复用`context_policy`承载右侧记忆策略、服务端确定性派生左侧以结构性保证“仅记忆不同”。旧三轴语义/版本规则与哈希保持，共享验证器须增加新分支；`fixed_config`/`comparison_key`可不改，但回归preflight需适配（Codex复核后修订）。不改单次默认full，不实施新公开协议，待负责人确认。多Agent仍仅研究背景，不启动；不提交/推送GitHub；不签收V0.2/V0.3整版。
+
+## 2026-10-14 Codex → Trae 交接（当前下一任务）
+
+负责人明确选择继续V0.3：记忆功能收尾与同窗口对照方案。[交接入口](trae-20261014.md)、[具体任务卡](../tasks/V0.3-memory-closeout-trae-20261014.md)已创建，AGENTS与需求§0.5同步。Trae先复核/最小兼容修复已实现单任务记忆/阅读统计/历史与恢复，重新记录完整门禁；再交固定同N轮窗口无/有记忆的Proposed ADR、Web/API信息设计、版本/恢复/指纹/CSV兼容与测试计划。现有Web轴仍左full，不能只改标签或放宽旧校验冒充纯记忆消融；新公开协议实现待具体ADR确认，不自行Accepted。
+
+本轮仅整理交接，没有新功能修改、质量门禁、真实模型调用或向外部Trae发送消息；文档链接/路径与diff已检查。此前测试和真实数字作为带日期证据保留，不标作Trae复核已通过。HEAD998ff6e及全部既有未提交/未跟踪内容保留，不提交GitHub。正常服务沿下方最近记录，接手需重新核对，不按旧PID直接终止进程。未来自己的多Agent世界参考AgentWorld，仍是研究背景而非此次执行任务。
+
+**负责人最新澄清：在AgentLabyrinth自己的平台中设计多Agent协作世界，参考AgentWorld的世界/角色/任务设计方法。** Codex此前将其理解成优先接入原环境开展研究，现已纠正；外部Adapter/复现仅候选，不是主路线决定，原自建场景也未被负责人否定。参考能力/资源/观察差异、真实任务依赖、高层动作、明确通信和可验证评分；本平台自定世界与任务，按实际事件实时可视化。引擎、任务题材、调度协议和方法创新尚待选定，不默认复制完整MMORPG或强制round-robin。研究记录顶部已注明最新优先级；未安装/复现、不启动多Agent/新服务/Schema/真实批量，当前V0.3与不提交GitHub约束保持。
+
+## 2026-10-14 多Agent近期进展补充（仅调研，非开发授权）
+
+负责人读Collab-Overcooked后询问当前进展与开题参考。已核对该作2025首发/EMNLP2025，补2025–2026原始论文：Evolving Orchestration（NeurIPS2025动态RL协调）、Scaling Agent Systems v3（260配置/6基准，架构收益依任务）、MASBench（2026-10-03局部观察Protocol/Memory/Routing）、RCR-Router v4（角色/预算记忆路由）、SyncPlan（2026-08同步/过期重规划）、AgentWorld（2026-09长链角色/过程）、CooperBench与When Messages Go Wrong（2026-10-11通信故障/已有执行和证据保护）。部分为预印本，未跑外部实现，不把跨基准数字当能力提升或行业均值。
+
+[研究记录文末补充](../research/multi-agent-sandbox-direction-20261013.md)明确：原“事件触发/定向消息+记忆”是已有相关工作的宽泛基线，不能直接称开题创新。候选缩窄到局部观察/通信预算下，任务依赖影响的消息选择与自适应恢复；须对照已有路由/同步/证据保护做新颖性检索和失败验证。三角色二维配送仍为未来载体；当前V0.3、Git与实现范围不变，无新代码/模型调用/外部复现，不启动多Agent。
+
+## 2026-10-14 同窗口记忆真实验证与阅读统计（最新，本地完成）
+
+负责人授权接续开发。沿用ADR-030，新增显式CLI --model（默认仍为6格Fake），经正式EpisodeService/Checkpoint Runner仅执行一模型一任务两侧；每侧保存后回读/校验哈希，除context_policy外固定Agent、Task和RunConfig，报告原子写入，旧目录拒绝覆盖，Provider报错保存部分报告并停止，不换模型或扩大重复。
+
+MiniMax M2.7、LangGraph、本地工具、退货Task1.3.0/ToolSetv1.3.0、Seed1、window1、10步/20000Token/300秒；memory侧8192字节。真实两侧均通过approved+3条完整证据：window eb1fe5b8-a120-4e48-ba55-f411385e2e73为8模型/8工具、成功读6次/重复3、14992输入+774输出=15766报告Token、95849ms；memory 297d40c4-24d5-4ebb-bb35-c4b86efb14f6为5/5、成功读3/重复0、9962+355=10317Token、65122ms。窗口侧确实将ENTRY/POLICY/DECISION各读两遍；记忆侧一次读完。最后memory请求3条实际来源/1141字节/无跳过，早期搜索、ENTRY与POLICY随投影送入，DECISION在近期轮次内。报告artifacts/episodic-memory/real-pair-20261014/memory-pair.json与根目录完整Episode已只读交叉核对，不改旧产物。
+
+本对调用少37.5%、报告Token少34.56%、耗时少32.06%，仅单对探索；不是稳定优化率、成功率提升或实付费用，固定顺序/模型随机性/网络影响保留。现有full仍默认，当前没有实测必要引入摘要/数据库；下一步同窗口开关的Web产品对照需先ADR再开协议，不自行加轴或批量Seed×Repeat。
+
+资料侧栏复用documentEvidence增加只读readCount，总成功阅读/重复次数随当前Trace前缀变化；实际匹配正文返回才计读，空文档、失败、开始未返回、最终快照/观察者预览不增加。重复并不自动代表无用或遗忘，不据次数推导评分。源码、复现、失败及全部实际结果见[任务交接](../tasks/V0.3-memory-real-pair-20261014.md)和[学习说明](../learning/V0.3-episodic-memory-20261014.md)。
+
+最终格式/lint/mypy通过；相关Python63项（20.07s，含新增4探针用例），原6格Fake再跑通过（14b1f3e2-bd38-4ec8-8a37-1feebe462fd5/）；Web类型、Node37/37、298模块构建通过（JS gzip164.71KB/CSS14.05KB，原Zod/分包提示保留）。相关Edge7/7（25.3s，7acfe6f3-8673-44e0-bd6b-3f198d5668e3/）通过；真实两记录1440/390只读浏览器核对零POST、无整体溢出，桌面/390截图已查看（报告下screenshots/）。首次pytest临时目录/Node子进程受沙箱限制未运行，初次证据顺序测试假设修正，浏览器端口占用未跑后核对并暂停自有服务再验证；不清除这些失败历史。本轮不声称新全套Python/46项Edge或远端CI通过，原门禁记录仍保留。
+
+正常服务恢复：API启动器10852/监听30452、Web8892，MCP7048保持，日志artifacts/memory-real-product-20261014/；5173 GET200、目录live、28题/5模型含Fake。可只读打开两份Episode并把动画进度移至结尾查看差异，已保存运行不是新的实时请求。所有已有改动保留，无GitHub提交/推送，不签收整版V0.2/V0.3。以下“记忆真实未测”为前一交付时历史状态，由本节实测替代。
+
+## 2026-10-14 单次运行配置布局收口（本地完成）
+
+负责人指出截图中任务列表下方空白与右侧参数过长，授权参考成熟配置界面并修改。根因：左侧任务目录max-height，右侧高级配置展开拉长同一Grid行。已把高级参数移为两栏下方独立整行，按工具/容错、上下文/记忆、运行预算分组；右侧保持模型、Runtime、草稿摘要和启动按钮。数字并排、长说明原生details；summary样式改为直接子选择器，防止嵌套帮助继承顶层加减号。仅UI，无API/策略/预算/评分变化，现有控件ID/处理保持。
+
+[参考与决定](../research/compact-run-settings-20261014.md)、[源码/实际验证/防错交接](../tasks/compact-run-settings-20261014.md)及UI规范1.8已更新。类型、生产构建与Node37通过；完整Edge46/46（1.8m）通过，目录814cd12a-7340-43c7-bf21-d77fa0cde39b/。截图复查后补卡片内容高度和数字底部对齐，最终构建与相关5/5（20.6s）通过，目录94950385-246d-4865-9187-deacf781fc3e/。1440/1280/768/640/390无整体溢出，桌面/390截图实际查看；640等效窄视口不是实际200%缩放签收。失败工具不执行、显式参数落盘、历史只GET与草稿隔离仍通过。298模块、JS gzip164.59KB/CSS14.05KB，原有构建提示保留，无新依赖；纯UI不重复无关Python全套。
+
+正常API启动器19036/监听28348、Web9624已恢复，MCP7048保持（8000/5173/8765）。5173 GET200、目录live、28题/5模型含Fake，日志artifacts/compact-settings-product-20261014/。刷新单次工作区即可查看右侧紧凑操作台与下方三组更多设置；没有新真实模型推理或GitHub提交，保留既有全部改动。Fake候选模型仅用于布局展示，不能当作新模型实测通过。先前服务PID由本节替代，上一记忆切片真实验证待办仍保留。
+
+## 2026-10-14 V0.3受限单任务工具记忆（本地完成，真实未测）
+
+负责人明确选择继续单Agent上下文/记忆，不提前二维多Agent。Accepted ADR-030和任务卡V0.3-episodic-memory-20261014已落盘；ContextPolicy子版本1.1采用固定window-memory算法、256–32768字节完整返回记忆。仅窗口外成功result反馈入记忆，附call_id/工具名；error/未返回/私有目标/最终快照不读取，超大整条跳过。只修改Provider投影，完整Session/Trace/Checkpoint、原预算/工具校验/评分不变；旧1.0字段形状和哈希保留。
+
+已接单次及上下文对照Web配置、当前模型节点记忆诊断、保存来源和CSV算法/限额列；窗口+memory与full比较不能单独归因记忆，另有正式Runner的六格同窗口Fake消融。[学习交接](../learning/V0.3-episodic-memory-20261014.md)和[实际结果/待办](../tasks/V0.3-episodic-memory-20261014.md)已完成。
+
+最终六格Fake目录artifacts/episodic-memory/d37e3ebf-b79f-4867-98fb-29ccae3abe3a/：两Runtime均full与memory成功3模型/3工具，window1失败6模型/5工具；累计消息字节2984/2883/5562，memory最后279字节、来源call_search_1。不是实际Token或模型成功率结论。三跨文档场景×两Runtime在窗口1+8192字节记忆下均保全实际读取证据；连同API和指纹22项通过，256字节容量不足仍失败、不退回full。
+
+共享检查的Python372/56.47s、mypy102、格式/lint、四套22格回归零退化、旧24格上下文、Web类型/构建/Node37及audit0漏洞通过，Python产物artifacts/quality/48fc6e1f-6b5f-4bb8-9b6c-f3b566645f4b/。首轮Edge42/44：旧Trace标签改变和新测试误点未来节点；恢复旧入口名，测试按已保存frame推进且Step0无未来诊断。最终类型/构建/Node37及完整Edge44/44（1.8m）通过，浏览器327e00ae-1b5e-4409-8d3e-74d6b14a5f9f/；298模块、JS gzip164.36KB/CSS13.76KB。首轮共享脚本日志memory-quality-20261014.log保留退出1，最终浏览器日志memory-browser-final-20261014.log；不改写失败历史。桌面/390截图已查看，真正手感/现场签收仍由负责人完成。
+
+正常API启动器6996/监听37204、Web19528已恢复，MCP7048保持（8000/5173/8765），日志artifacts/memory-product-20261014/。5173 GET200、目录live、28题/5模型含Fake。查看单次运行→ToolLab文档任务→更多设置→近期轮次+工具记忆（建议窗口1/8192字节）；模型节点显示保存来源和大小，旧历史只GET。无新真实模型推理、远端CI或GitHub提交，所有先前改动/产物保留。下一任务为一模型一任务的同窗口开关真实小样本，再根据失败决定记忆压缩/选择或专项挑战；不先启动数据库、多Agent或框架。
+
+## 2026-10-13 多Agent小人沙箱与合作竞争方向（最新研究偏好，未开发）
+
+最新澄清：负责人认为现有课程展示已经够用；二维多Agent场景是约一年后开题时的演示设想，随未来需求持续讨论，不是当前课程必做项或整版签收。研究必须有近三年文献。本轮补查北邮Collab-Overcooked（EMNLP2025）、美国VirT-Lab（2025研究稿）、Melting Pot的2024LLM合作研究/竞赛、浙大AgentCoord（2024预印本/2025出版）及GovSim，已在研究文档列论文/作者源码和实际二维或图结构界面区别。VirT-Lab匿名代码链接/正式录用未核实，不宣称复现；二维实时可行性有先例，“小人+角色+对照”本身不构成新颖性，候选研究还需失败驱动和公平实验。仅更新研究/交接，无功能开发、模型调用、图形依赖或GitHub提交。
+
+负责人随后明确场景建模/实时小人博弈展示在学有余力时后期推进。按研究建议记录为可视化扩展，不提前启动图形引擎或新多Agent实现；世界规则、角色隔离与算法验证和展示层分开。
+
+负责人认为通用技术栈简历描述不足，明确长期希望多个独立角色的小人Agent合作/竞争/博弈，并用同条件基线与改进双世界可视化；具体优化尚未选定。已核对需求V0.6/V0.7路线并查MAST、NegotiationArena、GovSim和Evolving Orchestration，形成[场景/建模/调度通信/实验与交付建议](../research/multi-agent-sandbox-direction-20261013.md)。建议首场景3角色局部信息协同配送，合作中资源争用和真正私有利益博弈分开；第一候选研究事件触发/定向通信，并用A/B/C/D消融拆因素，同Agent/世界/团队总预算。小人反映实际世界动作，LLM仅高层决策，模拟tick与真实时延分开，不硬编码优化胜利。独立角色是状态/观察/工具/目标/会话隔离，不等于分别训练模型；来源记忆建议仍可作子机制。仅研究建议，无新实现/阶段变更/ADR接受/真实实验/提交GitHub，尚不能写多Agent已支持或提升率；正常产品服务沿用下节。
+
+## 2026-10-13 简历成果与开题主线调研（建议，未启动实现）
+
+负责人要求暂离UI优化，分析技术栈、可量化改进与论文关联。已核对源码/需求和既有真实结果，并查AgentFold、ACE、GEPA、τ-bench及Mem0原文；[调研与实验建议](../research/resume-and-research-roadmap-20261013.md)记录真实栈、工程贡献、候选证据约束上下文管理与可靠性方向、任务不足、对照/消融及简历口径。现有窗口一对Token少3.02%但时间多14.40%，配送单次契约修复前失败/后6工具通过，不包装成稳定成功率或37.9%总体节省。建议从有依赖的新任务与来源可追溯的证据记忆验证，不把平台版本迭代称Agent已经自我进化；开发/测试隔离、提取开销、全部失败与重复可靠性须计入。此为研究建议，不是新Accepted ADR、算法实现、整版签收或已证实论文创新。仅新增文档，无真实推理/代码变更/提交GitHub，产品服务沿用下节。
+
+## 2026-10-13 对照实验布局与图形指标看板（最新，本地未提交）
+
+负责人重新授权优化对照UI，取代此前暂缓对照界面的优先级。现改全宽执行设置/任务选择网格，模型说明折叠、高级预算多列按需展开、主操作集中显示真实执行规模；保存结果在前，下一次草稿收起在后，消除320px窄长侧栏及其旁边空白。结果采用两侧独立通过/未通过环，实际成功次数放环下，删除重复成功率盒；Token总量与平均耗时分图条形展示，费用/质量明细与原成对Trace保留。看板概览只读单场，选择comparison_key后用最多30次非空历史画成功率/Token/耗时折线，X为等间距运行序号而非真实时间间隔，原始表保留，点/筛选/刷新只GET；单次/无样本/未知费用中性，0/100%不补造，缺次数不反推。上下文历史标签纠正，未知轴中性。正常同值曲线曾被第二侧遮盖，补实线/虚线、不同点径和重合提示，不挪数据坐标。
+
+仅复用React/SVG/CSS与原保存指标，无新依赖、API/Schema/评分/预算或数据库变更。需求V0.6、UI规范1.7、AGENTS/README同步；[官方参考与设计决定](../research/experiment-dashboard-20261013.md)、[源码阅读/状态/失败与防错交接](../tasks/experiment-dashboard-20261013.md)完整。所有既有本地工作和产物保留，不提交GitHub。
+
+Web类型与36单元通过，首轮10项专项Edge通过；删除重复卡后完整Edge42/42（1.6m）通过，目录artifacts/playwright/fd5b48ad-c3be-4099-9d7b-ea6b34a293e0。随后空样本旧进度条和差值补降级、正常截图补同值区别，最终类型/生产构建与3/3专项（11.3s）通过，目录44b0867e-3f11-4df3-9369-a40aac1e564e。最终297模块，JS gzip163.00KB/CSS13.76KB，既有Zod注释/500KB分包提示保留；无新增依赖或调阈值，不重复无关Python全套。截图实际检查全宽、环/条/折线及1440/1280/768/390；动态reduce通过，真实200%缩放/课堂观感/整版签收仍不由自动检查代替。
+
+正常后端已有52条历史只读核验：旧真实MiniMax上下文实验16116cfd-cc05-4c57-9689-eacce4af070f两侧100%/各1次，Token10408/10094、毫秒57909/66248与图形一致；某同配置Runtime组3次的重合趋势实际查看。正常四宽度、刷新零POST、控制台无错误、原Artifact未变，报告/截图/脚本在artifacts/dashboard-ui-20261013/；本轮没有新真实模型推理，Fake图形测试不是新的模型能力结论。
+
+最终正常API启动器24612/监听2580、Web33136（8000/5173），MCP仍启动器17212/监听7048（8765）。经5173代理目录live、28任务/5模型（含Fake）；日志在dashboard-ui目录，浏览器打开请求queued。刷新http://127.0.0.1:5173/?mode=experiment查看配置；运行或GET旧结果查看图形，展开历史并选同配置组看趋势。HEAD998ff6e，无暂存/提交/推送，此节替代旧服务PID；V0.2现场和整版V0.3仍待签收。
+
+## 2026-10-13 本地项目启动（最新服务状态）
+
+负责人要求启动项目。核对8000/5173/8765均空闲后启动正常后端、Vite与固定只读MCP；API启动器33384/监听11900、Web27068、MCP启动器17212/监听7048。工作台http://127.0.0.1:5173/?mode=single实测HTTP200，经前端代理GET元信息目录live、28题/5模型（含Fake）；未发模型推理请求，目录可读不等于额度或调用通过。后台隐藏启动，日志artifacts/startup-20261013/；浏览器打开请求queued。未修改功能代码或提交GitHub；此前服务PID由本节替代，产品与验收状态沿用下文。
+
+## 2026-10-12 实时关联资料工作台（最新，本地未提交）
+
+负责人要求暂缓推进对照实验，优先把关联依据放在实时演示旁。已复用ADR-013/014/028/029和原Trace，新增环境文档卡片/正文预览/实际已读与提交引用状态；ToolLab本地/MCP共用，BFCL无文档不显示。来源严格当前前缀的初始快照、成功搜索与实际阅读返回，包含干扰项，不读私有goal、不借最终快照补造。read_document开始自动选择资料并在节点显示实际文档ID；成功且匹配返回才计已读，提交成功才标实际引用，是否有效仍由Evaluator判断。拒绝/超时/null不取得证据，断线未返回显示未知；早先读取成功不被后续失败抹去。网页选择只预览、零工具调用/零模型注入，独立目录滚动不抢焦点。宽屏资料与当前阶段在画布旁，900px以下堆叠；正文可键盘滚动。[任务/源码/状态/防错交接](../tasks/realtime-evidence-20261012.md)，UI规范1.6和需求/AGENTS/README同步。
+
+最终Web类型/生产构建通过，296模块，JS gzip160.81KB/CSS12.65KB，既有Zod注释及500KB分包提示保留，未新增依赖；Node36/36（新增资料投影失败检查）通过。首轮沙箱spawn EPERM，允许现有本机测试子进程后通过；16项专项Edge通过后补文档节点ID/断线未知文案，最终完整Edge39/39（1.5m）通过，产物artifacts/playwright/43239e69-74ce-4aa7-bf46-66f746cf1183/，覆盖增量状态、预览零执行、提交不提前、超时/空文档/拒绝、断线/缺快照、原历史不变、1440/1280/768/390与reduce。桌面、768/390和真实MCP截图实际查看；没有新真实模型推理POST，不重复无关Python全套，不代表现场或整版签收。
+
+恢复正常服务后，仅GET回看既有真实产物：本地退货cd65f7b9-fe5b-5cf4-8b4b-75eb84cad8cf显示3/5已读与3份实际引用；MCP配送3533440c-f72b-4d16-8780-8229f8748300显示4/6与4份引用，原评测true/完整产物保持。两个产物刷新及页面零POST、无控制台错误；报告/截图与服务日志在artifacts/realtime-evidence-20261012/。这些是旧真实记录的呈现核查，不能写作新真实实跑。
+
+正常API启动器41428/监听37736，Web9680，MCP仍启动器9712/监听11524，8000/5173/8765。正常网页已恢复28题、5个模型（含Fake），目录状态另以实际GET为准；刷新http://127.0.0.1:5173/?mode=single，选场景实时演示→核对模型→运行，资料随首个环境快照出现，实际读取自动联动。HEAD998ff6e，无暂存/提交/推送，所有既有改动与历史保留；V0.2现场与整版V0.3签收仍待。
+
+## 2026-10-12 课堂演示工作台成品收口（最新，本地未提交）
+
+负责人授权从最小验证推进成品。三场景中文入口已接现有Web，明确配置实时单次或上下文对照：只填草稿、保留当前工作区模型、单任务Seed1/Repeat1、相同预算，只比较full vs窗口1；原历史/Job/评分与版本保持。缺任务、元信息读取中、运行中禁用；配置后折叠场景并聚焦原配置，确认后才运行。保存上下文结果新增用户解读，复用原CSV/JSON及Trace穿透。任务卡V0.3-classroom-product-20261012和[源码/状态/失败/真实交接](../learning/V0.3-classroom-product-20261012.md)同步，无数据库/框架/新核心接口或GitHub提交。
+
+真实仅MiniMax退货Task1.3.0一对，本地/LangGraph/无纠错/20000Token/300秒/总边界40000；实验16116cfd-cc05-4c57-9689-eacce4af070f，两侧均SUCCESS且独立评分true、5模型/5工具，full10408Token/57909ms、窗口1为10094Token/66248ms，共10请求/20502报告Token。最新诊断full可见10消息/3823字节，窗口1可见4/1990字节，完整历史10；单样本不能证明优胜，Fake遗忘失败不代表真实模型必失败。探针CSV错误404来自不存在的导出接口；Job已完成，只GET补采产物，无新增真实请求。实际Web下载发现旧CSV缺模型来源，共享导出末尾追加保存的model_id/provider/task_name，原23列与未知空值不变，不借当前草稿补来源。真实CSV、页面、刷新零POST与完整结果不变已在Edge复核，证据artifacts/classroom-product-20261012/。
+
+首轮专项2通过/1失败，误给单次Fake传Experiment的clean场景被422拒绝；改用原success契约后，完整Edge36/36（1.4m）通过，目录artifacts/playwright/1771af31-1b5d-4599-b067-526cf2ee1ff4/。随后CSV来源补充，最终4项相关Edge4/4（17.9s）通过，目录91fc18cb-8a7a-439e-9472-39217b1cc58e；原上下文/挽救空列兼容保持。最终类型/构建与35单元通过，295模块、JS gzip159.24KB/CSS12.29KB；既有Zod提示及500KB主包分包提示保留，未新增依赖/调阈值。1440/1280/768/390场景截图和真实结果实际查看，API/Runtime/评分未改，不重复无关Python全套，不替代现场/整版签收。
+
+为隔离浏览器测试仅核对并停止本项目API/Web，MCP保持。最终恢复正常API启动器34344/Web22236（8000/5173），MCP仍启动器9712/监听进程11524（8765），日志final-*.log在classroom-product目录。打开 `http://127.0.0.1:5173/?mode=single`：顶部选场景→实时演示或上下文对照→核对当前模型→点击运行；查看上述真实实验链接仅GET。最新服务PID与“成品进行中”由本节替代；HEAD998ff6e，无暂存/提交/推送，V0.2现场签收和完整V0.3仍待。
+
+## 2026-10-12 寻径之狐正式接入与加载动画（最新）
+
+负责人明确授权更换图标和制作Logo加载动画。以已选狐狸柔化稿统一手写SVG，导航改fox-motion.svg、静态favicon改fox-icon.svg；狐狸侧脸/尖耳/卷尾保留，圆润留白路径与透明遮罩统一，应用/单色/动画路径均从唯一主SVG生成。原Wayfinder/原preview.html和候选PNG保留为历史；UI规范1.4记录新品牌边界，需求仍V0.6。任务卡与[源码/设计/动画/验证交接](../design/fox-v1/README.md)同步。
+
+导航初次加载：0–560ms狐狸显形、180–480ms五官、380–1330ms尾部通道展开，之后恢复基础样式停住；不阻塞页面、不循环、不表达Trace/模型/网络状态。点击/Enter品牌在新页打开fox-preview.html，可重播、阅读理念和尺寸示例。动态reduce立即静态、无动画CSS仍完整，动画资源失败在导航/展示页仅回退静态，不影响实验。首轮检查器CSS返回格式/二进制深断言内存异常，以及保留合成层时PNG不一致均修正；有限动画采用backwards、结束释放裁剪/变换，完成PNG与静态逐字节比较通过，未放宽断言。
+
+专项Edge通过路径一致/中间动画/结束静态一致/动态reduce/无CSS兜底/键盘/四宽度/PNG尺寸导出，报告/截图/录像 `artifacts/brand/fox-v1/`。Web类型/构建/Node35/35通过（294模块，JS gzip157.69KB/CSS12.08KB，两条既有Zod提示），完整Edge33/33（1.3m）通过；`artifacts/playwright/42a7e3fc-bddd-4e7e-a933-f1db89a12f76/`含新增品牌打开页面零POST、草稿/历史不变、快速重播与资源失败测试。实际查看桌面/390预览、深浅底/尺寸与工作台1440/390导航；不代替实机/整版签收，没有真实模型请求、后端契约变更或重复无关Python全套。
+
+浏览器测试开始前核对8000/5173/8765已无服务占用，未结束未知进程；结束后启动正常API启动器22108/Web41728/MCP启动器9712，端口8000/5173/8765，日志normal-*.log在brand/fox-v1目录。刷新 `http://127.0.0.1:5173/?mode=single` 看新导航，或访问 `http://127.0.0.1:5173/brand/fox-preview.html` 看/重播完整动画。此前旧PIDs与“尚未替换”由本节替代；旧实验与所有已有长链修复保留，HEAD仍998ff6e，无暂存/提交/推送。
+
+## 2026-10-12 动物品牌方向探索（最新设计进展）
+
+后续按负责人x20.1%/y75%标注将狐狸尾部留白直角柔化，主图/单色/导航转折已实际查看；最新fox-soft-path-concept.png及提示词保留原稿。补[寻径之狐设计理念](../design/animal-concepts-20261012/fox-design-rationale.md)：狐狸提供探索形象，尾部路径呼应Labyrinth和可观测执行轨迹，暖色沿用工作台；含汇报可用说明。应用图标几何仍须统一SVG，未接入/发布，无模型请求或功能代码变化。
+
+负责人希望图标增加动物联想和辨识度，随后明确更喜欢B/狐狸，已作为后续主方向取代浣熊推荐。基于原B完成狐狸侧脸/尖耳/路径尾巴精修PNG，实际查看；提示词、精修与原三方向候选保存在[设计交接](../design/animal-concepts-20261012/README.md)。仍是概念稿，应用示例与主图局部几何不同，不算统一SVG或小尺寸验收；后续统一轮廓并实测，现用Wayfinder/导航/favicon尚未替换。仅新增设计资料和偏好记录，无模型请求/功能代码变化，未重复功能门禁，无提交推送。最新产品修复/运行状态仍以下节为准。
+
+## 2026-10-12 三场景真实失败修复与复测（最新，本地未提交）
+
+负责人授权复测免费模型的三个长序列任务并修复，Accepted ADR-029；当前Task1.3.0/ToolSetv1.3.0/order_status_v2。用户失败实际分为：已读证据仅排列不同被旧评分误判；文档任务可见禁止query_records误导选工具；GLM/M3首轮多调用被严格拒绝。后续实测另发现read_document描述只准搜索结果，与正文引用冲突，MiniMax重复搜索耗尽预算。新协议仅三题启用无序多重集证据比较、允许工具Schema过滤和直接正文引用说明；重复/遗漏/额外/未读证据、参数/权限/单行动硬校验仍拒绝。原12题、旧评分/Schema/Agent/hash/恢复/失败重跑保留，未改写历史。新建请求选最新工具集，两侧对照同规则；不截多调用、不自动换模型或重试。
+
+真实经正常5173代理SSE、独立MCP/LangGraph/full/无纠错，10步/20000Token/300秒/1024单响应：MiniMax退货 `6f680ca7-5813-4585-b5a9-0905afcb8708` 5/5工具与模型、10679Token通过；退款 `07b2c231-42ab-4a6f-8b83-f404edcf6a68` 7/7、17310Token通过（两题Task1.2.0）。配送首例 `26285484-6f5c-4b4b-a432-7b9e462ef974` 9模型/8工具、20766Token预算失败保留；GLM5.3同题Task1.2.0 `9002411f-cfc9-4021-909b-a3e30f170305` 6/6、12747Token通过。引用说明修复后仅复测MiniMax配送Task1.3.0 `3533440c-f72b-4d16-8780-8229f8748300` 6/6、12896Token/69302ms通过，四份依据均直接阅读，预算未增加。五题共33模型请求/74398已报告Token，全部SSE与保存GET一致。三个场景有真实通过记录，不称最新Task1.3.0三题重复全过、统计收益、全部免费型号可用或新真实恢复验收。
+
+完整门禁：Ruff/mypy101、pytest353（44.80s，1条既有依赖警告）、四套22格Fake零退化、CLI上下文24、Web类型/构建、Node35/35、audit0、Edge31/31（1.2m）、diff通过。最终门禁 `artifacts/quality/84585fbc-2737-4b65-9ab2-d1279abcf3fb/`，浏览器 `artifacts/playwright/b6f337ea-f095-404d-89e5-a50b452a815f/`，真实/日志 `artifacts/long-chain-recheck-20261012/`；不替代实机/整版签收。模型notes同步实际结果；M3/Flash新协议未复测，不自动提升推荐。
+
+正常API启动器17612/Web33616/MCP启动器32488，8000/5173/8765。刷新 `http://127.0.0.1:5173/?mode=single`，选ToolLab“退货/配送/退款”、MiniMax、LangGraph/full/无纠错、10步/20000Token；须新建Episode，旧产物重跑沿用旧协议。源码阅读、状态/失败、全部ID与版本差异见[最新交接](../learning/long-chain-real-failures-20261012.md)。HEAD998ff6e，未暂存/提交/推送，全部既有工作与产物保留。本节优先于下文旧版本、旧模型说明与旧服务PID。
+
+## 2026-10-12 跨文档场景产品闭环（最新，本地未提交）
+
+负责人授权少量有价值的复杂场景，并要求最小验证后完成实际产品；同时撤回自动提交GitHub授权。Accepted ADR-028、任务卡/需求/AGENTS同步，基线998ff6e，未暂存/提交/推送。新增退货/配送/退款三题，3/4/5份关联有效文档、旧版/错案干扰，独立自建development仿真，不称外部真实数据。固定long_chain子目录递归进入现有ToolLab/API/MCP，原12题字节及旧四套基线不改。类别evidence_chain、公开模式document_chain，不改Schema/工具参数/评分；Fake仅从公开可见工具消息跟引用、复制状态、收集证据，不读goal或按ID答题。完整证据须来自成功阅读，允许任意正确路径，不凑调用次数。
+
+网页可选题/SSE实时过程/最终答案证据/失败/保存回读和上下文对照。修复默认任务不按meta.default_task及选长任务沿用6步的问题，未手改步数/Token随任务推荐值，手改值保留；新题不自动加入默认12题对照。MiniMax实际累计9493Token暴露旧8000不足，新Task版本1.1.0推荐10步/20000Token，原产物和显式低预算不改；两侧预算相同进哈希。Provider带工具显式parallel_tool_calls=false匹配原单行动边界，供应商仍返回多调用则原样失败，不取第一条或自动重试。
+
+最终完整门禁：Ruff/mypy100、pytest351（45.11s，1条既有依赖警告）、四套22格Fake零退化、CLI上下文24、Web类型/构建、Node35/35、audit0、Edge31/31（1.2m）、diff通过。路径 `artifacts/quality/3292de5d-364f-4066-963f-6b92e40664cc/`、浏览器 `artifacts/playwright/bbd6d3d2-fcb6-4821-8d69-3d58197c04e2/`，日志 `artifacts/linked-evidence-20261012/quality.log`；截图实际查看，自动验收不替代实机/课程签收。类型声明、浏览器默认值、探针响应字段/实例保护与启动就绪竞态的失败均保留，未弱化保护。
+
+真实：GLM Flash关闭参数前后各一题仍MULTIPLE_TOOL_CALLS、0工具、usage未知；MiniMax初版8000末轮预算失败（9493报告Token），新版本20000 `e9065b98-a8c5-475d-a1e1-1582d464c0fe` 真正通过：5模型/5工具/56158ms/10066报告Token，approved＋三条真实读取证据，38SSE Trace/complete与GET一致。共4真实Episode/12推理尝试，19559已报告Token，两次未知不当零；不称三题真实全过或统计收益。网页候选说明同步，建议新退货演示用默认MiniMax，配送/退款尚未真实复测。
+
+Fake：三任务两Runtime/full与窗口足够通过，窗口1证据缺失失败；正常MCP退款 `8c701b37-b7fb-49bc-a3ea-dfad4852c28b` 7工具/5证据通过，正式上下文实验 `b6b95a7c-70cc-42d0-a998-6b30307392ec` full3/3、窗口1为0/3。两Runtime中断后新实例恢复五份文档各读一次；这是Fake工程验证，不宣称新真实跨进程恢复或真实遗忘效果。
+
+正常API启动器37420/Web34008/MCP启动器32488，8000/5173/8765。刷新 `http://127.0.0.1:5173/?mode=single`，ToolLab搜索“退货/配送/退款”；实时新建与历史回放入口沿用。源码/调用链/状态/失败/结果/接续见[学习交接](../learning/V0.3-linked-evidence-20261012.md)、[任务卡](../tasks/V0.3-linked-evidence-20261012.md)与[场景说明](../../benchmarks/tool_lab_core/tasks/long_chain/README.md)。没有数据库、新框架、独立Planning/Memory、Judge或业务写操作；V0.2现场签收和其余V0.3保持待办。本节优先于前文自动同步授权、旧服务PID和旧预算建议。
 
 ## 2026-10-11 GitHub 同步授权
 

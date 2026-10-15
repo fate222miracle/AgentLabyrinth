@@ -1,6 +1,6 @@
 """Independent order status task evaluator."""
 
-from typing import Any
+from typing import Any, cast
 
 from packages.domain.models import (
     EpisodeResult,
@@ -20,7 +20,8 @@ class OrderStatusEvaluator(Evaluator):
         self, task: TaskSpec, episode: EpisodeResult, events: tuple[TraceEvent, ...]
     ) -> EvaluationResult:
         """Judge episode state and trace without mutating any inputs."""
-        evaluator_version = "order_status_v1"
+        unordered_evidence = task.evaluator_config.get("evidence_order") == "unordered-v1"
+        evaluator_version = "order_status_v2" if unordered_evidence else "order_status_v1"
 
         # 1. Collect event data for metrics and verification
         proposed_events = [e for e in events if e.event_type == EventType.TOOL_CALL_PROPOSED]
@@ -124,10 +125,17 @@ class OrderStatusEvaluator(Evaluator):
 
                 submitted_evidence = submission.get("evidence")
                 target_evidence = task.goal_conditions.get("evidence")
+                evidence_matches = submitted_evidence == target_evidence
                 if (
-                    not isinstance(submitted_evidence, list)
-                    or submitted_evidence != target_evidence
+                    unordered_evidence
+                    and isinstance(submitted_evidence, list)
+                    and isinstance(target_evidence, list)
+                    and all(isinstance(v, str) for v in submitted_evidence + target_evidence)
                 ):
+                    evidence_matches = sorted(cast(list[str], submitted_evidence)) == sorted(
+                        cast(list[str], target_evidence)
+                    )
+                if not isinstance(submitted_evidence, list) or not evidence_matches:
                     success = False
                     reason = "evidence_mismatch"
                 else:

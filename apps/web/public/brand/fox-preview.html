@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AgentLabyrinth · 寻径之狐</title>
+  <link rel="icon" type="image/svg+xml" href="fox-icon.svg" />
+  <style>
+    :root { color-scheme: light; font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; color: #2D2B27; background: #F8F6F1; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1040px; margin: auto; padding: 48px 28px; }
+    .eyebrow { color: #A6492D; font-size: 13px; letter-spacing: .15em; }
+    .stage { min-height: 340px; display: flex; align-items: center; justify-content: center; gap: 40px; }
+    #motion { width: 224px; height: 224px; }
+    h1 { font-size: clamp(28px, 5vw, 52px); letter-spacing: -.04em; margin: 0; overflow-wrap: anywhere; }
+    .subtitle { color: #625F59; font-size: 17px; line-height: 1.8; margin: 14px 0 0; }
+    .controls { display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap; }
+    button { min-height: 44px; padding: 10px 24px; border: 1px solid #A6492D; border-radius: 12px; background: #A6492D; color: #FFFDF9; font: inherit; cursor: pointer; }
+    button:focus-visible, a:focus-visible { outline: 3px solid #A6492D; outline-offset: 4px; }
+    #preference { color: #625F59; font-size: 14px; }
+    .reasons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin: 42px 0 32px; }
+    .reasons article { background: #FFFDF9; border: 1px solid #E4E0D8; border-radius: 16px; padding: 22px; }
+    h2 { font-size: 16px; margin: 0 0 10px; }
+    .reasons p { color: #625F59; line-height: 1.8; font-size: 14px; margin: 0; }
+    .samples { display: flex; justify-content: center; align-items: end; gap: 32px; flex-wrap: wrap; padding-top: 28px; border-top: 1px solid #E4E0D8; }
+    figure { margin: 0; display: grid; justify-items: center; align-content: end; gap: 12px; min-width: 58px; }
+    figcaption { color: #625F59; font-size: 13px; }
+    footer { margin-top: 36px; text-align: center; color: #625F59; font-size: 14px; line-height: 1.8; }
+    a { color: #A6492D; text-underline-offset: 3px; }
+    @media (max-width: 620px) { main { padding: 28px 20px; } .stage { flex-direction: column; gap: 16px; text-align: center; padding: 24px 0 32px; } #motion { width: 180px; height: 180px; } .reasons { grid-template-columns: 1fr; gap: 12px; } .samples { gap: 20px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">THE PATHFINDING FOX · 寻径之狐</div>
+    <div class="stage">
+      <img id="motion" src="fox-motion.svg" width="224" height="224" alt="狐狸侧脸与卷尾中的圆润路径" />
+      <div><h1>AgentLabyrinth</h1><p class="subtitle">探索任务路径，记录实际行动。<br />让结果有据可查。</p></div>
+    </div>
+    <div class="controls"><button id="replay" type="button" hidden>重播动画</button><span id="preference" role="status">狐狸显形 · 路径展开 · 静止</span></div>
+    <section class="reasons" aria-label="设计理念">
+      <article><h2>狐狸 · 观察与探索</h2><p>尖耳和专注侧脸形成识别特征，表达面对任务的好奇与探索。</p></article>
+      <article><h2>路径 · 行动有迹可循</h2><p>卷尾中的柔和通道呼应迷宫寻径，联系可以查看的 Agent 执行轨迹。</p></article>
+      <article><h2>暖色 · 亲近的实验工作台</h2><p>陶土橙与暖白延续界面风格，使品牌和实验环境保持一致。</p></article>
+    </section>
+    <section class="samples" aria-label="图标尺寸和单色示例">
+      <figure><img src="fox-icon.svg" width="16" height="16" alt="16像素应用图标" /><figcaption>16 px</figcaption></figure>
+      <figure><img src="fox-icon.svg" width="32" height="32" alt="32像素应用图标" /><figcaption>32 px</figcaption></figure>
+      <figure><img src="fox-icon.svg" width="48" height="48" alt="48像素应用图标" /><figcaption>48 px</figcaption></figure>
+      <figure><img src="fox-icon.svg" width="80" height="80" alt="应用图标" /><figcaption>应用图标</figcaption></figure>
+      <figure><img src="fox-monochrome.svg" width="80" height="80" alt="单色狐狸标志" /><figcaption>单色标志</figcaption></figure>
+    </section>
+    <footer>品牌动画展示 · <a href="../../?mode=single">进入实验平台</a></footer>
+  </main>
+  <script>
+    const mark = document.getElementById('motion');
+    const preference = document.getElementById('preference');
+    const replay = document.getElementById('replay');
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+    let playback = 0;
+    function syncPreference() {
+      mark.src = reduce.matches ? 'fox-mark.svg' : 'fox-motion.svg?play=' + (++playback);
+      preference.textContent = reduce.matches ? '已遵循减少动效设置，展示静态标志' : '狐狸显形 · 路径展开 · 静止';
+    }
+    mark.addEventListener('error', () => {
+      if (mark.getAttribute('src').startsWith('fox-motion.svg')) {
+        mark.src = 'fox-mark.svg';
+        preference.textContent = '动画暂不可用，展示静态标志';
+      }
+    });
+    replay.hidden = false;
+    replay.addEventListener('click', syncPreference);
+    reduce.addEventListener('change', syncPreference);
+    syncPreference();
+  </script>
+</body>
+</html>

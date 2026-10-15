@@ -230,12 +230,12 @@ def test_get_meta_returns_all_native_tasks(client: TestClient) -> None:
     native_tasks = [task for task in resp.json()["tasks"] if task["suite"] == "tool_lab_core"]
     expected = {
         path.stem
-        for path in (Path(__file__).resolve().parents[2] / "benchmarks/tool_lab_core/tasks").glob(
+        for path in (Path(__file__).resolve().parents[2] / "benchmarks/tool_lab_core/tasks").rglob(
             "*.json"
         )
     }
     assert {task["id"] for task in native_tasks} == expected
-    assert len(native_tasks) == 12
+    assert len(native_tasks) == 15
 
 
 def test_create_and_get_experiment(client: TestClient, temp_artifacts_dir: Path) -> None:

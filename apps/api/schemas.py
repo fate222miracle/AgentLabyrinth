@@ -126,7 +126,7 @@ class CreateExperimentRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = "1.5"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] = "1.5"
     request_id: UUID = Field(default_factory=uuid4)
     provider: Literal["fake", "aihubmix"]
     model: str
@@ -166,16 +166,30 @@ class CreateExperimentRequest(BaseModel):
     @model_validator(mode="after")
     def global_token_revision(self) -> "CreateExperimentRequest":
         """Keep global budget semantics out of legacy request revisions."""
-        if self.max_total_tokens is not None and self.schema_version not in ("1.4", "1.5"):
+        if self.max_total_tokens is not None and self.schema_version not in (
+            "1.4",
+            "1.5",
+            "1.6",
+        ):
             raise ValueError("Global Token budget requires request revision 1.4")
+        if self.schema_version == "1.6" and self.comparison_axis != "memory_ablation":
+            raise ValueError("Request revision 1.6 supports only the memory ablation axis")
+        if self.comparison_axis == "memory_ablation" and self.schema_version != "1.6":
+            raise ValueError("Memory ablation requires Experiment request revision 1.6")
         if (
             self.context_policy is not None or self.comparison_axis == "context_policy"
-        ) and self.schema_version != "1.5":
+        ) and self.schema_version not in ("1.5", "1.6"):
             raise ValueError("Context policy requires Experiment request revision 1.5")
         if self.comparison_axis == "context_policy" and (
             self.context_policy is None or self.context_policy.mode != "recent_tool_rounds"
         ):
             raise ValueError("Context comparison requires a recent_tool_rounds policy")
+        if self.comparison_axis == "memory_ablation" and (
+            self.context_policy is None
+            or self.context_policy.mode != "recent_tool_rounds"
+            or self.context_policy.memory_max_bytes is None
+        ):
+            raise ValueError("Memory ablation requires a recent_tool_rounds memory policy")
         return self
 
 

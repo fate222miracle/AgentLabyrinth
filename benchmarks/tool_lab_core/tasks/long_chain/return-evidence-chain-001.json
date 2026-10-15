@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "id": "3128a93d-8c83-46cf-b761-22ac7f3fa101",
+  "name": "return-evidence-chain-001",
+  "version": "1.3.0",
+  "category": "evidence_chain",
+  "description": "自建仿真：核验 CASE-314 的退货审批依据。先定位案件登记，沿正文引用阅读适用政策和审批记录；仅提交该案最终 Status 值，并完整引用整条依据链。其他案件和旧版政策不是有效依据。",
+  "initial_state": {
+    "task_kind": "document_chain",
+    "document_query": "CASE-314 intake",
+    "documents": [
+      {
+        "document_id": "RET-ENTRY",
+        "title": "CASE-314 intake · 案件登记",
+        "content": "CASE-314: sealed headphones, received 12 days ago. Current applicable policy revision is 2026-B. Next document: RET-POLICY",
+        "evidence_id": "document:RET-ENTRY"
+      },
+      {
+        "document_id": "RET-OLD",
+        "title": "退货政策 2025-A（已废止）",
+        "content": "Archived policy, not applicable to CASE-314. Status: rejected",
+        "evidence_id": "document:RET-OLD"
+      },
+      {
+        "document_id": "RET-POLICY",
+        "title": "RET-POLICY · 退货政策2026-B",
+        "content": "Revision 2026-B: sealed headphones can be returned within 30 days. CASE-314 has a case-specific approval record. Next document: RET-DECISION",
+        "evidence_id": "document:RET-POLICY"
+      },
+      {
+        "document_id": "RET-OTHER",
+        "title": "CASE-315审批记录",
+        "content": "CASE-315: received 45 days ago. Status: rejected",
+        "evidence_id": "document:RET-OTHER"
+      },
+      {
+        "document_id": "RET-DECISION",
+        "title": "RET-DECISION · CASE-314审批",
+        "content": "CASE-314 decision based on intake and revision 2026-B. Status: approved",
+        "evidence_id": "document:RET-DECISION"
+      }
+    ]
+  },
+  "goal_conditions": {
+    "answer": "approved",
+    "evidence": [
+      "document:RET-DECISION",
+      "document:RET-ENTRY",
+      "document:RET-POLICY"
+    ]
+  },
+  "constraints": [
+    "提交完整有效依据链，证据须来自成功阅读",
+    "允许任意有效阅读顺序和更短正确路径，不要求固定调用次数",
+    "每轮只提出一个工具调用，收到结果后再决定下一步；禁止同时提交多个调用。",
+    "仅使用文档搜索、文档阅读和答案提交；从搜索或已读正文复制文档ID，不查询订单记录。",
+    "证据排列顺序不限，但必须完整、无重复、无多余项且确实成功阅读。"
+  ],
+  "expected_tools": [
+    "search_documents",
+    "read_document",
+    "submit_answer"
+  ],
+  "forbidden_tools": [],
+  "max_steps": 10,
+  "token_budget": 20000,
+  "evaluator_config": {
+    "name": "order_status_v2",
+    "split": "development",
+    "origin": "native_long_chain",
+    "dataset_version": "linked-evidence-v1",
+    "evidence_order": "unordered-v1",
+    "document_reference_protocol": "direct-reference-v1"
+  }
+}

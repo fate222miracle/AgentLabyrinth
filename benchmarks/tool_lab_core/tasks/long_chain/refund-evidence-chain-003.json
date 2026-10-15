@@ -1,0 +1,89 @@
+{
+  "schema_version": "1.0",
+  "id": "4a3a60eb-044c-42fd-8d6d-2ea23903c303",
+  "name": "refund-evidence-chain-003",
+  "version": "1.3.0",
+  "category": "evidence_chain",
+  "description": "自建仿真：核验 REF-926 的退款审批链。由申请登记追踪支付核对、退货验收、风控复核和最终审批；仅提交本案最终 Status 值，完整引用五份有效依据。其他支付、过期冻结记录和未完成的申请状态不能作为最终结果。",
+  "initial_state": {
+    "task_kind": "document_chain",
+    "document_query": "REF-926 application",
+    "documents": [
+      {
+        "document_id": "REF-ENTRY",
+        "title": "REF-926 application · 退款申请",
+        "content": "REF-926: refund requested for payment PAY-612. Payment identity must be reconciled. Next document: REF-PAYMENT",
+        "evidence_id": "document:REF-ENTRY"
+      },
+      {
+        "document_id": "REF-STALE",
+        "title": "REF-926旧风控冻结记录（已解除）",
+        "content": "Historical hold, superseded by the current review. Status: on_hold",
+        "evidence_id": "document:REF-STALE"
+      },
+      {
+        "document_id": "REF-PAYMENT",
+        "title": "REF-PAYMENT · 支付核对",
+        "content": "PAY-612 belongs to REF-926 and has not been refunded before. Returned goods require inspection. Next document: REF-INSPECTION",
+        "evidence_id": "document:REF-PAYMENT"
+      },
+      {
+        "document_id": "REF-OTHER",
+        "title": "PAY-613退款记录",
+        "content": "Different payment PAY-613 has already been refunded. Status: duplicate_refund",
+        "evidence_id": "document:REF-OTHER"
+      },
+      {
+        "document_id": "REF-INSPECTION",
+        "title": "REF-INSPECTION · 退货验收",
+        "content": "REF-926 returned item matches the paid product and passed inspection. Resolve the historical risk hold. Next document: REF-RISK",
+        "evidence_id": "document:REF-INSPECTION"
+      },
+      {
+        "document_id": "REF-RISK",
+        "title": "REF-RISK · 当前风控复核",
+        "content": "REF-926 historical hold has been cleared following identity verification. Final authorization is stored separately. Next document: REF-DECISION",
+        "evidence_id": "document:REF-RISK"
+      },
+      {
+        "document_id": "REF-DECISION",
+        "title": "REF-DECISION · 最终退款审批",
+        "content": "REF-926 approval requires its application, matched payment, goods inspection and current risk review. Status: refund_approved",
+        "evidence_id": "document:REF-DECISION"
+      }
+    ]
+  },
+  "goal_conditions": {
+    "answer": "refund_approved",
+    "evidence": [
+      "document:REF-DECISION",
+      "document:REF-ENTRY",
+      "document:REF-INSPECTION",
+      "document:REF-PAYMENT",
+      "document:REF-RISK"
+    ]
+  },
+  "constraints": [
+    "提交完整有效依据链，证据须来自成功阅读",
+    "不强制固定工具轨迹",
+    "每轮只提出一个工具调用，收到结果后再决定下一步；禁止同时提交多个调用。",
+    "仅使用文档搜索、文档阅读和答案提交；从搜索或已读正文复制文档ID，不查询订单记录。",
+    "证据排列顺序不限，但必须完整、无重复、无多余项且确实成功阅读。"
+  ],
+  "expected_tools": [
+    "search_documents",
+    "read_document",
+    "submit_answer"
+  ],
+  "forbidden_tools": [],
+  "max_steps": 10,
+  "token_budget": 20000,
+  "evaluator_config": {
+    "name": "order_status_v2",
+    "split": "development",
+    "origin": "native_long_chain",
+    "dataset_version": "linked-evidence-v1",
+    "evidence_order": "unordered-v1",
+    "document_reference_protocol": "direct-reference-v1"
+  }
+}

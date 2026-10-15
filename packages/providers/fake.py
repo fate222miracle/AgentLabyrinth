@@ -36,6 +36,7 @@ class FakeModelProvider(ModelProvider):
         self, messages: list[Message], tools: list[ToolSchema], config: ModelConfig
     ) -> ModelResponse:
         """Return a validated action based on public messages and scenario."""
+        messages = self._visible_memory(messages)
         self._call_count += 1
 
         if self.custom_responses:
@@ -79,6 +80,8 @@ class FakeModelProvider(ModelProvider):
                 estimated_cost=estimated_cost,
             )
 
+        if self._extract_task_kind(messages) == "document_chain":
+            return self._chain_response(messages, token_usage, estimated_cost)
         if self._extract_task_kind(messages) == "document":
             return self._document_response(messages, token_usage, estimated_cost)
 
@@ -130,6 +133,33 @@ class FakeModelProvider(ModelProvider):
             estimated_cost=estimated_cost,
         )
 
+    @staticmethod
+    def _visible_memory(messages: list[Message]) -> list[Message]:
+        """Interpret only the explicit public memory envelope, like visible tool feedback."""
+        expanded: list[Message] = []
+        for message in messages:
+            expanded.append(message)
+            if message.role != "user" or not isinstance(message.content, dict):
+                continue
+            memory = message.content.get("_agentlabyrinth_memory")
+            if not isinstance(memory, dict) or memory.get("schema_version") != "1.0":
+                continue
+            entries = memory.get("entries")
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                observation, call_id = entry.get("observation"), entry.get("call_id")
+                if (
+                    isinstance(observation, dict)
+                    and "result" in observation
+                    and "error" not in observation
+                    and isinstance(call_id, str)
+                ):
+                    expanded.append(Message(role="tool", content=observation, tool_call_id=call_id))
+        return expanded
+
     def _invalid_order_response(
         self, token_usage: TokenUsage, estimated_cost: EstimatedCost
     ) -> ModelResponse:
@@ -147,9 +177,56 @@ class FakeModelProvider(ModelProvider):
     def _extract_task_kind(self, messages: list[Message]) -> str:
         """Read public task mode without inspecting private goal conditions."""
         for msg in messages:
-            if isinstance(msg.content, dict) and msg.content.get("task_kind") == "document":
-                return "document"
+            if isinstance(msg.content, dict) and msg.content.get("task_kind") in (
+                "document",
+                "document_chain",
+            ):
+                return str(msg.content["task_kind"])
         return "order"
+
+    def _chain_response(
+        self, messages: list[Message], usage: TokenUsage, cost: EstimatedCost
+    ) -> ModelResponse:
+        """Follow public document references; retain only evidence visible in the request."""
+        document = self._extract_document_result(messages)
+        if document is None:
+            first = self._extract_document_search_result(messages)
+            name = "read_document" if first else "search_documents"
+            arguments: dict[str, Any] = (
+                {"document_id": first}
+                if first
+                else {"query": self._extract_document_query(messages), "top_k": 3}
+            )
+        else:
+            link = re.search(r"Next document:\s*([A-Za-z0-9_-]+)", document["content"])
+            if link or self.scenario in {"max_steps", "looping"}:
+                name = "read_document"
+                arguments = {"document_id": link.group(1) if link else "missing-document"}
+            else:
+                status = re.search(r"Status:\s*([A-Za-z0-9_-]+)", document["content"])
+                if status is None:
+                    raise ValueError("Document chain has neither a reference nor a status")
+                evidence: set[str] = set()
+                for message in messages:
+                    if message.role == "tool" and isinstance(message.content, dict):
+                        result = message.content.get("result")
+                        read = result.get("document") if isinstance(result, dict) else None
+                        if isinstance(read, dict):
+                            identifier = read.get("evidence_id")
+                            if isinstance(identifier, str):
+                                evidence.add(identifier)
+                name = "submit_answer"
+                arguments = {
+                    "answer": "wrong" if self.scenario == "wrong_answer" else status.group(1),
+                    "evidence": sorted(evidence),
+                }
+        return ModelResponse(
+            action=ToolCall(
+                call_id=f"call_chain_{self._call_count}", name=name, arguments=arguments
+            ),
+            token_usage=usage,
+            estimated_cost=cost,
+        )
 
     def _document_response(
         self,

@@ -38,7 +38,7 @@ from packages.runtime.factory import create_runtime, runtime_version
 from packages.tools.executor import ToolExecutor
 from packages.tools.registry import DefaultToolValidator
 
-ComparisonAxis = Literal["recovery_policy", "runtime_backend", "context_policy"]
+ComparisonAxis = Literal["recovery_policy", "runtime_backend", "context_policy", "memory_ablation"]
 
 
 class PairComparison(BaseModel):
@@ -138,7 +138,7 @@ class ExperimentArtifact(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = "1.2"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = "1.2"
     experiment_id: UUID
     created_at: str
     config: dict[str, Any]
@@ -153,8 +153,53 @@ class ExperimentArtifact(BaseModel):
         if _global_token_limit(self.config) is not None and self.schema_version not in (
             "1.3",
             "1.4",
+            "1.5",
         ):
             raise ValueError("Global Token budget requires experiment revision 1.3")
+        if self.schema_version == "1.5" and self.config.get("comparison_axis") != "memory_ablation":
+            raise ValueError("Experiment revision 1.5 supports only memory ablation")
+        if self.config.get("comparison_axis") == "memory_ablation":
+            if self.schema_version != "1.5":
+                raise ValueError("Memory ablation requires experiment revision 1.5")
+            left_arm = self.config.get("baseline_agent")
+            right_arm = self.config.get("recovery_agent")
+            if not isinstance(left_arm, dict) or not isinstance(right_arm, dict):
+                raise ValueError("Memory ablation requires both saved arm configurations")
+            left = ContextPolicy.model_validate(left_arm.get("context_policy"))
+            right = ContextPolicy.model_validate(right_arm.get("context_policy"))
+            if any(
+                left_arm.get(field) is None or left_arm.get(field) != right_arm.get(field)
+                for field in (
+                    "runtime_backend",
+                    "runtime_strategy",
+                    "runtime_version",
+                    "recovery_policy",
+                )
+            ):
+                raise ValueError("Memory ablation requires the same Runtime and recovery policy")
+            if (
+                left_arm["runtime_backend"] not in ("handwritten", "langgraph")
+                or left_arm["runtime_strategy"] not in ("handwritten", "handwritten_recovery")
+                or not isinstance(left_arm["runtime_version"], str)
+                or not left_arm["runtime_version"]
+                or left_arm["recovery_policy"]
+                != (
+                    "invalid_arguments_once"
+                    if left_arm["runtime_strategy"] == "handwritten_recovery"
+                    else "none"
+                )
+            ):
+                raise ValueError("Memory ablation requires valid Runtime provenance")
+            _require_memory_arm_pair(left, right)
+            if any(pair.retry_eligible is not None or pair.recovered for pair in self.pairs) or any(
+                value is not None
+                for value in (
+                    self.metrics.retry_eligible_count,
+                    self.metrics.retry_recovery_count,
+                    self.metrics.retry_recovery_rate,
+                )
+            ):
+                raise ValueError("Memory ablation has no recovery metrics")
         if self.config.get("comparison_axis") == "context_policy":
             if self.schema_version != "1.4":
                 raise ValueError("Context comparison requires experiment revision 1.4")
@@ -187,7 +232,7 @@ class ExperimentCheckpoint(BaseModel):
     """Frozen paired-run plan; completed Episode artifacts are the progress ledger."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.0"
     experiment_id: UUID
     created_at: str
     baseline_agent: AgentSpec
@@ -207,12 +252,19 @@ class ExperimentCheckpoint(BaseModel):
         if _global_token_limit(self.config_metadata) is not None and self.schema_version not in (
             "1.1",
             "1.2",
+            "1.3",
         ):
             raise ValueError("Global Token budget requires experiment plan revision 1.1")
         if self.comparison_axis == "context_policy" and self.schema_version != "1.2":
             raise ValueError("Context comparison requires plan revision 1.2")
+        if self.comparison_axis == "memory_ablation" and self.schema_version != "1.3":
+            raise ValueError("Memory ablation requires plan revision 1.3")
+        if self.schema_version == "1.3" and self.comparison_axis != "memory_ablation":
+            raise ValueError("Plan revision 1.3 supports only memory ablation")
         if self.comparison_axis == "context_policy":
             _validate_context_agents(self.baseline_agent, self.recovery_agent)
+        if self.comparison_axis == "memory_ablation":
+            _validate_memory_agents(self.baseline_agent, self.recovery_agent)
 
 
 def experiment_checkpoint_path(artifacts_dir: Path, experiment_id: UUID) -> Path:
@@ -254,6 +306,40 @@ def _validate_context_agents(baseline_agent: AgentSpec, recovery_agent: AgentSpe
         )
 
 
+def _require_memory_arm_pair(left: ContextPolicy, right: ContextPolicy) -> None:
+    """Reject anything but a same-window window-only left against a memory right."""
+    if left.mode != "recent_tool_rounds" or right.mode != "recent_tool_rounds":
+        raise ValueError("Memory ablation requires recent windows on both arms")
+    if left.max_tool_rounds != right.max_tool_rounds:
+        raise ValueError("Memory ablation requires the same window on both arms")
+    if left.memory_max_bytes is not None or right.memory_max_bytes is None:
+        raise ValueError("Memory ablation requires a window-only left and a memory right")
+    if left.schema_version != "1.0" or left.algorithm_version != "tool-round-window-v1":
+        raise ValueError("Memory ablation baseline must use the window-only algorithm")
+    if right.schema_version != "1.1" or right.algorithm_version != "tool-round-window-memory-v1":
+        raise ValueError("Memory ablation recovery must use the tool-memory algorithm")
+
+
+def _validate_memory_agents(baseline_agent: AgentSpec, recovery_agent: AgentSpec) -> None:
+    """Reject mixed memory ablations before creation or recovery."""
+    if (
+        baseline_agent.context_policy is None
+        or recovery_agent.context_policy is None
+        or baseline_agent.runtime_backend != recovery_agent.runtime_backend
+        or baseline_agent.runtime_strategy != recovery_agent.runtime_strategy
+        or baseline_agent.recovery_policy != recovery_agent.recovery_policy
+    ):
+        raise ValueError(
+            "Memory ablation requires both arms and the same backend and recovery policy"
+        )
+    fixed_fields = {"id", "name", "context_policy"}
+    if baseline_agent.model_dump(exclude=fixed_fields) != recovery_agent.model_dump(
+        exclude=fixed_fields
+    ):
+        raise ValueError("Memory ablation agents must share all inputs except identity and memory")
+    _require_memory_arm_pair(baseline_agent.context_policy, recovery_agent.context_policy)
+
+
 def create_experiment_plan(
     baseline_agent: AgentSpec,
     recovery_agent: AgentSpec,
@@ -268,7 +354,7 @@ def create_experiment_plan(
     if not tasks or not seeds or len(set(seeds)) != len(seeds) or repeat_count < 1:
         raise ValueError("Experiment requires tasks, unique seeds and a positive repeat count")
     for field in ("model", "prompt_version", "tool_set_version", "budget") + (
-        () if comparison_axis == "context_policy" else ("context_policy",)
+        () if comparison_axis in ("context_policy", "memory_ablation") else ("context_policy",)
     ):
         if getattr(baseline_agent, field) != getattr(recovery_agent, field):
             raise ValueError(f"Paired agents must share {field}")
@@ -288,6 +374,8 @@ def create_experiment_plan(
             raise ValueError("Recovery comparison requires the same backend and baseline/recovery")
     elif comparison_axis == "context_policy":
         _validate_context_agents(baseline_agent, recovery_agent)
+    elif comparison_axis == "memory_ablation":
+        _validate_memory_agents(baseline_agent, recovery_agent)
     else:
         raise ValueError("Unknown comparison axis")
     raw_limit = config_metadata.get("max_reference_cost_usd")
@@ -297,7 +385,9 @@ def create_experiment_plan(
         raise ValueError("Reference cost budget requires a positive limit and price version")
     token_limit = _global_token_limit(config_metadata)
     plan = {
-        "schema_version": "1.2"
+        "schema_version": "1.3"
+        if comparison_axis == "memory_ablation"
+        else "1.2"
         if comparison_axis == "context_policy"
         else "1.1"
         if token_limit is not None
@@ -781,6 +871,8 @@ async def run_experiment(
             if comparison_axis == "runtime_backend"
             else {"baseline": "Full Context", "recovery": "Recent Tool Rounds"}
             if comparison_axis == "context_policy"
+            else {"baseline": "Recent Window", "recovery": "Recent Window + Memory"}
+            if comparison_axis == "memory_ablation"
             else {"baseline": "Baseline Policy", "recovery": "Recovery Policy"}
         ),
         "baseline_agent": {
@@ -821,7 +913,9 @@ async def run_experiment(
             }
             for t in tasks
         ],
-        "evaluator": "order_status_v1",
+        "evaluator": "order_status_v2"
+        if any(t.evaluator_config.get("evidence_order") == "unordered-v1" for t in tasks)
+        else "order_status_v1",
         "environment_version": "tool-lab-m0-v1",
         "seed": resolved_seeds[0],
         "seeds": resolved_seeds,
@@ -843,7 +937,9 @@ async def run_experiment(
     config_hash = compute_config_hash(exp_config)
 
     experiment_artifact = ExperimentArtifact(
-        schema_version="1.4"
+        schema_version="1.5"
+        if comparison_axis == "memory_ablation"
+        else "1.4"
         if comparison_axis == "context_policy"
         else "1.3"
         if token_limit is not None

@@ -19,7 +19,9 @@ from packages.tools.executor import ToolExecutor
 from packages.tools.registry import DefaultToolValidator, ToolRegistry
 
 TOOL_LAB_TOOL_SET_VERSION = "v1.1.0"
-TOOL_LAB_TOOL_SET_VERSIONS = frozenset({"v1.0.0", "v1", "tool-lab-v1", TOOL_LAB_TOOL_SET_VERSION})
+TOOL_LAB_TOOL_SET_VERSIONS = frozenset(
+    {"v1.0.0", "v1", "tool-lab-v1", TOOL_LAB_TOOL_SET_VERSION, "v1.2.0", "v1.3.0"}
+)
 
 
 class QueryFilters(BaseModel):
@@ -69,6 +71,17 @@ class ReadDocumentArgs(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
     document_id: str = Field(min_length=1, description="Exact ID returned by search_documents.")
+
+
+class _ReferencedReadDocumentArgs(ReadDocumentArgs):
+    """Read a discovered ID without redundant searches for an already known reference."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", title="ReadDocumentArgs")
+    document_id: str = Field(
+        min_length=1,
+        description="Exact ID from a search result OR a reference in an already read document. "
+        "Read known references directly; do not search again only to rediscover the same ID.",
+    )
 
 
 class SubmitAnswerArgs(BaseModel):
@@ -176,7 +189,13 @@ class ToolLabEnvironment(Environment):
     ) -> None:
         if tool_set_version not in TOOL_LAB_TOOL_SET_VERSIONS:
             raise ValueError("Unsupported ToolLab tool description version")
-        self._grounded_descriptions = tool_set_version == TOOL_LAB_TOOL_SET_VERSION
+        self._grounded_descriptions = tool_set_version in (
+            TOOL_LAB_TOOL_SET_VERSION,
+            "v1.2.0",
+            "v1.3.0",
+        )
+        self._task_scoped_tools = tool_set_version in ("v1.2.0", "v1.3.0")
+        self._referenced_reads = tool_set_version == "v1.3.0"
         self._registry = registry or create_tool_lab_registry()
         self._validator = validator or DefaultToolValidator(self._registry)
         self._executor = executor or ToolExecutor(self._registry, self._validator)
@@ -202,6 +221,11 @@ class ToolLabEnvironment(Environment):
             "1.1.0" if self._grounded_descriptions else "1.0.0"
         ):
             raise ValueError("ToolLab registry tool description version mismatch")
+        read_schema = self._registry.get_schema("read_document")
+        if read_schema is None or read_schema.version != (
+            "1.1.0" if self._referenced_reads else "1.0.0"
+        ):
+            raise ValueError("ToolLab registry read description version mismatch")
 
     def _register_handlers(self) -> None:
         """Register environment-bound tool handlers if not already registered."""
@@ -247,8 +271,10 @@ class ToolLabEnvironment(Environment):
                 name="read_document",
                 description="Read one task document and acquire its evidence ID.",
                 risk_level="READ_ONLY",
-                version="1.0.0",
-                param_model=ReadDocumentArgs,
+                version="1.1.0" if self._referenced_reads else "1.0.0",
+                param_model=_ReferencedReadDocumentArgs
+                if self._referenced_reads
+                else ReadDocumentArgs,
                 handler=self._handle_read_document,
             )
 
@@ -357,7 +383,12 @@ class ToolLabEnvironment(Environment):
 
     def available_tools(self) -> list[ToolSchema]:
         """Describe registered tools without exposing handlers."""
-        return self._registry.list_schemas()
+        schemas = self._registry.list_schemas()
+        return (
+            [t for t in schemas if t.name in self._allowed_tools]
+            if self._task_scoped_tools
+            else schemas
+        )
 
     def step(self, action: ToolCall) -> StepResult:
         """Execute action defensively through the shared Executor."""

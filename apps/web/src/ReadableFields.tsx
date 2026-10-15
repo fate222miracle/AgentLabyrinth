@@ -5,6 +5,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export const fieldLabels: Record<string, string> = {
   mode: '上下文策略', max_tool_rounds: '保留工具轮次', history_messages_count: '完整历史消息数',
   visible_messages_count: '模型可见消息数', dropped_messages_count: '剔除消息数', input_messages_bytes: '输入消息字节（UTF-8）',
+  memory_max_bytes: '记忆字节上限', memory_entries_count: '记忆条数', memory_omitted_entries_count: '超过上限未保留条数',
+  memory_bytes: '实际记忆字节（UTF-8）', memory_source_call_ids: '记忆来源调用 ID',
   error_code: '错误码', arguments_valid: '参数合法', permitted: '允许调用',
   answer: '答案', evidence: '引用证据', acquired_evidence: '已获取证据',
   records: '查询记录', documents: '文档', document: '文档内容',

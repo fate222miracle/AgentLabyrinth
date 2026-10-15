@@ -291,6 +291,7 @@ class AIHubMixModelProvider(ModelProvider):
         if tools:
             payload["tools"] = self._format_tools(tools)
             payload["tool_choice"] = "auto"
+            payload["parallel_tool_calls"] = False
 
         response_data = await asyncio.to_thread(self._send_http_request, payload, api_key)
 

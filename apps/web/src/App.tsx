@@ -9,6 +9,9 @@ import { RequestGeneration } from './requestGeneration';
 import { useContentMotion } from './useContentMotion';
 import { HistoryReader } from './HistoryReader';
 import { EpisodeSummary } from './EpisodeSummary';
+import { ClassroomScenarios } from './ClassroomScenarios';
+import { ExperimentCharts } from './ExperimentCharts';
+import { ContextSettings, contextInput, contextLabel, type ContextChoice } from './ContextSettings';
 import { metaSchema, dashboardSchema, resumableIdsSchema,
   type TaskOption, type MetaResponse, type TraceEvent, type EpisodeArtifact,
   type PairComparison, type ExperimentArtifact, type ExperimentJobState } from './apiContracts';
@@ -34,6 +37,7 @@ const taskCategoryLabels: Record<string, string> = {
   tool_selection: '工具选择',
   parameter_generation: '参数生成',
   multi_step_planning: '多步规划',
+  evidence_chain: '跨文档证据链 · 自建仿真',
   error_recovery: '错误恢复',
   bfcl_single_call: '单次函数调用',
 };
@@ -128,12 +132,16 @@ function experimentCsv(experiment: ExperimentArtifact): string {
     'arm', 'episode_id', 'success', 'termination_reason', 'steps', 'model_calls',
     'tool_calls', 'tokens', 'duration_ms', 'cost_usd', 'official_reference_cost_usd', 'tool_selection_accuracy',
     'tool_argument_validity_rate', 'pair_retry_eligible', 'pair_recovered', 'context_mode', 'context_max_tool_rounds',
+    'model_id', 'provider', 'task_name',
+    'context_algorithm_version', 'context_memory_max_bytes',
   ];
   const axis = typeof experiment.config.comparison_axis === 'string'
     ? experiment.config.comparison_axis : 'recovery_policy';
+  const savedModel = typeof experiment.config.model === 'string'
+    ? experiment.config.model : experiment.config.model?.model;
   const rows = experiment.pairs.flatMap((pair) => [
     [experiment.experiment_id, experiment.config_hash, axis, pair.task_id, pair.seed,
-      pair.repeat_index ?? 1, axis === 'context_policy' ? 'full' : axis === 'runtime_backend' ? 'reference' : 'baseline',
+      pair.repeat_index ?? 1, axis === 'context_policy' ? 'full' : axis === 'memory_ablation' ? 'recent_window' : axis === 'runtime_backend' ? 'reference' : 'baseline',
       pair.baseline_episode_id, pair.baseline_success,
       pair.baseline_termination_reason, pair.baseline_steps, pair.baseline_model_calls,
       pair.baseline_tool_calls, pair.baseline_tokens, pair.baseline_duration_ms,
@@ -141,9 +149,11 @@ function experimentCsv(experiment: ExperimentArtifact): string {
       pair.baseline_tool_argument_validity_rate,
       axis !== 'recovery_policy' ? null : pair.retry_eligible,
       axis !== 'recovery_policy' ? null : pair.recovered,
-      experiment.config.baseline_agent?.context_policy?.mode, experiment.config.baseline_agent?.context_policy?.max_tool_rounds],
+      experiment.config.baseline_agent?.context_policy?.mode, experiment.config.baseline_agent?.context_policy?.max_tool_rounds,
+      savedModel, experiment.config.provider, pair.task_name,
+      experiment.config.baseline_agent?.context_policy?.algorithm_version, experiment.config.baseline_agent?.context_policy?.memory_max_bytes],
     [experiment.experiment_id, experiment.config_hash, axis, pair.task_id, pair.seed,
-      pair.repeat_index ?? 1, axis === 'context_policy' ? 'recent_tool_rounds' : axis === 'runtime_backend' ? 'langgraph' : 'recovery',
+      pair.repeat_index ?? 1, axis === 'context_policy' ? 'recent_tool_rounds' : axis === 'memory_ablation' ? 'recent_window_with_memory' : axis === 'runtime_backend' ? 'langgraph' : 'recovery',
       pair.recovery_episode_id, pair.recovery_success,
       pair.recovery_termination_reason, pair.recovery_steps, pair.recovery_model_calls,
       pair.recovery_tool_calls, pair.recovery_tokens, pair.recovery_duration_ms,
@@ -151,7 +161,9 @@ function experimentCsv(experiment: ExperimentArtifact): string {
       pair.recovery_tool_argument_validity_rate,
       axis !== 'recovery_policy' ? null : pair.retry_eligible,
       axis !== 'recovery_policy' ? null : pair.recovered,
-      experiment.config.recovery_agent?.context_policy?.mode, experiment.config.recovery_agent?.context_policy?.max_tool_rounds],
+      experiment.config.recovery_agent?.context_policy?.mode, experiment.config.recovery_agent?.context_policy?.max_tool_rounds,
+      savedModel, experiment.config.provider, pair.task_name,
+      experiment.config.recovery_agent?.context_policy?.algorithm_version, experiment.config.recovery_agent?.context_policy?.memory_max_bytes],
   ]);
   return `\uFEFF${[headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
 }
@@ -187,11 +199,16 @@ function parseSeedList(value: string): number[] | null {
   return new Set(seeds).size === seeds.length ? seeds : null;
 }
 
-function comparisonLabel(pair: PairComparison, axis: 'recovery_policy' | 'runtime_backend' | 'context_policy'): string {
+function comparisonLabel(pair: PairComparison, axis: 'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation'): string {
   if (axis === 'context_policy') {
     if (pair.baseline_success && pair.recovery_success) return '两种上下文均通过';
     if (!pair.baseline_success && !pair.recovery_success) return '两种上下文均未通过';
     return pair.baseline_success ? '仅完整历史通过' : '仅最近轮次通过';
+  }
+  if (axis === 'memory_ablation') {
+    if (pair.baseline_success && pair.recovery_success) return '有无记忆均通过';
+    if (!pair.baseline_success && !pair.recovery_success) return '有无记忆均未通过';
+    return pair.baseline_success ? '仅无记忆窗口通过' : '仅带记忆窗口通过';
   }
   if (axis === 'runtime_backend') {
     if (pair.baseline_success && pair.recovery_success) return '两种 Runtime 均通过';
@@ -273,7 +290,14 @@ export default function App() {
   const [expScenario, setExpScenario] = useState<string>('invalid-then-success');
   const [expFaultProfile, setExpFaultProfile] = useState<string>('none');
   const [contextWindow, setContextWindow] = useState(2);
-  const [comparisonAxis, setComparisonAxis] = useState<'recovery_policy' | 'runtime_backend' | 'context_policy'>('recovery_policy');
+  const [contextChoice, setContextChoice] = useState<ContextChoice>('window');
+  const [memoryBytes, setMemoryBytes] = useState(8192);
+  const [memoryAxisWindow, setMemoryAxisWindow] = useState(1);
+  const [memoryAxisBytes, setMemoryAxisBytes] = useState(8192);
+  const [singleContextChoice, setSingleContextChoice] = useState<ContextChoice>('full');
+  const [singleContextWindow, setSingleContextWindow] = useState(2);
+  const [singleMemoryBytes, setSingleMemoryBytes] = useState(8192);
+  const [comparisonAxis, setComparisonAxis] = useState<'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation'>('recovery_policy');
   const [expRuntimeBackend, setExpRuntimeBackend] = useState<'handwritten' | 'langgraph'>('handwritten');
   const [expRuntimeStrategy, setExpRuntimeStrategy] = useState<'handwritten' | 'handwritten_recovery'>('handwritten_recovery');
   const [singleRuntimeBackend, setSingleRuntimeBackend] = useState<'handwritten' | 'langgraph'>('handwritten');
@@ -450,10 +474,11 @@ export default function App() {
       setSelectedModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : data.default_model);
       setExpModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : data.default_model);
       if (initializeDefaults && data.tasks.length > 0) {
-        const initialTask = data.tasks.find((task) => task.suite === 'tool_lab_core') ?? data.tasks[0];
+        const initialTask = data.tasks.find((task) => task.id === data.default_task)
+          ?? data.tasks.find((task) => task.suite === 'tool_lab_core') ?? data.tasks[0];
         setSelectedSuite(initialTask.suite);
         setSelectedSingleTask(initialTask.id);
-        setExpTasks(data.tasks.filter((task) => task.suite === 'tool_lab_core').map((task) => task.id));
+        setExpTasks(data.tasks.filter((task) => task.suite === 'tool_lab_core' && task.category !== 'evidence_chain').map((task) => task.id));
       }
     } catch (err: unknown) {
       if (metadataRequests.current.isCurrent(metadataRequestId)) setMetadataError(err instanceof Error ? err.message : '目录读取失败');
@@ -694,6 +719,8 @@ export default function App() {
       const isFake = selectedModel === 'fake' || currentModelObj?.provider === 'fake';
 
       const payload = {
+        schema_version: '1.3',
+        ...(singleContextChoice !== 'full' ? { context_policy: contextInput(singleContextChoice, singleContextWindow, singleMemoryBytes) } : {}),
         provider: isFake ? 'fake' : 'aihubmix',
         model: isFake ? 'fake-model' : selectedModel,
         scenario: isFake ? selectedScenario : null,
@@ -861,12 +888,18 @@ export default function App() {
     setActiveJobId(null);
     setExperimentJob(null);
     setExperiment(null);
-    beginLoading(`正在串行执行${comparisonAxis === 'context_policy' ? '上下文' : comparisonAxis === 'runtime_backend' ? 'Runtime' : '恢复策略'}对照，预计 ${episodeCount} 个 Episode。`);
+    beginLoading(`正在串行执行${comparisonAxis === 'context_policy' ? '上下文' : comparisonAxis === 'memory_ablation' ? '工具记忆' : comparisonAxis === 'runtime_backend' ? 'Runtime' : '恢复策略'}对照，预计 ${episodeCount} 个 Episode。`);
     setErrorMsg(null);
     let started = false;
     try {
       if (comparisonAxis === 'context_policy' && (!Number.isInteger(contextWindow) || contextWindow < 1 || contextWindow > 100)) {
         throw new Error('上下文窗口须为 1–100 的整数');
+      }
+      if (comparisonAxis === 'memory_ablation' && (!Number.isInteger(memoryAxisWindow) || memoryAxisWindow < 1 || memoryAxisWindow > 100)) {
+        throw new Error('相同窗口轮次须为 1–100 的整数');
+      }
+      if (comparisonAxis === 'memory_ablation' && (!Number.isInteger(memoryAxisBytes) || memoryAxisBytes < 256 || memoryAxisBytes > 32768)) {
+        throw new Error('记忆大小须为 256–32768 的整数字节');
       }
       const currentModelObj = meta?.models.find((m) => m.id === expModel);
       const isFake = expModel === 'fake' || currentModelObj?.provider === 'fake';
@@ -883,7 +916,8 @@ export default function App() {
         max_execution_time_ms: expExecutionSeconds * 1000,
         max_reference_cost_usd: isFake || expReferenceBudget === '' ? null : expReferenceBudget,
         comparison_axis: comparisonAxis,
-        ...(comparisonAxis === 'context_policy' ? { context_policy: { mode: 'recent_tool_rounds', max_tool_rounds: contextWindow } } : {}),
+        ...(comparisonAxis === 'context_policy' ? { context_policy: contextInput(contextChoice, contextWindow, memoryBytes) } : {}),
+        ...(comparisonAxis === 'memory_ablation' ? { schema_version: '1.6', context_policy: contextInput('memory', memoryAxisWindow, memoryAxisBytes) } : {}),
         runtime_backend: expRuntimeBackend,
         runtime_strategy: expRuntimeStrategy,
         fault_profile: isFake ? expFaultProfile : 'none',
@@ -974,9 +1008,62 @@ export default function App() {
   };
 
   const toggleTaskSelection = (taskId: string) => {
+    const task = meta?.tasks.find((item) => item.id === taskId);
+    if (!expTasks.includes(taskId) && task?.category === 'evidence_chain' && expTokenBudget === 8000) setExpTokenBudget(task.token_budget);
     setExpTasks((prev) =>
       prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId]
     );
+  };
+
+  const configureClassroomScenario = (task: TaskOption, target: 'single' | 'experiment') => {
+    if (isLoading || metadataLoading || !meta?.tasks.some((item) => item.id === task.id)) return;
+    const model = activeTab === 'single' ? selectedModel : expModel;
+    if (!meta.models.some((item) => item.id === model)) {
+      setErrorMsg('请先选择当前目录中的模型，再配置演示场景');
+      return;
+    }
+    if (target === 'single') {
+      setSelectedModel(model);
+      setSelectedSuite('tool_lab_core');
+      setSelectedSingleTask(task.id);
+      setSingleTaskQuery('');
+      setMaxSteps(task.max_steps);
+      setSingleTokenBudget(task.token_budget);
+      setExecutionSeconds(300);
+      setSingleRuntimeBackend('langgraph');
+      setSingleRuntimeStrategy('handwritten');
+      setSingleToolTransport('local');
+      setSingleFaultProfile('none');
+      setSelectedScenario('success');
+      setSingleContextChoice('full');
+    } else {
+      setExpModel(model);
+      setExpTasks([task.id]);
+      setComparisonAxis('context_policy');
+      setContextWindow(1);
+      setContextChoice('window');
+      setExpRuntimeBackend('langgraph');
+      setExpRuntimeStrategy('handwritten');
+      setExpScenario('clean');
+      setExpFaultProfile('none');
+      setExpSeedsText('1');
+      setExpRepeatCount(1);
+      setExpTokenBudget(task.token_budget);
+      setExpExecutionSeconds(300);
+      setExpGlobalTokenBudget(String(task.token_budget * 2));
+      setExpReferenceBudget('');
+    }
+    switchTab(target);
+    const launcher = document.querySelector<HTMLDetailsElement>('.classroom-scenarios');
+    if (launcher) launcher.open = false;
+    requestAnimationFrame(() => {
+      const panel = document.getElementById(target === 'single' ? 'config-panel' : 'exp-config-panel');
+      const details = panel instanceof HTMLDetailsElement ? panel : panel?.querySelector('details');
+      if (details) details.open = true;
+      const summary = details?.querySelector('summary');
+      summary?.focus({ preventScroll: true });
+      summary?.scrollIntoView({ block: 'start' });
+    });
   };
 
   const currentSingleModelMeta = meta?.models.find((m) => m.id === selectedModel);
@@ -990,15 +1077,17 @@ export default function App() {
   });
   const bfclTaskCount = meta?.tasks.filter((task) => task.suite === 'bfcl_adapted').length ?? 0;
   const selectedSingleTaskMeta = filteredSingleTasks.find((task) => task.id === selectedSingleTask);
-  const defaultSingleMaxSteps = selectedSuite !== 'tool_lab_core' ? 1 : 6;
+  const defaultSingleMaxSteps = selectedSingleTaskMeta?.max_steps ?? (selectedSuite !== 'tool_lab_core' ? 1 : 6);
+  const defaultSingleTokenBudget = selectedSingleTaskMeta?.category === 'evidence_chain' ? selectedSingleTaskMeta.token_budget : 8000;
   const singleAdvancedChangeCount = [
     singleRuntimeStrategy !== 'handwritten',
+    singleContextChoice !== 'full',
     singleToolTransport === 'mcp' && Boolean(selectedSingleTaskMeta?.supports_mcp),
     maxSteps !== defaultSingleMaxSteps,
     executionSeconds !== 300,
     selectedModel === 'fake' && selectedScenario !== 'success',
     selectedModel === 'fake' && singleFaultProfile !== 'none',
-    selectedModel !== 'fake' && singleTokenBudget !== 8000,
+    selectedModel !== 'fake' && singleTokenBudget !== defaultSingleTokenBudget,
   ].filter(Boolean).length;
   const eventTypes = Array.from(new Set(artifact?.events.map((event) => event.event_type) ?? []));
   const traceSteps = groupTraceByStep(artifact?.events ?? []);
@@ -1071,13 +1160,20 @@ export default function App() {
   const parsedExpSeeds = parseSeedList(expSeedsText);
   const activeComparisonAxis = experiment?.config.comparison_axis === 'context_policy'
     ? 'context_policy'
+    : experiment?.config.comparison_axis === 'memory_ablation'
+    ? 'memory_ablation'
     : experiment?.config.comparison_axis === 'runtime_backend'
     ? 'runtime_backend'
     : experiment?.config.comparison_axis === 'recovery_policy'
       ? 'recovery_policy'
       : experiment ? 'recovery_policy' : comparisonAxis;
-  const armLeftLabel = activeComparisonAxis === 'context_policy' ? '完整历史' : activeComparisonAxis === 'runtime_backend' ? 'Reference Runtime' : 'Baseline Policy';
-  const armRightLabel = activeComparisonAxis === 'context_policy' ? '最近完整工具轮次' : activeComparisonAxis === 'runtime_backend' ? 'LangGraph Runtime' : 'Recovery Policy';
+  const armLeftLabel = activeComparisonAxis === 'context_policy' ? '完整历史'
+    : activeComparisonAxis === 'memory_ablation' ? '近期窗口（无记忆）'
+    : activeComparisonAxis === 'runtime_backend' ? 'Reference Runtime' : 'Baseline Policy';
+  const armRightLabel = activeComparisonAxis === 'context_policy'
+    ? experiment?.config.recovery_agent?.context_policy?.memory_max_bytes !== undefined ? '近期窗口 + 工具记忆' : '最近完整工具轮次'
+    : activeComparisonAxis === 'memory_ablation' ? '近期窗口 + 工具记忆'
+    : activeComparisonAxis === 'runtime_backend' ? 'LangGraph Runtime' : 'Recovery Policy';
   const expEpisodeCount =
     expTasks.length * (parsedExpSeeds?.length ?? 0) * expRepeatCount * 2;
   const isExperimentRunReady = Boolean(meta) && Boolean(expModel) && expTasks.length > 0 &&
@@ -1105,18 +1201,21 @@ export default function App() {
         严格固定模型、任务、工具集、种子与预算，每次只比较一种策略变量。
       </div>
 
+      <div className="experiment-setup-grid">
+      <div className="experiment-controls">
       <div className="form-group">
         <label htmlFor="comparison-axis" className="form-label">对照变量</label>
         <select
           id="comparison-axis"
           className="form-select"
           value={comparisonAxis}
-          onChange={(e) => setComparisonAxis(e.target.value as 'recovery_policy' | 'runtime_backend' | 'context_policy')}
+          onChange={(e) => setComparisonAxis(e.target.value as 'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation')}
           disabled={isLoading}
         >
           <option value="recovery_policy">恢复策略：关闭 vs 一次参数纠错</option>
           <option value="runtime_backend">执行框架：手写循环 vs LangGraph</option>
           <option value="context_policy">上下文：完整历史 vs 最近完整工具轮次</option>
+          <option value="memory_ablation">工具记忆：相同近期窗口 vs 相同窗口+记忆</option>
         </select>
       </div>
 
@@ -1146,11 +1245,8 @@ export default function App() {
             </select>
           </div>
           {comparisonAxis === 'context_policy' ? <>
-            <div className="form-group">
-              <label htmlFor="context-window" className="form-label">右侧保留完整工具轮次</label>
-              <input id="context-window" className="form-input" type="number" min="1" max="100" step="1" value={contextWindow}
-                onChange={(e) => setContextWindow(Number(e.target.value))} disabled={isLoading} />
-            </div>
+            <ContextSettings prefix="context" choice={contextChoice} rounds={contextWindow} bytes={memoryBytes} disabled={isLoading} comparison
+              onChoice={setContextChoice} onRounds={setContextWindow} onBytes={setMemoryBytes} />
             <div className="form-group">
               <label htmlFor="context-recovery" className="form-label">两组相同的恢复策略</label>
               <select id="context-recovery" className="form-select" value={expRuntimeStrategy}
@@ -1158,7 +1254,34 @@ export default function App() {
                 <option value="handwritten">关闭参数纠错</option><option value="handwritten_recovery">启用一次参数纠错</option>
               </select>
             </div>
-            <p className="form-help">完整历史 vs 最近 {contextWindow} 轮；Trace 保留完整历史。窗口 1 可能丢失文档证据，Fake 只验证机制。</p>
+            <p className="form-help">左侧完整历史；右侧最近 {contextWindow} 轮{contextChoice === 'memory' ? '加工具记忆' : ''}。此处比较整体上下文策略，单独验证记忆需固定相同窗口；Fake 只验证机制。</p>
+          </> : comparisonAxis === 'memory_ablation' ? <>
+            <div className="context-settings">
+              <div className="context-settings-values">
+                <div className="form-group">
+                  <label htmlFor="memory-axis-window" className="form-label">相同窗口轮次 N（两侧共用）</label>
+                  <input id="memory-axis-window" className="form-input" type="number" min="1" max="100" step="1" value={memoryAxisWindow}
+                    disabled={isLoading} onChange={event => setMemoryAxisWindow(Number(event.target.value))} />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="memory-axis-bytes" className="form-label">右侧记忆上限 M（字节）</label>
+                  <input id="memory-axis-bytes" className="form-input" type="number" min="256" max="32768" step="1" value={memoryAxisBytes}
+                    disabled={isLoading} onChange={event => setMemoryAxisBytes(Number(event.target.value))} />
+                </div>
+              </div>
+              <p className="form-help">左右窗口相同，仅记忆配置变化：左侧最近 {memoryAxisWindow} 轮无记忆，右侧同一窗口 + {memoryAxisBytes} 字节工具记忆。</p>
+              <details className="context-help"><summary>策略说明与限制</summary>
+                <p>两侧仅记忆子算法不同，其余变量全部固定。字节上限不是 Token 预算；记忆可能增加输入量，不保证效果。</p>
+              </details>
+            </div>
+            <div className="form-group">
+              <label htmlFor="memory-axis-recovery" className="form-label">两组相同的恢复策略</label>
+              <select id="memory-axis-recovery" className="form-select" value={expRuntimeStrategy}
+                onChange={(e) => setExpRuntimeStrategy(e.target.value as 'handwritten' | 'handwritten_recovery')} disabled={isLoading}>
+                <option value="handwritten">关闭参数纠错</option><option value="handwritten_recovery">启用一次参数纠错</option>
+              </select>
+            </div>
+            <p className="form-help">只比较记忆开关本身，窗口轮次由两侧共享；Fake 只验证机制，单对探索不证明因果收益。</p>
           </> : <div className="strategy-summary" aria-label="恢复策略对照">
             <div><strong>Baseline</strong><span>参数错误后终止</span></div>
             <div><strong>Recovery</strong><span>INVALID_ARGUMENTS 最多纠错一次</span></div>
@@ -1185,14 +1308,15 @@ export default function App() {
       </div>
 
       {/* Model Notes Box */}
-      <div className="form-group">
+      <details className="model-note-disclosure experiment-model-note">
+        <summary>模型可用性与实测说明</summary>
         <div className="model-note-box">
           <strong>说明：</strong>{' '}
           {currentExpModelMeta
             ? currentExpModelMeta.notes
             : '模型元数据未就绪；请刷新目录后选择已列出的模型。'}
         </div>
-      </div>
+      </details>
 
       {/* Scenario selector if Fake model */}
       {expModel === 'fake' && (
@@ -1230,8 +1354,9 @@ export default function App() {
         </>
       )}
 
+      </div>
       {/* Task Checkbox List */}
-      <div className="form-group" role="group" aria-labelledby="exp-task-label">
+      <div className="form-group experiment-task-picker" role="group" aria-labelledby="exp-task-label">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span id="exp-task-label" className="form-label">评测任务 (多选)</span>
           <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.75rem' }}>
@@ -1239,7 +1364,10 @@ export default function App() {
               type="button"
               className="btn-secondary"
               style={{ padding: '0.15rem 0.4rem', fontSize: '0.7rem' }}
-              onClick={() => setExpTasks(experimentTasks.map((t) => t.id))}
+              onClick={() => {
+                setExpTasks(experimentTasks.map((t) => t.id));
+                if (expTokenBudget === 8000 && experimentTasks.some((task) => task.category === 'evidence_chain')) setExpTokenBudget(20000);
+              }}
             >
               全选
             </button>
@@ -1272,6 +1400,7 @@ export default function App() {
             </label>
           ))}
         </div>
+      </div>
       </div>
 
       <details className="advanced-settings experiment-settings">
@@ -1315,7 +1444,7 @@ export default function App() {
             value={expTokenBudget ?? ''} placeholder="留空使用任务原预算"
             onChange={(e) => setExpTokenBudget(e.target.value === '' ? null : Number(e.target.value))}
             disabled={isLoading} />
-          <p className="metric-sub">真实多轮建议 8000；两种策略使用相同预算。免费通道按约 13 秒间隔发起请求，仍可能遇到账户限额。</p>
+          <p className="metric-sub">普通任务建议 8000，跨文档证据链建议 20000；两侧预算相同，免费通道按约 13 秒间隔请求，仍可能遇到账户限额。</p>
         </div>
       )}
 
@@ -1346,6 +1475,9 @@ export default function App() {
 
       </details>
 
+      <div className="experiment-launch-bar">
+      <div className="experiment-launch-summary"><strong>{expTasks.length} 个任务 · {parsedExpSeeds?.length ?? 0} 个 Seed · 每个重复 {expRepeatCount} 次</strong>
+        <span>两侧共 {expEpisodeCount} 次执行 · {expModel === 'fake' ? '离线模拟，不代表模型能力' : '将调用当前选定模型'}</span></div>
       <button
         id="run-exp-button"
         className="btn-primary"
@@ -1379,6 +1511,7 @@ export default function App() {
           {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
         </p>
       )}
+      </div>
 
       </details>
 
@@ -1467,10 +1600,15 @@ export default function App() {
       {/* Header */}
       <header className="app-header">
         <div className="header-container">
-          <a className="brand" href="/brand/preview.html" target="_blank" rel="noopener noreferrer"
+          <a className="brand" href="/brand/fox-preview.html" target="_blank" rel="noopener noreferrer"
             aria-label="AgentLabyrinth · 查看标志动态展示">
             <span className="brand-mark" aria-hidden="true">
-              <img src="/brand/wayfinder-motion.svg" width="36" height="36" alt="" />
+              <img src="/brand/fox-motion.svg" width="36" height="36" alt=""
+                onError={(event) => {
+                  if (event.currentTarget.src.includes('fox-motion.svg')) {
+                    event.currentTarget.src = '/brand/fox-mark.svg';
+                  }
+                }} />
             </span>
             <div>
               <div className="brand-title">AgentLabyrinth</div>
@@ -1551,6 +1689,9 @@ export default function App() {
           </div>
         )}
 
+        <ClassroomScenarios tasks={meta?.tasks ?? []} disabled={isLoading || metadataLoading || !meta}
+          hasSavedResult={Boolean(artifact || experiment || activeJobId)} onConfigure={configureClassroomScenario} />
+
         {/* TAB 1: EXPERIMENT MODE */}
         {activeTab === 'experiment' && (
           <div>
@@ -1614,7 +1755,7 @@ export default function App() {
               onRefresh={refreshExperimentDashboard} onOpen={loadExperimentById} />
             </details>
 
-            <div className={`dashboard-grid ${hasExperimentResult ? 'saved-experiment-grid' : ''}`}>
+            <div className={`dashboard-grid experiment-workspace ${hasExperimentResult ? 'saved-experiment-grid' : ''}`}>
               {!hasExperimentResult && experimentConfigPanel}
 
               {/* Right Panel: Aggregate Metrics + Comparison Table */}
@@ -1632,6 +1773,8 @@ export default function App() {
                   <div className="card-desc">
                     {activeComparisonAxis === 'context_policy'
                       ? '只改变模型可见上下文，比较成功率、工具调用、已报告 Token 与耗时；不计算纠错挽救率。'
+                      : activeComparisonAxis === 'memory_ablation'
+                      ? '左右窗口相同，只切换单任务工具记忆；比较成功率、工具调用、已报告 Token 与耗时，不计算纠错挽救率。'
                       : activeComparisonAxis === 'runtime_backend'
                       ? '比较两个 Runtime 在相同模型、任务、预算和恢复策略下的成功率、用量与耗时。'
                       : '比较恢复策略的成功率、参数错误挽救转化率与额外用量。'}
@@ -1639,7 +1782,8 @@ export default function App() {
 
                   {experiment ? (
                     <div>
-                      {activeComparisonAxis === 'context_policy' && <p className="model-note-box" aria-label="已保存上下文对照">完整历史 vs 最近 {experiment.config.recovery_agent?.context_policy?.max_tool_rounds} 轮 · 保存结果，不随草稿改变</p>}
+                      {activeComparisonAxis === 'context_policy' && <p className="model-note-box" aria-label="已保存上下文对照">完整历史 vs {contextLabel(experiment.config.recovery_agent?.context_policy)} · 保存结果，不随草稿改变</p>}
+                      {activeComparisonAxis === 'memory_ablation' && <p className="model-note-box" aria-label="已保存工具记忆对照">相同窗口：{contextLabel(experiment.config.baseline_agent?.context_policy)} vs {contextLabel(experiment.config.recovery_agent?.context_policy)} · 保存结果，不随草稿改变</p>}
                       <div className="episode-provenance" aria-label="已保存实验来源">
                         <strong>{typeof experiment.config.model === 'string'
                           ? experiment.config.model : experiment.config.model?.model || '历史模型未提供'}</strong>
@@ -1648,6 +1792,25 @@ export default function App() {
                       <p className="experiment-reading-note">{experiment.config.provider === 'fake'
                         ? '离线模拟对照 · 用于展示运行与恢复机制，不代表真实模型能力。'
                         : '真实 API 小样本对照 · 当前结果只描述本次实验，不代表稳定排名。'}</p>
+                      {activeComparisonAxis === 'context_policy' && (
+                        <div className="classroom-result-reading" aria-label="上下文实验解读">
+                          <strong>这一场实验说明什么</strong>
+                          <p>同一模型、任务和预算，仅改变上下文策略。完整历史通过 {experiment.metrics.baseline_success_count} / {experiment.metrics.total_pairs}，
+                            {armRightLabel}通过 {experiment.metrics.recovery_success_count} / {experiment.metrics.total_pairs}。</p>
+                          {experiment.config.recovery_agent?.context_policy?.memory_max_bytes !== undefined && <p>右侧同时包含窗口与工具记忆；此对照不能单独证明记忆的收益，需与相同窗口的无记忆配置比较。</p>}
+                          <p>先查看成对结果和失败 Trace，再结合已报告 Token 与耗时判断差异；窗口缩短不保证省 Token 或提高成功率。
+                            {experiment.config.provider === 'fake' ? ' Fake 结果只验证机制。' : ' 单次小样本不足以证明策略稳定优胜。'}</p>
+                        </div>
+                      )}
+                      {activeComparisonAxis === 'memory_ablation' && (
+                        <div className="classroom-result-reading" aria-label="工具记忆实验解读">
+                          <strong>这一场实验说明什么</strong>
+                          <p>同一模型、任务、预算与 {experiment.config.baseline_agent?.context_policy?.max_tool_rounds} 轮窗口，仅切换右侧工具记忆。无记忆窗口通过 {experiment.metrics.baseline_success_count} / {experiment.metrics.total_pairs}，
+                            带记忆窗口通过 {experiment.metrics.recovery_success_count} / {experiment.metrics.total_pairs}。</p>
+                          <p>左右窗口相同，仅记忆配置变化；真实输出仍有随机性，单对不是因果收益证明。字节不是 Token，记忆可能增加输入量，不保证效果。
+                            {experiment.config.provider === 'fake' ? ' Fake 结果只验证机制。' : ' 单次小样本不足以证明稳定优胜。'}</p>
+                        </div>
+                      )}
                       {experiment.config.max_total_tokens != null && (
                         <p className="experiment-reading-note" aria-label="已保存全局 Token 预算">
                           全局 Token 边界预算：{experiment.config.max_total_tokens} · 已报告累计：
@@ -1656,45 +1819,13 @@ export default function App() {
                             ? ' · 最后一轮在途执行已超额' : ''}。此值来自保存结果，非当前草稿。
                         </p>
                       )}
-                      <div className="metrics-grid">
-                        {/* Baseline Success */}
-                        <div className="metric-box">
-                          <div className="metric-label">{armLeftLabel} 成功率</div>
-                          <div
-                            className="metric-value"
-                            style={{
-                              color:
-                                experiment.metrics.baseline_success_rate > 0
-                                  ? 'var(--success-text)'
-                                  : 'var(--fail-text)',
-                            }}
-                          >
-                            {(experiment.metrics.baseline_success_rate * 100).toFixed(1)}%
-                          </div>
-                          <div className="metric-sub">
-                            {experiment.metrics.baseline_success_count} / {experiment.metrics.total_pairs} 通过
-                          </div>
-                        </div>
-
-                        {/* Recovery Success */}
-                        <div className="metric-box">
-                          <div className="metric-label">{armRightLabel} 成功率</div>
-                          <div
-                            className="metric-value"
-                            style={{
-                              color:
-                                experiment.metrics.recovery_success_rate > 0
-                                  ? 'var(--success-text)'
-                                  : 'var(--fail-text)',
-                            }}
-                          >
-                            {(experiment.metrics.recovery_success_rate * 100).toFixed(1)}%
-                          </div>
-                          <div className="metric-sub">
-                            {experiment.metrics.recovery_success_count} / {experiment.metrics.total_pairs} 通过
-                          </div>
-                        </div>
-
+                      <ExperimentCharts labels={[armLeftLabel, armRightLabel]}
+                        rates={[experiment.metrics.baseline_success_rate, experiment.metrics.recovery_success_rate]}
+                        tokens={[experiment.metrics.baseline_total_tokens, experiment.metrics.recovery_total_tokens]}
+                        durations={[experiment.metrics.baseline_avg_duration_ms, experiment.metrics.recovery_avg_duration_ms]}
+                        total={experiment.metrics.total_pairs}
+                        counts={[experiment.metrics.baseline_success_count, experiment.metrics.recovery_success_count]} />
+                      <div>
                         {/* Retry Recovery Count & Rate */}
                         {activeComparisonAxis === 'recovery_policy' && <div
                           className="metric-box"
@@ -2071,9 +2202,11 @@ export default function App() {
                               onChange={() => {
                                 setSelectedSuite('tool_lab_core');
                                 setSingleTaskQuery('');
-                                const first = meta?.tasks.find((task) => task.suite === 'tool_lab_core');
+                                const first = meta?.tasks.find((task) => task.id === meta.default_task)
+                                  ?? meta?.tasks.find((task) => task.suite === 'tool_lab_core');
                                 if (first) setSelectedSingleTask(first.id);
-                                setMaxSteps(6);
+                                setMaxSteps(first?.max_steps ?? 6);
+                                setSingleTokenBudget(8000);
                                 setSingleToolTransport('local');
                                 setSingleFaultProfile('none');
                               }} />
@@ -2091,6 +2224,7 @@ export default function App() {
                                 const first = meta?.tasks.find((task) => task.suite === 'bfcl_adapted');
                                 if (first) setSelectedSingleTask(first.id);
                                 setMaxSteps(1);
+                                setSingleTokenBudget(8000);
                                 setSingleToolTransport('local');
                                 setSingleFaultProfile('none');
                               }} />
@@ -2108,6 +2242,7 @@ export default function App() {
                                 const first = meta?.tasks.find((task) => task.suite === 'bfcl_java_adapted');
                                 if (first) setSelectedSingleTask(first.id);
                                 setMaxSteps(1);
+                                setSingleTokenBudget(8000);
                                 setSingleToolTransport('local');
                                 setSingleFaultProfile('none');
                               }} />
@@ -2138,6 +2273,8 @@ export default function App() {
                             className={`task-option ${selectedSingleTask === task.id ? 'selected' : ''}`}
                             aria-pressed={selectedSingleTask === task.id}
                             onClick={() => {
+                              if (maxSteps === defaultSingleMaxSteps) setMaxSteps(task.max_steps);
+                              if (singleTokenBudget === defaultSingleTokenBudget) setSingleTokenBudget(task.category === 'evidence_chain' ? task.token_budget : 8000);
                               setSelectedSingleTask(task.id);
                               setSingleToolTransport('local');
                               setSingleFaultProfile('none');
@@ -2190,7 +2327,7 @@ export default function App() {
                 <div className="form-group">
                   <details className="model-note-disclosure">
                     <summary>模型目录说明</summary>
-                    <div className="model-note-box">
+                    <div className="model-note-box" tabIndex={0} aria-label="模型目录说明详情">
                       <strong>说明：</strong>{' '}
                       {currentSingleModelMeta
                         ? currentSingleModelMeta.notes
@@ -2216,7 +2353,41 @@ export default function App() {
                   </div>
                   <p className="metric-sub">两种调度方式使用相同工具与评测规则。</p>
                 </fieldset>
-                <details className="advanced-settings">
+
+
+                  <div className="single-launch-bar">
+                    <div className="single-launch-summary" aria-live="polite">
+                      <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
+                      <span>
+                        {currentSingleModelMeta?.name || selectedModel || '请选择模型'}
+                        {' · '}{singleRuntimeBackend === 'langgraph' ? 'LangGraph' : 'Reference'}
+                        {' · '}
+                        {singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp
+                          ? 'MCP HTTP'
+                          : selectedSuite === 'tool_lab_core' ? '本地工具' : '本地函数调用提议评测'}
+                      </span>
+                      <small>{!meta || !selectedModel ? '目录就绪后可开始运行'
+                        : selectedModel === 'fake' ? 'Fake 离线模拟' : '将发起真实模型请求'}</small>
+                      <span className="single-parameter-summary">{singleContextChoice === 'full' ? '完整历史' : `近期 ${singleContextWindow} 轮${singleContextChoice === 'memory' ? ` · 记忆 ${singleMemoryBytes} 字节` : ''}`} · 最多 {maxSteps} 步 · {executionSeconds} 秒</span>
+                    </div>
+                    <div className="single-launch-action">
+                      <button id="run-button" className="btn-primary"
+                        onClick={handleRunEpisode} disabled={!isSingleRunReady}
+                        aria-describedby={singleRunHint ? 'single-run-hint' : undefined}
+                        title={!meta ? '元数据尚未就绪' : !selectedSingleTaskMeta ? '请选择一个可见任务后再运行' : undefined}>
+                        {isLoading ? <><div className="spinner" /><span>{loadingActivity === 'history' ? '正在读取历史记录…' : '正在运行 Episode…'}</span></>
+                          : <span>开始运行 Episode</span>}
+                      </button>
+                      {singleRunHint && !isLoading && <p id="single-run-hint" className="inline-note" role="status">{singleRunHint}</p>}
+                      {isLoading && (
+                        <p id="single-run-hint" className="loading-note" role="status" aria-live="polite">
+                          {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                    </section>
+                <details className="advanced-settings single-advanced-settings">
                   <summary>
                     <span>更多设置</span>
                     <span>
@@ -2225,6 +2396,9 @@ export default function App() {
                         : '保持默认值'}
                     </span>
                   </summary>
+                  <div className="single-advanced-grid">
+                    <section className="settings-group" aria-labelledby="single-tools-heading">
+                      <h3 id="single-tools-heading">工具与容错</h3>
                   {selectedSingleTaskMeta?.supports_mcp && (
                     <div className="form-group">
                       <label htmlFor="single-tool-transport" className="form-label">文档工具传输</label>
@@ -2246,6 +2420,7 @@ export default function App() {
                       <option value="handwritten_recovery">开启：INVALID_ARGUMENTS 最多纠错一次</option>
                     </select>
                   </div>
+
                   {selectedModel === 'fake' && (
                     <>
                     <div className="form-group">
@@ -2282,6 +2457,14 @@ export default function App() {
                     )}
                     </>
                   )}
+                    </section>
+                    <section className="settings-group" aria-labelledby="single-context-heading">
+                      <h3 id="single-context-heading">上下文与记忆</h3>
+                  <ContextSettings prefix="single-context" choice={singleContextChoice} rounds={singleContextWindow} bytes={singleMemoryBytes} disabled={isLoading}
+                    onChoice={setSingleContextChoice} onRounds={setSingleContextWindow} onBytes={setSingleMemoryBytes} />
+                    </section>
+                    <section className="settings-group" aria-labelledby="single-budget-heading">
+                      <h3 id="single-budget-heading">运行预算</h3>
                   <div className="form-group">
                     <label htmlFor="steps-input" className="form-label">步数上限 (Max Steps)</label>
                     <input id="steps-input" type="number" className="form-input" min={1} max={20}
@@ -2296,7 +2479,7 @@ export default function App() {
                         value={singleTokenBudget ?? ''} placeholder="留空使用任务原预算"
                         onChange={(e) => setSingleTokenBudget(e.target.value === '' ? null : Number(e.target.value))}
                         disabled={isLoading} />
-                      <p className="metric-sub">真实多轮建议 8000；两种策略使用相同预算。免费通道仍可能遇到账户限额。</p>
+                      <p className="metric-sub">当前任务建议 {defaultSingleTokenBudget}；累计输入与输出计入预算，免费通道仍可能遇到账户限额。</p>
                     </div>
                   )}
                   <div className="form-group">
@@ -2306,39 +2489,9 @@ export default function App() {
                       onChange={(event) => setExecutionSeconds(Math.max(1, Math.min(3600, Math.floor(Number(event.target.value)) || 1)))} />
                     <p className="metric-sub">恢复继承已用时间；已开始的工具先保存结果再停止。</p>
                   </div>
-                </details>
-
-                  <div className="single-launch-bar">
-                    <div className="single-launch-summary" aria-live="polite">
-                      <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
-                      <span>
-                        {currentSingleModelMeta?.name || selectedModel || '请选择模型'}
-                        {' · '}{singleRuntimeBackend === 'langgraph' ? 'LangGraph' : 'Reference'}
-                        {' · '}
-                        {singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp
-                          ? 'MCP HTTP'
-                          : selectedSuite === 'tool_lab_core' ? '本地工具' : '本地函数调用提议评测'}
-                      </span>
-                      <small>{!meta || !selectedModel ? '目录就绪后可开始运行'
-                        : selectedModel === 'fake' ? 'Fake 离线模拟' : '将发起真实模型请求'}</small>
-                    </div>
-                    <div className="single-launch-action">
-                      <button id="run-button" className="btn-primary"
-                        onClick={handleRunEpisode} disabled={!isSingleRunReady}
-                        aria-describedby={singleRunHint ? 'single-run-hint' : undefined}
-                        title={!meta ? '元数据尚未就绪' : !selectedSingleTaskMeta ? '请选择一个可见任务后再运行' : undefined}>
-                        {isLoading ? <><div className="spinner" /><span>{loadingActivity === 'history' ? '正在读取历史记录…' : '正在运行 Episode…'}</span></>
-                          : <span>开始运行 Episode</span>}
-                      </button>
-                      {singleRunHint && !isLoading && <p id="single-run-hint" className="inline-note" role="status">{singleRunHint}</p>}
-                      {isLoading && (
-                        <p id="single-run-hint" className="loading-note" role="status" aria-live="polite">
-                          {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
-                        </p>
-                      )}
-                    </div>
-                  </div>
                     </section>
+                  </div>
+                </details>
                   </div>
                 </div>
               </details>

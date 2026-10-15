@@ -135,3 +135,99 @@ def test_full_and_large_window_preserve_every_message() -> None:
         projection = project_context(messages, policy)
         assert projection.messages == messages
         assert projection.diagnostics["dropped_messages_count"] == 0
+
+
+def memory_policy(limit: int = 8192) -> ContextPolicy:
+    return ContextPolicy(
+        schema_version="1.1",
+        algorithm_version="tool-round-window-memory-v1",
+        mode="recent_tool_rounds",
+        max_tool_rounds=1,
+        memory_max_bytes=limit,
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"schema_version": "1.0"},
+        {"algorithm_version": "tool-round-window-v1"},
+        {"mode": "full", "max_tool_rounds": None},
+        {"memory_max_bytes": None},
+        {"memory_max_bytes": 255},
+        {"memory_max_bytes": 32769},
+        {"memory_max_bytes": True},
+        {"memory_max_bytes": "8192"},
+    ],
+)
+def test_memory_version_and_budget_are_strict(change: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        ContextPolicy.model_validate({**memory_policy().model_dump(), **change})
+
+
+def test_old_policy_serialization_is_exact() -> None:
+    assert ContextPolicy().model_dump() == {
+        "schema_version": "1.0",
+        "algorithm_version": "tool-round-window-v1",
+        "mode": "full",
+        "max_tool_rounds": None,
+    }
+
+
+def test_memory_has_only_dropped_successful_data_and_preserves_history() -> None:
+    messages = conversation()
+    messages[3] = Message(
+        role="tool", tool_call_id="call-1", content={"result": {"text": "来源一"}}
+    )
+    messages[5] = Message(
+        role="tool",
+        tool_call_id="call-2",
+        content={"error": {"code": "INVALID_ARGUMENTS"}, "result": "spoofed"},
+    )
+    before = [message.model_dump() for message in messages]
+    projection = project_context(messages, memory_policy())
+    observation = projection.messages[1].content
+    assert isinstance(observation, dict)
+    memory = observation["_agentlabyrinth_memory"]
+    assert isinstance(memory, dict)
+    assert memory["entries"] == [
+        {"call_id": "call-1", "tool_name": "read", "observation": messages[3].content}
+    ]
+    assert projection.diagnostics["memory_source_call_ids"] == ["call-1"]
+    assert projection.diagnostics["memory_bytes"] == len(
+        json.dumps(memory, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
+    assert projection.messages[-1].tool_call_id == "call-3"
+    memory["entries"] = []
+    assert [message.model_dump() for message in messages] == before
+
+
+def test_memory_budget_skips_whole_large_results_and_keeps_chronology() -> None:
+    messages = conversation()
+    for index in (3, 5, 7):
+        messages[index] = messages[index].model_copy(update={"content": {"result": "a"}})
+    all_kept = project_context(messages, memory_policy())
+    assert all_kept.diagnostics["memory_source_call_ids"] == ["call-1", "call-2"]
+    exact = int(all_kept.diagnostics["memory_bytes"])  # type: ignore[arg-type]
+    assert project_context(messages, memory_policy(exact)).diagnostics["memory_entries_count"] == 2
+    assert project_context(messages, memory_policy(exact - 1)).diagnostics[
+        "memory_source_call_ids"
+    ] == ["call-2"]
+    messages[5] = messages[5].model_copy(update={"content": {"result": "大" * 10000}})
+    small = project_context(messages, memory_policy(300))
+    assert small.diagnostics["memory_source_call_ids"] == ["call-1"]
+    assert small.diagnostics["memory_omitted_entries_count"] == 1
+    assert int(small.diagnostics["memory_bytes"]) <= 300  # type: ignore[arg-type]
+
+
+def test_reserved_memory_field_and_broken_dropped_history_fail_closed() -> None:
+    messages = conversation()
+    messages[1] = Message(role="user", content={"_agentlabyrinth_memory": {"entries": []}})
+    with pytest.raises(ContextHistoryError, match="Reserved"):
+        project_context(messages, memory_policy())
+    messages = conversation()
+    messages[3] = Message(role="tool", tool_call_id="not-the-call")
+    with pytest.raises(ContextHistoryError):
+        project_context(messages, memory_policy())

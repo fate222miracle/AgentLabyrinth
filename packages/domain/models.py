@@ -71,16 +71,35 @@ class ModelConfig(Contract):
 class ContextPolicy(Contract):
     """Select a versioned model-input projection, never a storage retention policy."""
 
-    algorithm_version: Literal["tool-round-window-v1"] = "tool-round-window-v1"
+    schema_version: Literal["1.0", "1.1"] = "1.0"  # type: ignore[assignment]
+    algorithm_version: Literal["tool-round-window-v1", "tool-round-window-memory-v1"] = (
+        "tool-round-window-v1"
+    )
     mode: Literal["full", "recent_tool_rounds"] = "full"
     max_tool_rounds: Annotated[int, Field(ge=1, le=100)] | None = None
+    memory_max_bytes: Annotated[int, Field(ge=256, le=32768)] | None = None
 
     @model_validator(mode="after")
     def validate_window(self) -> Self:
         """Reject missing windows and meaningless parameters on full history."""
         if (self.mode == "recent_tool_rounds") != (self.max_tool_rounds is not None):
             raise ValueError("Only recent_tool_rounds requires max_tool_rounds")
+        memory = self.memory_max_bytes is not None
+        if memory != (self.schema_version == "1.1") or memory != (
+            self.algorithm_version == "tool-round-window-memory-v1"
+        ):
+            raise ValueError("Tool memory requires ContextPolicy schema 1.1 and memory algorithm")
+        if memory and self.mode != "recent_tool_rounds":
+            raise ValueError("Tool memory requires recent_tool_rounds")
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize_policy(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        """Keep old policy bytes and configuration hashes unchanged."""
+        result: dict[str, object] = handler(self)
+        if self.memory_max_bytes is None:
+            result.pop("memory_max_bytes", None)
+        return result
 
 
 class AgentSpec(Contract):

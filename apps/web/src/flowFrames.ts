@@ -115,3 +115,87 @@ export function flowPath(frames: FlowFrame[], eventIndex: number): FlowPathNode[
   }
   return nodes;
 }
+
+export interface EvidenceDocument {
+  id: string;
+  title: string;
+  content: string | null;
+  evidenceId: string | null;
+  status: 'unread' | 'found' | 'reading' | 'read' | 'failed';
+  read: boolean;
+  readCount: number;
+  cited: boolean;
+  readStep: number | null;
+}
+
+/** Project source documents and actual tool outcomes at the current Trace cursor. */
+export function documentEvidence(events: TraceStepEvent[], cutoff: number) {
+  const record = (value: unknown): Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const docs = new Map<string, EvidenceDocument>();
+  const calls = new Map<string, { name: string; args: Record<string, unknown> }>();
+  let activeId: string | null = null;
+  let readCursor = 'none';
+  let citations: string[] = [];
+  const add = (value: unknown) => {
+    const raw = record(value);
+    if (typeof raw.document_id !== 'string' || !raw.document_id) return null;
+    const id = raw.document_id;
+    const doc = docs.get(id) ?? { id, title: id, content: null, evidenceId: null,
+      status: 'unread', read: false, readCount: 0, cited: false, readStep: null };
+    if (typeof raw.title === 'string') doc.title = raw.title;
+    if (typeof raw.content === 'string') doc.content = raw.content;
+    if (typeof raw.evidence_id === 'string') doc.evidenceId = raw.evidence_id;
+    docs.set(id, doc);
+    return doc;
+  };
+  for (const [index, event] of events.entries()) {
+    if (index > cutoff) break;
+    const initial = record(event.payload.initial_state);
+    if (Array.isArray(initial.documents)) initial.documents.forEach(add);
+    const id = String(event.payload.call_id ?? '');
+    if (event.event_type === 'TOOL_CALL_PROPOSED') {
+      calls.set(id, { name: String(event.payload.name ?? ''), args: record(event.payload.arguments) });
+    }
+    const call = calls.get(id);
+    if (!call) continue;
+    const result = record(record(event.payload.observation).result ?? event.payload.observation);
+    const target = typeof call.args.document_id === 'string' ? call.args.document_id : null;
+    if (call.name === 'read_document' && target && event.event_type === 'TOOL_STARTED') {
+      const doc = add({ document_id: target })!;
+      doc.status = 'reading';
+      activeId = target;
+      readCursor = `${id}:${index}`;
+    }
+    if (call.name === 'read_document' && target && ['TOOL_FAILED', 'TOOL_CALL_VALIDATED'].includes(event.event_type)
+      && (event.event_type === 'TOOL_FAILED' || event.payload.error_code
+        || event.payload.arguments_valid === false || event.payload.permitted === false)) {
+      const doc = add({ document_id: target })!;
+      doc.status = 'failed';
+    }
+    if (event.event_type !== 'TOOL_SUCCEEDED') continue;
+    if (call.name === 'search_documents' && Array.isArray(result.documents)) {
+      for (const item of result.documents) {
+        const doc = add(item);
+        if (doc && doc.status === 'unread') doc.status = 'found';
+      }
+    }
+    if (call.name === 'read_document' && target) {
+      const raw = record(result.document);
+      if (raw.document_id === target) {
+        const doc = add(raw)!;
+        doc.status = 'read'; doc.read = true; doc.readStep = event.step_index;
+        doc.readCount += 1;
+      } else {
+        // A successful HTTP/tool event with document:null did not acquire a document.
+        const doc = add({ document_id: target })!;
+        doc.status = 'failed';
+      }
+    }
+    if (call.name === 'submit_answer' && Array.isArray(call.args.evidence)) {
+      citations = call.args.evidence.filter((value): value is string => typeof value === 'string');
+    }
+  }
+  for (const doc of docs.values()) doc.cited = doc.evidenceId !== null && citations.includes(doc.evidenceId);
+  return { documents: [...docs.values()], activeId, readCursor };
+}

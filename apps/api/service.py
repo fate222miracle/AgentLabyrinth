@@ -352,9 +352,47 @@ class EpisodeService:
         """Load all TaskSpecs from tasks directory in sorted order."""
         tasks: list[TaskSpec] = []
         if self.tasks_dir.is_dir():
-            for p in sorted(self.tasks_dir.glob("*.json")):
+            for p in sorted(self.tasks_dir.rglob("*.json")):
                 tasks.append(TaskSpec.model_validate_json(p.read_text(encoding="utf-8")))
+        if len({task.id for task in tasks}) != len(tasks) or len(
+            {task.name for task in tasks}
+        ) != len(tasks):
+            raise ValueError("Task catalog contains duplicate identities")
         return tasks
+
+    @staticmethod
+    def _agent_with_task_capacity(agent: AgentSpec, tasks: list[TaskSpec]) -> AgentSpec:
+        """Pin sufficient call capacity only for newly created evidence-chain runs."""
+        steps = max((t.max_steps for t in tasks if t.category == "evidence_chain"), default=0)
+        if not steps:
+            return agent
+        tokens = max(t.token_budget for t in tasks if t.category == "evidence_chain")
+        return agent.model_copy(
+            update={
+                "budget": agent.budget.model_copy(
+                    update={
+                        "max_steps": steps,
+                        "max_model_calls": steps,
+                        "max_tool_calls": steps,
+                        "max_prompt_tokens": tokens,
+                        "max_completion_tokens": tokens,
+                    }
+                )
+            }
+        )
+
+    def _task_tool_version(self, tasks: list[TaskSpec]) -> str:
+        """Select the explicit task-scoped profile only for the new evidence protocol."""
+        if any(
+            t.evaluator_config.get("document_reference_protocol") == "direct-reference-v1"
+            for t in tasks
+        ):
+            return "v1.3.0"
+        return (
+            "v1.2.0"
+            if any(t.evaluator_config.get("evidence_order") == "unordered-v1" for t in tasks)
+            else self.tool_set_version
+        )
 
     def _load_configured_models(self) -> tuple[list[ModelOption], str]:
         """Load models from catalog JSON with fallback and dynamic upstream discovery."""
@@ -500,12 +538,6 @@ class EpisodeService:
         else:
             raise ValueError(f"Unsupported provider: {req.provider}")
 
-        # Override budget steps if specified
-        if req.max_steps is not None:
-            agent = agent.model_copy(
-                update={"budget": agent.budget.model_copy(update={"max_steps": req.max_steps})}
-            )
-
         # 2. Load Task
         agent = self._agent_with_time_budget(agent, req.max_execution_time_ms)
         bfcl_case = None
@@ -515,6 +547,11 @@ class EpisodeService:
         else:
             loaded_task = self._get_task(req.task_id)
         task = self._with_token_budget(loaded_task, req.token_budget)
+        agent = self._agent_with_task_capacity(agent, [task])
+        if req.max_steps is not None:
+            agent = agent.model_copy(
+                update={"budget": agent.budget.model_copy(update={"max_steps": req.max_steps})}
+            )
         if req.fault_profile != "none":
             if req.provider != "fake" or req.suite != "tool_lab_core":
                 raise ValueError("Fault injection supports Fake ToolLab only")
@@ -554,7 +591,7 @@ class EpisodeService:
             environment_version = "bfcl-adapted-single-call-v1"
             agent = agent.model_copy(update={"tool_set_version": "bfcl-v4-pinned"})
         else:
-            agent = agent.model_copy(update={"tool_set_version": self.tool_set_version})
+            agent = agent.model_copy(update={"tool_set_version": self._task_tool_version([task])})
             if req.tool_transport == "mcp":
                 environment = MCPToolLabEnvironment(
                     MCP_DISCONNECTED_URL if req.fault_profile == "mcp_disconnect" else None,
@@ -866,13 +903,15 @@ class EpisodeService:
             raise ValueError(f"Unsupported provider: {req.provider}")
 
         # 3. Run paired experiment
+        baseline_agent = self._agent_with_task_capacity(baseline_agent, tasks)
+        recovery_agent = self._agent_with_task_capacity(recovery_agent, tasks)
         baseline_agent = self._agent_with_token_budget(baseline_agent, req.token_budget)
         recovery_agent = self._agent_with_token_budget(recovery_agent, req.token_budget)
         baseline_agent = baseline_agent.model_copy(
-            update={"tool_set_version": self.tool_set_version}
+            update={"tool_set_version": self._task_tool_version(tasks)}
         )
         recovery_agent = recovery_agent.model_copy(
-            update={"tool_set_version": self.tool_set_version}
+            update={"tool_set_version": self._task_tool_version(tasks)}
         )
         baseline_agent = self._agent_with_time_budget(baseline_agent, req.max_execution_time_ms)
         recovery_agent = self._agent_with_time_budget(recovery_agent, req.max_execution_time_ms)
@@ -905,29 +944,48 @@ class EpisodeService:
                 }
             )
         if req.context_policy is not None:
-            baseline_agent = baseline_agent.model_copy(
-                update={
-                    "schema_version": "1.2",
-                    "context_policy": ContextPolicy(mode="full")
-                    if req.comparison_axis == "context_policy"
-                    else req.context_policy,
-                }
-            )
-            if req.comparison_axis == "context_policy":
+            if req.comparison_axis == "memory_ablation":
                 baseline_agent = baseline_agent.model_copy(
-                    update={"runtime_strategy": req.runtime_strategy}
+                    update={
+                        "schema_version": "1.2",
+                        "runtime_strategy": req.runtime_strategy,
+                        "context_policy": ContextPolicy(
+                            mode="recent_tool_rounds",
+                            max_tool_rounds=req.context_policy.max_tool_rounds,
+                        ),
+                    }
                 )
                 recovery_agent = baseline_agent.model_copy(
                     update={
                         "id": uuid4(),
-                        "name": f"{baseline_agent.name}-recent-context",
+                        "name": f"{baseline_agent.name}-memory",
                         "context_policy": req.context_policy,
                     }
                 )
             else:
-                recovery_agent = recovery_agent.model_copy(
-                    update={"schema_version": "1.2", "context_policy": req.context_policy}
+                baseline_agent = baseline_agent.model_copy(
+                    update={
+                        "schema_version": "1.2",
+                        "context_policy": ContextPolicy(mode="full")
+                        if req.comparison_axis == "context_policy"
+                        else req.context_policy,
+                    }
                 )
+                if req.comparison_axis == "context_policy":
+                    baseline_agent = baseline_agent.model_copy(
+                        update={"runtime_strategy": req.runtime_strategy}
+                    )
+                    recovery_agent = baseline_agent.model_copy(
+                        update={
+                            "id": uuid4(),
+                            "name": f"{baseline_agent.name}-recent-context",
+                            "context_policy": req.context_policy,
+                        }
+                    )
+                else:
+                    recovery_agent = recovery_agent.model_copy(
+                        update={"schema_version": "1.2", "context_policy": req.context_policy}
+                    )
         config_metadata = {
             "provider": req.provider,
             "requested_model": req.model,

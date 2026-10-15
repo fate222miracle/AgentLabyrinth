@@ -20,6 +20,7 @@ from packages.application.experiment import (
     run_experiment,
 )
 from packages.application.regression import fixed_config
+from packages.domain.models import ContextPolicy
 from packages.providers.fake import FakeModelProvider
 from scripts.run_regression import preflight
 
@@ -116,6 +117,52 @@ def test_request_revisions_and_legacy_defaults() -> None:
         ).context_policy
         is None
     )
+
+
+def test_memory_revision_does_not_relax_legacy_axes() -> None:
+    """The new request revision stays exclusive to the memory ablation axis."""
+    legacy = CreateExperimentRequest(provider="fake", model="fake-model")
+    assert legacy.schema_version == "1.5" and legacy.comparison_axis == "recovery_policy"
+    with pytest.raises(ValidationError, match="1.6"):
+        CreateExperimentRequest.model_validate(
+            {"provider": "fake", "model": "fake-model", "schema_version": "1.6"}
+        )
+    with pytest.raises(ValidationError, match="1.6"):
+        CreateExperimentRequest.model_validate(
+            {
+                "provider": "fake",
+                "model": "fake-model",
+                "schema_version": "1.6",
+                "comparison_axis": "runtime_backend",
+            }
+        )
+
+
+def test_memory_api_saves_subversion_and_rejects_invalid_revisions(tmp_path: Path) -> None:
+    """New memory uses real request/plan/artifact boundaries, without reading a key."""
+    policy = ContextPolicy(
+        schema_version="1.1",
+        algorithm_version="tool-round-window-memory-v1",
+        mode="recent_tool_rounds",
+        max_tool_rounds=1,
+        memory_max_bytes=8192,
+    )
+    service = EpisodeService(artifacts_dir=tmp_path)
+    result = asyncio.run(service.execute_experiment(request(context_policy=policy)))
+    assert result.metrics.baseline_success_count == result.metrics.recovery_success_count == 2
+    assert result.config["recovery_agent"]["context_policy"] == policy.model_dump(mode="json")
+    assert fixed_config(result)["recovery_agent"]["context_policy"]["memory_max_bytes"] == 8192
+    preflight(result, request(context_policy=policy), service)
+    with pytest.raises(ValueError, match="context policy"):
+        preflight(result, request(), service)
+    with pytest.raises(ValidationError):
+        CreateEpisodeRequest.model_validate(
+            {
+                "provider": "fake",
+                "model": "fake-model",
+                "context_policy": {**policy.model_dump(), "schema_version": "1.0"},
+            }
+        )
 
 
 def test_episode_api_accepts_context_and_rejects_legacy_revision(tmp_path: Path) -> None:

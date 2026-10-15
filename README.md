@@ -1,8 +1,18 @@
 # AgentLabyrinth
 
+2026-10-15 同窗口工具记忆对照已接入正式网页/API：对照实验选择“工具记忆”，两侧共享窗口N，仅右侧增加M字节记忆。支持冻结/恢复、失败显式重跑、保存结果与CSV；旧full上下文轴和单次默认full保持。Codex复核并补固定变量及历史来源校验，[使用与源码交接](docs/learning/V0.3-memory-ablation-20261015.md)，最新验证见current-state。Fake只验证机制，未签收整版V0.3，不提交GitHub。
+
+2026-10-14 完成一对真实同窗口工具记忆探索：MiniMax M2.7退货场景两侧均通过，工具调用8→5、重复阅读3→0、报告Token15766→10317。仅单个探索样本，不是成功率或稳定收益结论。资料侧栏新增当前前缀的实际阅读/重复次数；显式真实验证命令 `uv --cache-dir .uv-cache run --locked python -m scripts.episodic_memory_ablation --model coding-minimax-m2.7-free`，默认不带--model仍为Fake。[复现与工作交接](docs/tasks/V0.3-memory-real-pair-20261014.md)。不提交GitHub。
+
+2026-10-14 单次运行配置改为右侧紧凑模型/Runtime/启动操作台，高级参数在下方独立三组排列，避免展开设置撑高任务目录旁空白。条件数字并排、长说明按需展开，原配置/历史保持；[参考与工作交接](docs/tasks/compact-run-settings-20261014.md)，UI规范1.8。完整Edge46项及最终5项复查通过，本地未提交。
+
+2026-10-14 按[ADR-030](docs/adr/ADR-030-bounded-episodic-tool-memory.md)接续V0.3单任务工具记忆：网页更多设置可选择近期窗口加有来源的工具记忆，大小受限、超大结果整条跳过，完整Trace/Checkpoint保留。固定同窗口Fake消融命令为 `uv --cache-dir .uv-cache run --locked python -m scripts.episodic_memory_ablation`；Fake不是实际模型能力结论。配置、源码阅读与边界见[学习交接](docs/learning/V0.3-episodic-memory-20261014.md)，最新测试状态见current-state。本地开发，不提交GitHub。
+
 品牌图标采用 D / Wayfinder 初版：导航短动画加载后保持完整标志，点击品牌可打开独立动态展示；浏览器favicon为静态图标，尊重减少动效。前端启动后访问 `/brand/preview.html`，SVG/透明PNG与实际验证见[设计交接](docs/design/wayfinder-v1/README.md)。
 
 面向 AI Agent 的可复现实验平台。唯一权威需求：`docs/product/requirements.md` **V0.6**。
+
+2026-10-12 新增三个跨文档证据场景：退货审批、配送争议、退款核验，分别关联3/4/5份文件。正常网页ToolLab内搜索场景名称即可运行，复用实时过程、最终证据、保存结果、上下文对照及只读MCP。独立自建仿真，不是外部真实数据集；原12题和BFCL保持。[场景说明](benchmarks/tool_lab_core/tasks/long_chain/README.md)、[验证与源码交接](docs/learning/V0.3-linked-evidence-20261012.md)。后续提交须负责人明确授权。
 
 2026-10-04 前端可用性复核：历史表单支持标签/Enter，导航可识别当前模式并跳至工作区；单次先配置后运行，结果突出来源与核心指标，详情按需展开并可直达调用过程；对照种子/预算集中设置。实际检查、源码顺序与复现见 [页面优化交接](docs/learning/frontend-usability-20261004.md)，不改变API或评分。
 
@@ -104,6 +114,14 @@ uv run python -m packages.environments.tool_lab.mcp
 ```
 
 服务仅监听 `127.0.0.1:8765/mcp`，使用官方 MCP Streamable HTTP；不接收任意任务路径。服务停止后远程工具会失败并留下 Trace，本地 ToolLab 仍可运行。MCP Episode 可在已保存安全点恢复；未完成的远程只读请求可能重发。
+
+品牌展示：前端启动后点击左上狐狸Logo，或打开 `http://127.0.0.1:5173/brand/fox-preview.html`，可重播短动画和阅读设计理念。导航首次播放后保持静态，减少动效设置即时生效；图标来源及验证见[狐狸品牌规范](docs/design/fox-v1/README.md)。
+
+课堂演示：网页顶部「课堂演示场景」选择退货、配送或退款，点「实时演示」或「上下文对照」填好草稿，再核对当前模型并点击运行。Fake用于离线机制演示，真实模型使用本机后端Key；对照仅同任务各运行一次，模型不会被预设偷偷切换。结果支持答案/证据、成对Trace和JSON/CSV；CSV来源列来自保存配置。流程、真实小样本和边界见[成品工作交接](docs/learning/V0.3-classroom-product-20261012.md)。
+
+当前优先实时演示：关联资料在首个环境快照到达后显示在画布旁，Agent读取时自动切换，成功读取和实际提交引用分别标记。环境目录包含干扰资料；网页点击只预览，真正工具调用仍由Agent自主发起。断线保留未确认状态，历史只按游标读取。见[资料侧栏交接](docs/tasks/realtime-evidence-20261012.md)。
+
+对照工作区采用全宽双列配置；保存结果展示两侧通过比例环、Token与耗时条形图。展开「实验历史与趋势」并选择同配置组，可以切换成功率/Token/耗时折线，点击点只回读保存实验。单次或没有样本不补造趋势，未知费用仍显示未知。[看板设计与验收交接](docs/tasks/experiment-dashboard-20261013.md)。
 
 观看 MCP 网络演示：网页切到「单次运行」→ ToolLab 文档任务 `order-status-007` →「更多设置」选「MCP HTTP」→ 选择 Fake 模型并运行。结果区默认的「流程动画」先展示 Client、localhost HTTP、独立 Server；播放到搜索/读取文档步骤时显示远程调用和返回。本地提交答案不会标成 MCP。此视图依据 Trace 展示工具边界，未记录协议握手或 `tools/list` 报文。
 

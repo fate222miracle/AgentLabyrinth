@@ -1,4 +1,5 @@
 import type { EpisodeArtifact } from './apiContracts';
+import { contextLabel } from './ContextSettings';
 
 interface Props { artifact: EpisodeArtifact; explanation: string }
 
@@ -24,8 +25,7 @@ export function EpisodeSummary({ artifact, explanation }: Props) {
         <span>{agent.runtime_backend ?? 'handwritten'} Runtime</span>
         <span>{agent.runtime_strategy === 'handwritten_recovery' ? '一次参数纠错' : '无参数纠错'}</span>
         <span>工具传输：{config.environment_version === 'tool-lab-mcp-v1' ? 'MCP HTTP' : '本地'}</span>
-        {agent.context_policy && <span>上下文：{agent.context_policy.mode === 'full'
-          ? '完整历史' : `最近 ${agent.context_policy.max_tool_rounds} 轮工具交互`}</span>}
+        {agent.context_policy && <span>上下文：{contextLabel(agent.context_policy)}</span>}
       </div>
       <div className="metrics-grid episode-metrics">
         <div className="metric-box">

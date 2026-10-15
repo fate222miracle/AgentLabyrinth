@@ -16,11 +16,14 @@ const runtimeFields = {
   runtime_strategy: z.optional(z.enum(['handwritten', 'handwritten_recovery'])),
 };
 const contextPolicy = z.looseObject({
-  schema_version: z.literal('1.0'), algorithm_version: z.literal('tool-round-window-v1'),
+  schema_version: z.enum(['1.0', '1.1']), algorithm_version: z.enum(['tool-round-window-v1', 'tool-round-window-memory-v1']),
   mode: z.enum(['full', 'recent_tool_rounds']),
   max_tool_rounds: z.nullable(z.int().check(z.minimum(1), z.maximum(100))),
+  memory_max_bytes: z.optional(z.int().check(z.minimum(256), z.maximum(32768))),
 }).check(z.refine((value) => (value.mode === 'recent_tool_rounds') === (value.max_tool_rounds !== null),
-  'context window mismatch'));
+  'context window mismatch'), z.refine((value) => value.memory_max_bytes !== undefined
+    ? value.schema_version === '1.1' && value.algorithm_version === 'tool-round-window-memory-v1' && value.mode === 'recent_tool_rounds'
+    : value.schema_version === '1.0' && value.algorithm_version === 'tool-round-window-v1', 'memory revision mismatch'));
 const usage = z.looseObject({ prompt_tokens: count, completion_tokens: count, simulated: z.boolean() });
 const cost = z.looseObject({ amount: decimal, currency: z.literal('USD'),
   price_table_version: z.string(), is_known: z.boolean() });
@@ -125,7 +128,7 @@ const metricsSchema = z.looseObject({
   recovery_total_reference_cost: armMetricFields.total_reference_cost,
 });
 const experimentConfig = z.looseObject({
-  comparison_axis: z.optional(z.enum(['recovery_policy', 'runtime_backend', 'context_policy'])),
+  comparison_axis: z.optional(z.enum(['recovery_policy', 'runtime_backend', 'context_policy', 'memory_ablation'])),
   model: z.optional(z.union([z.string(), z.looseObject({ model: z.string() })])),
   provider: z.optional(z.string()), scenario: z.optional(z.nullable(z.string())),
   seeds: z.optional(z.array(z.int())), seed: z.optional(z.int()),
@@ -135,15 +138,35 @@ const experimentConfig = z.looseObject({
   baseline_agent: z.optional(z.looseObject({ ...runtimeFields, context_policy: z.nullish(contextPolicy) })), recovery_agent: z.optional(z.looseObject({ ...runtimeFields, context_policy: z.nullish(contextPolicy) })),
 });
 export const experimentArtifactSchema = z.looseObject({
-  schema_version: z.enum(['1.0', '1.1', '1.2', '1.3', '1.4']), experiment_id: uuid, created_at: utc,
+  schema_version: z.enum(['1.0', '1.1', '1.2', '1.3', '1.4', '1.5']), experiment_id: uuid, created_at: utc,
   config: experimentConfig, config_hash: hash, episode_ids: z.array(uuid),
   pairs: z.array(pairSchema), metrics: metricsSchema,
-}).check(z.refine((value) => (value.config.max_total_tokens == null || ['1.3', '1.4'].includes(value.schema_version))
+}).check(z.refine((value) => (value.config.max_total_tokens == null || ['1.3', '1.4', '1.5'].includes(value.schema_version))
+  && (value.schema_version !== '1.5' || value.config.comparison_axis === 'memory_ablation')
   && (value.config.comparison_axis !== 'context_policy' || (value.schema_version === '1.4'
     && value.config.baseline_agent?.context_policy?.mode === 'full'
     && value.config.recovery_agent?.context_policy?.mode === 'recent_tool_rounds'
     && value.config.baseline_agent.runtime_backend === value.config.recovery_agent.runtime_backend
     && value.config.baseline_agent.runtime_strategy === value.config.recovery_agent.runtime_strategy
+    && value.metrics.retry_eligible_count == null && value.metrics.retry_recovery_count == null
+    && value.metrics.retry_recovery_rate == null
+    && value.pairs.every((pair) => pair.retry_eligible == null && !pair.recovered)))
+  && (value.config.comparison_axis !== 'memory_ablation' || (value.schema_version === '1.5'
+    && value.config.baseline_agent?.context_policy?.mode === 'recent_tool_rounds'
+    && value.config.baseline_agent.context_policy.memory_max_bytes == null
+    && value.config.recovery_agent?.context_policy?.mode === 'recent_tool_rounds'
+    && value.config.recovery_agent.context_policy.memory_max_bytes != null
+    && value.config.baseline_agent.context_policy.max_tool_rounds === value.config.recovery_agent.context_policy.max_tool_rounds
+    && value.config.baseline_agent.runtime_backend === value.config.recovery_agent.runtime_backend
+    && value.config.baseline_agent.runtime_strategy === value.config.recovery_agent.runtime_strategy
+    && value.config.baseline_agent.runtime_backend != null
+    && value.config.baseline_agent.runtime_strategy != null
+    && typeof value.config.baseline_agent.runtime_version === 'string'
+    && value.config.baseline_agent.runtime_version.length > 0
+    && value.config.baseline_agent.runtime_version === value.config.recovery_agent.runtime_version
+    && value.config.baseline_agent.recovery_policy === (value.config.baseline_agent.runtime_strategy === 'handwritten_recovery'
+      ? 'invalid_arguments_once' : 'none')
+    && value.config.baseline_agent.recovery_policy === value.config.recovery_agent.recovery_policy
     && value.metrics.retry_eligible_count == null && value.metrics.retry_recovery_count == null
     && value.metrics.retry_recovery_rate == null
     && value.pairs.every((pair) => pair.retry_eligible == null && !pair.recovered)))

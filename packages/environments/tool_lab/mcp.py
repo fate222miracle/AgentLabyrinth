@@ -23,7 +23,7 @@ TASKS_DIR = Path(__file__).resolve().parents[3] / "benchmarks/tool_lab_core/task
 
 def _documents(task_name: str) -> list[dict[str, JsonValue]]:
     """Resolve a catalog task without accepting paths or arbitrary datasets."""
-    for path in TASKS_DIR.glob("*.json"):
+    for path in TASKS_DIR.rglob("*.json"):
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("name") == task_name:
             state = data.get("initial_state", {})

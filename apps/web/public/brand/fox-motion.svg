@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="65 180 760 760" role="img" aria-labelledby="title">
+  <title id="title">AgentLabyrinth · 寻径之狐 · 动态展示</title>
+  <style>
+    .fox { transform-box: fill-box; transform-origin: center; animation: appear 560ms cubic-bezier(.2,.7,.2,1) backwards; }
+    .features { animation: focus 300ms ease-out 180ms backwards; }
+    .route { animation: trace-route 950ms cubic-bezier(.25,.6,.2,1) 380ms backwards; }
+    @keyframes appear { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+    @keyframes focus { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes trace-route { from { clip-path: inset(0 100% 0 0); } 99.9% { clip-path: inset(0 0% 0 0); } to { clip-path: none; } }
+    @media (prefers-reduced-motion: reduce) { .fox, .features, .route { animation: none; } }
+  </style>
+  <defs>
+    <mask id="fox-cutout" maskUnits="userSpaceOnUse" x="65" y="180" width="760" height="760">
+      <rect x="65" y="180" width="760" height="760" fill="white" />
+      <path fill="black" d="M307 501C350 482 365 441 402 418C431 385 477 385 519 400C584 423 647 464 685 496L631 477C678 545 718 636 730 735L690 646C719 751 679 857 592 911C600 837 570 764 522 714C477 676 442 638 435 594C426 568 433 544 449 521C398 527 362 548 322 522L306 508Z" />
+      <path class="route" fill="black" d="M199 587C230 652 286 687 353 706C395 713 411 731 419 762C425 790 450 795 480 804C537 826 577 861 592 911C568 862 525 839 470 835C425 831 394 820 380 790C375 767 364 752 340 748C290 742 253 729 220 702C213 731 228 773 253 799C170 754 158 686 199 587Z" />
+    </mask>
+  </defs>
+  <g class="fox">
+    <path class="silhouette" fill="#C96442" mask="url(#fox-cutout)" d="M451 213L529 294L650 213C676 332 674 386 655 408C755 501 774 626 730 735L689 644C730 775 675 860 592 911C433 937 251 940 174 836C106 751 124 611 241 485C262 533 286 571 323 588L307 516C339 487 366 458 367 414C367 393 384 365 398 348Z" />
+    <g class="features" fill="#2D2B27">
+      <path d="M454 244L410 336L488 303Z" />
+      <path d="M636 249L601 322L641 381L657 354Z" />
+      <path d="M560 621C608 672 629 749 640 812C633 719 658 662 689 641C700 746 681 838 622 889L592 908C629 787 609 710 560 621Z" />
+      <path fill-rule="evenodd" d="M433 465C450 429 474 420 520 427C500 436 497 452 480 463C464 473 447 471 433 465ZM474 440A6 6 0 1 0 486 440A6 6 0 1 0 474 440Z" />
+      <path d="M306 501C315 491 335 494 342 503C346 511 329 523 321 522C314 519 307 511 306 501Z" />
+      <path d="M320 516C360 544 400 525 449 521C405 536 364 548 330 529Z" />
+    </g>
+  </g>
+</svg>

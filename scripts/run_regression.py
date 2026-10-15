@@ -67,21 +67,26 @@ def preflight(
         if request.comparison_axis == "runtime_backend"
         else request.runtime_backend,
         "baseline_strategy": request.runtime_strategy
-        if request.comparison_axis in ("runtime_backend", "context_policy")
+        if request.comparison_axis in ("runtime_backend", "context_policy", "memory_ablation")
         else "handwritten",
         "recovery_strategy": request.runtime_strategy
-        if request.comparison_axis in ("runtime_backend", "context_policy")
+        if request.comparison_axis in ("runtime_backend", "context_policy", "memory_ablation")
         else "handwritten_recovery",
     }
     if any(config.get(key) != value for key, value in expected.items()):
         raise ValueError("Regression request differs from pinned baseline")
     policy = request.context_policy
     for arm in ("baseline", "recovery"):
-        expected_policy = (
-            ContextPolicy(mode="full")
-            if request.comparison_axis == "context_policy" and arm == "baseline"
-            else policy
-        )
+        if request.comparison_axis == "context_policy" and arm == "baseline":
+            expected_policy: ContextPolicy | None = ContextPolicy(mode="full")
+        elif request.comparison_axis == "memory_ablation" and arm == "baseline":
+            expected_policy = (
+                ContextPolicy(mode="recent_tool_rounds", max_tool_rounds=policy.max_tool_rounds)
+                if policy is not None
+                else None
+            )
+        else:
+            expected_policy = policy
         saved_policy = config.get(f"{arm}_agent", {}).get("context_policy")
         if saved_policy != (
             expected_policy.model_dump(mode="json") if expected_policy is not None else None
@@ -109,6 +114,7 @@ def preflight(
         raise ValueError("Regression task version or evaluation protocol changed")
     agent_path = DEFAULT_FAKE_AGENT if request.provider == "fake" else DEFAULT_AIHUBMIX_AGENT
     agent = AgentSpec.model_validate_json(agent_path.read_text(encoding="utf-8"))
+    agent = service._agent_with_task_capacity(agent, tasks)
     tool_version = config["tool_set_version"]
     if tool_version not in TOOL_LAB_TOOL_SET_VERSIONS:
         raise ValueError("Regression agent or evaluation protocol changed")
@@ -125,7 +131,12 @@ def preflight(
         or saved_model.get("temperature") != agent.model.temperature
         or saved_model.get("max_tokens") != agent.model.max_tokens
         or config["environment_version"] != "tool-lab-m0-v1"
-        or config["evaluator"] != "order_status_v1"
+        or config["evaluator"]
+        != (
+            "order_status_v2"
+            if any(t.evaluator_config.get("evidence_order") == "unordered-v1" for t in tasks)
+            else "order_status_v1"
+        )
     ):
         raise ValueError("Regression agent or evaluation protocol changed")
 

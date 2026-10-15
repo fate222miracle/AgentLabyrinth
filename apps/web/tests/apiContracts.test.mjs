@@ -116,3 +116,57 @@ test('context result validates policies, revision and inapplicable recovery metr
     assert.throws(() => parseApi(experimentArtifactSchema, invalid));
   }
 });
+
+test('bounded memory sub-version survives history and cannot silently become an old window', () => {
+  const value = episodeResponse();
+  value.artifact.agent.schema_version = '1.2';
+  value.artifact.agent.context_policy = { schema_version: '1.1', algorithm_version: 'tool-round-window-memory-v1',
+    mode: 'recent_tool_rounds', max_tool_rounds: 1, memory_max_bytes: 8192 };
+  assert.equal(parseApi(episodeResponseSchema, value).artifact.agent.context_policy.memory_max_bytes, 8192);
+  for (const change of [{ schema_version: '1.0' }, { algorithm_version: 'tool-round-window-v1' },
+    { memory_max_bytes: 255 }, { memory_max_bytes: '8192' }, { memory_max_bytes: undefined }, { mode: 'full' }]) {
+    const corrupt = structuredClone(value);
+    Object.assign(corrupt.artifact.agent.context_policy, change);
+    assert.throws(() => parseApi(episodeResponseSchema, corrupt), /校验失败/);
+  }
+});
+
+test('memory ablation result requires revision 1.5, a same-window switch and no recovery metrics', () => {
+  const legacy = JSON.parse(readFileSync(new URL('../../../tests/fixtures/legacy_experiment.json', import.meta.url)));
+  legacy.schema_version = '1.5';
+  legacy.config.comparison_axis = 'memory_ablation';
+  legacy.config.baseline_agent = { runtime_backend: 'handwritten', runtime_strategy: 'handwritten',
+    runtime_version: 'reference-v2', recovery_policy: 'none', context_policy: {
+    schema_version: '1.0', algorithm_version: 'tool-round-window-v1', mode: 'recent_tool_rounds', max_tool_rounds: 1,
+  } };
+  legacy.config.recovery_agent = { ...legacy.config.baseline_agent, context_policy: {
+    schema_version: '1.1', algorithm_version: 'tool-round-window-memory-v1', mode: 'recent_tool_rounds',
+    max_tool_rounds: 1, memory_max_bytes: 8192,
+  } };
+  for (const pair of legacy.pairs) { pair.retry_eligible = null; pair.recovered = false; }
+  legacy.metrics.retry_eligible_count = null;
+  legacy.metrics.retry_recovery_count = null;
+  legacy.metrics.retry_recovery_rate = null;
+  const parsed = parseApi(experimentArtifactSchema, legacy);
+  assert.equal(parsed.config.recovery_agent.context_policy.memory_max_bytes, 8192);
+  assert.equal(parsed.config.baseline_agent.context_policy.memory_max_bytes, undefined);
+  for (const corrupt of [
+    (v) => { v.schema_version = '1.4'; },
+    (v) => { v.config.comparison_axis = 'recovery_policy'; },
+    (v) => { delete v.config.comparison_axis; },
+    (v) => { v.config.baseline_agent.context_policy = structuredClone(v.config.recovery_agent.context_policy); },
+    (v) => { v.config.recovery_agent.context_policy.memory_max_bytes = undefined; },
+    (v) => { v.config.recovery_agent.context_policy.max_tool_rounds = 2; },
+    (v) => { v.config.recovery_agent.runtime_backend = 'langgraph'; },
+    (v) => { v.config.recovery_agent.runtime_version = 'changed'; },
+    (v) => { v.config.baseline_agent.runtime_version = ''; v.config.recovery_agent.runtime_version = ''; },
+    (v) => { v.config.recovery_agent.recovery_policy = 'invalid_arguments_once'; },
+    (v) => { v.config.baseline_agent.recovery_policy = 'invalid_arguments_once'; v.config.recovery_agent.recovery_policy = 'invalid_arguments_once'; },
+    (v) => { delete v.config.baseline_agent.runtime_backend; delete v.config.recovery_agent.runtime_backend; },
+    (v) => { v.metrics.retry_recovery_rate = 0; },
+    (v) => { v.pairs[0].recovered = true; },
+  ]) {
+    const invalid = structuredClone(legacy); corrupt(invalid);
+    assert.throws(() => parseApi(experimentArtifactSchema, invalid));
+  }
+});

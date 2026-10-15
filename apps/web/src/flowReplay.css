@@ -16,6 +16,29 @@
 .mcp-network-path.failed > div { border-color: var(--fail-text); background: var(--fail-bg); }
 .mcp-network > p { margin-top: 0.65rem; color: var(--text-secondary); font-size: 0.75rem; }
 .flow-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(270px, 320px); gap: 1rem; padding: 0 1rem 1rem; }
+.flow-sidebar { min-width: 0; display: grid; gap: 0.75rem; align-content: start; }
+.flow-workspace.with-documents { grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); }
+.with-documents .flow-canvas { height: 740px; }
+.with-documents .flow-inspector { max-height: 220px; }
+.document-evidence { padding: 1rem; min-width: 0; border: 1px solid var(--border-highlight); border-radius: 12px; background: var(--color-surface); font-size: 0.875rem; }
+.document-evidence header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.document-evidence h3 { margin: 0.2rem 0; font-size: 1.125rem; }
+.document-evidence header > span { color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.document-source-note { color: var(--text-secondary); font-size: 0.8125rem; line-height: 1.6; margin: 0.5rem 0; }
+.document-list { display: grid; gap: 0.5rem; max-height: 164px; overflow-y: auto; padding: 2px; }
+.document-card { text-align: left; width: 100%; min-height: 64px; padding: 0.65rem 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--color-surface-secondary); color: var(--text-primary); font: inherit; cursor: pointer; }
+.document-card.selected { border-color: var(--brand-action); background: var(--brand-soft); }
+.document-card-title { display: block; font-weight: 600; overflow-wrap: anywhere; }
+.document-card-meta { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; margin-top: 0.3rem; color: var(--text-secondary); font-size: 0.8125rem; }
+.document-card-meta strong, .document-status.read { color: var(--success-text); }
+.document-card.reading .document-card-meta, .document-status.reading { color: var(--brand-action); font-weight: 600; }
+.document-card.failed .document-card-meta, .document-status.failed { color: var(--fail-text); }
+.document-preview { margin-top: 0.75rem; padding: 0.8rem; max-height: 230px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--color-canvas); }
+.document-preview-heading { display: grid; gap: 0.25rem; overflow-wrap: anywhere; }
+.document-preview-heading > span, .document-evidence-id { color: var(--text-secondary); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.document-status { color: var(--text-secondary); font-size: 0.875rem; margin: 0.5rem 0; line-height: 1.6; }
+.document-content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; margin: 0.5rem 0; }
+.document-card:focus-visible, .document-preview:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .flow-canvas { height: 460px; min-width: 0; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; background: var(--color-surface); }
 .flow-canvas { position: relative; }
 .flow-empty-path { position: absolute; inset: 1rem; z-index: 1; color: var(--text-secondary); pointer-events: none; font-size: 0.875rem; }
@@ -52,6 +75,7 @@
 .flow-replay:fullscreen .flow-workspace { grid-column: 1 / -1; grid-row: 5; min-height: 0; }
 .flow-replay:fullscreen .flow-canvas { height: 100%; min-height: 240px; }
 .flow-replay:fullscreen .flow-inspector { max-height: none; min-height: 0; }
+.flow-replay:fullscreen .with-documents .flow-sidebar { overflow-y: auto; min-height: 0; }
 .flow-replay:fullscreen .flow-player { grid-column: 1 / -1; grid-row: 6; }
 .flow-replay:fullscreen .flow-detail { grid-column: 1 / -1; grid-row: 7; }
 .flow-replay:fullscreen .flow-playback-note { grid-column: 1 / -1; grid-row: 8; }
@@ -109,7 +133,8 @@
 @media (max-width: 640px) { .flow-caption { padding: 0.8rem; } .flow-caption strong { flex-basis: 100%; order: 2; } .mcp-network-path { flex-direction: column; } .mcp-network-path > span { transform: rotate(90deg); line-height: 1; } .flow-player { flex-wrap: wrap; padding: 0.7rem; } .flow-scrubber { order: 2; flex-basis: 75%; } .flow-canvas { height: 560px; } }
 @media (prefers-reduced-motion: reduce) { .flow-packet { display: none; } .flow-node { animation: none; transition: none; } .flow-call-trail button { transition: none; } }
 @media (max-width: 900px) {
-  .flow-workspace { grid-template-columns: minmax(0, 1fr); }
+  .flow-workspace, .flow-workspace.with-documents { grid-template-columns: minmax(0, 1fr); }
+  .with-documents .flow-canvas { height: 560px; }
   .flow-inspector { max-height: 360px; }
   .flow-replay:fullscreen .flow-workspace { grid-template-rows: minmax(300px, 1fr) auto; }
   .flow-replay:fullscreen .flow-inspector { max-height: 240px; }

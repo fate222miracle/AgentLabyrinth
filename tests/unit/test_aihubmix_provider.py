@@ -55,11 +55,12 @@ def test_aihubmix_parses_single_tool_call(dummy_tool: ToolSchema) -> None:
         "usage": {"prompt_tokens": 50, "completion_tokens": 15},
     }
 
-    with patch.object(provider, "_send_http_request", return_value=fake_response):
+    with patch.object(provider, "_send_http_request", return_value=fake_response) as send:
         messages = [Message(role="user", content={"target": "orders"})]
         config = ModelConfig(provider="aihubmix", model="coding-kimi-k3-free")
         response = asyncio.run(provider.generate(messages, [dummy_tool], config))
 
+        assert send.call_args.args[0]["parallel_tool_calls"] is False
         assert isinstance(response.action, ToolCall)
         assert response.action.call_id == "call_abc123"
         assert response.action.name == "query_records"
