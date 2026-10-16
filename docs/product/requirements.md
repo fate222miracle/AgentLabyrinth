@@ -60,6 +60,8 @@
 
 ### 0.5 项目负责人真实意图与学习方式
 
+2026-10-15 负责人要求将论文精读结论持续同步至后续开发文档，为未来多Agent平台提供成熟设计参考。固定版本来源、原文事实、解释、候选工程建议与待核实问题须区分，不能直接把论文设想改成当前功能或Accepted ADR。VirT-Lab首轮执行/调度/提示词精读及研究方向入口见docs/research/virt-lab-close-reading-2510.08242v1.md和multi-agent-sandbox-direction-20261013.md；不启动多Agent、不把未复现写成通过，不自动提交本轮研究文档。
+
 2026-10-15 负责人本轮明确要求先提交GitHub，授权本次将已验收代码/文档/测试/品牌资产提交并推送；不含本机配置、密钥、缓存或实验产物。此前“不提交GitHub”约束对本次由最新明确授权取代，后续仍不自动提交。
 
 2026-10-15 负责人要求Codex验收Trae交付，并承担后续大部分技术开发。当前同窗口工具记忆正式Experiment已由Trae实现（ADR-031，请求1.6/计划1.3/结果1.5）；Codex接续边界修复、质量门禁及源码交接，不把已实现误写成待实施。ADR记录为Implemented、待负责人验收，不替代整版V0.2/V0.3签收。保留旧轴、默认full及完整Trace/Checkpoint，后续新功能仍需具体ADR；不新增数据库/摘要模型/多Agent，不提交GitHub。最新证据见current-state与V0.3-memory-ablation-20261015学习交接。
@@ -1431,6 +1433,8 @@ GridWorld 重点评测：
 - Cooperation Task
 - Hidden Information
 - 单 Agent / 多 Agent 对比
+
+未来设计阅读入口：[多Agent研究方向](../research/multi-agent-sandbox-direction-20261013.md)、[VirT-Lab执行/调度/提示词精读](../research/virt-lab-close-reading-2510.08242v1.md)。两者属于研究参考，具体世界规则、角色观察、调度/通信/预算及指标仍须通过后续ADR决定；不据阅读记录提前启动本阶段或承诺论文已有方法的新颖性。
 
 ### V0.7 — Competition Arena
 
