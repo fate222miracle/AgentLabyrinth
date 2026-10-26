@@ -9,10 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 from packages.domain.models import (
     ErrorInfo,
     Observation,
+    PlanItem,
     StepResult,
     TaskSpec,
     ToolCall,
     ToolSchema,
+    validate_plan,
 )
 from packages.domain.ports import Environment
 from packages.tools.executor import ToolExecutor
@@ -20,8 +22,48 @@ from packages.tools.registry import DefaultToolValidator, ToolRegistry
 
 TOOL_LAB_TOOL_SET_VERSION = "v1.1.0"
 TOOL_LAB_TOOL_SET_VERSIONS = frozenset(
-    {"v1.0.0", "v1", "tool-lab-v1", TOOL_LAB_TOOL_SET_VERSION, "v1.2.0", "v1.3.0"}
+    {
+        "v1.0.0",
+        "v1",
+        "tool-lab-v1",
+        TOOL_LAB_TOOL_SET_VERSION,
+        "v1.2.0",
+        "v1.3.0",
+        "v1.4.0",
+        "v1.5.0",
+        "v1.6.0",
+    }
 )
+
+
+def search_document_catalog(
+    documents: list[dict[str, JsonValue]], query: str, top_k: int, *, id_first: bool = False
+) -> dict[str, JsonValue]:
+    """Search public metadata/text; optional exact IDs precede literal text lookup."""
+    needle = query.strip().casefold() if id_first else query.casefold()
+    exact = (
+        [doc for doc in documents if str(doc["document_id"]).casefold() == needle]
+        if id_first
+        else []
+    )
+    matched = exact or [
+        doc
+        for doc in documents
+        if needle in str(doc["title"]).casefold() or needle in str(doc["content"]).casefold()
+    ]
+    result: dict[str, JsonValue] = {
+        "documents": [
+            {"document_id": doc["document_id"], "title": doc["title"]} for doc in matched[:top_k]
+        ]
+    }
+    if id_first:
+        result["search_mode"] = "exact_id" if exact else "literal_text" if matched else "none"
+        if not matched:
+            result["hint"] = (
+                "没有字面匹配。搜索不做同义词、翻译或语义推断。已有搜索结果或已读正文中的文档ID"
+                "可直接用于read_document；否则使用任务公开的document_query或更短的原文片段。"
+            )
+    return result
 
 
 class QueryFilters(BaseModel):
@@ -63,6 +105,20 @@ class SearchDocumentsArgs(BaseModel):
         if not value.strip():
             raise ValueError("query cannot be blank")
         return value
+
+
+class _IdSearchDocumentsArgs(SearchDocumentsArgs):
+    """Describe exact IDs and literal text without suggesting semantic search."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", title="SearchDocumentsArgs")
+    query: str = Field(
+        min_length=1,
+        description=(
+            "Exact document ID (case-insensitive, surrounding whitespace ignored), otherwise a "
+            "literal substring of title or content. No synonyms or translation. "
+            "Read already known document references directly instead of searching again."
+        ),
+    )
 
 
 class ReadDocumentArgs(BaseModel):
@@ -133,8 +189,41 @@ class _GroundedSubmitAnswerArgs(SubmitAnswerArgs):
     )
 
 
+class _DerivedSubmitAnswerArgs(_GroundedSubmitAnswerArgs):
+    """Allow the new fact-rule tasks to derive answers without changing parameters."""
+
+    answer: str = Field(
+        min_length=1,
+        description="Exact task answer obtained from records or documents, or derived from "
+        "successfully read facts using the task's stated rule; no prose or invented facts.",
+    )
+
+
+class UpdatePlanArgs(BaseModel):
+    """Strict schema for a bounded, acyclic declaration of subgoals; never reasoning text."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+    plan: list[PlanItem] = Field(
+        min_length=1,
+        max_length=8,
+        description=(
+            "Your declared plan items: id, goal, status, and optional depends_on ids. "
+            "This is a claim, not verified execution. Keep at most 8 items."
+        ),
+    )
+
+    @field_validator("plan")
+    @classmethod
+    def validate_structure(cls, value: list[PlanItem]) -> list[PlanItem]:
+        """Reject duplicate ids, unknown or self dependencies, and dependency cycles."""
+        validate_plan(tuple(value))
+        return value
+
+
 class _Order(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
+
     order_id: str
     status: str
     evidence_id: str
@@ -193,9 +282,21 @@ class ToolLabEnvironment(Environment):
             TOOL_LAB_TOOL_SET_VERSION,
             "v1.2.0",
             "v1.3.0",
+            "v1.4.0",
+            "v1.5.0",
+            "v1.6.0",
         )
-        self._task_scoped_tools = tool_set_version in ("v1.2.0", "v1.3.0")
-        self._referenced_reads = tool_set_version == "v1.3.0"
+        self._derived_answers = tool_set_version in ("v1.4.0", "v1.5.0", "v1.6.0")
+        self._task_scoped_tools = tool_set_version in (
+            "v1.2.0",
+            "v1.3.0",
+            "v1.4.0",
+            "v1.5.0",
+            "v1.6.0",
+        )
+        self._referenced_reads = tool_set_version in ("v1.3.0", "v1.4.0", "v1.5.0", "v1.6.0")
+        self._id_search = tool_set_version in ("v1.5.0", "v1.6.0")
+        self._planning_tool = tool_set_version == "v1.6.0"
         self._registry = registry or create_tool_lab_registry()
         self._validator = validator or DefaultToolValidator(self._registry)
         self._executor = executor or ToolExecutor(self._registry, self._validator)
@@ -218,7 +319,11 @@ class ToolLabEnvironment(Environment):
         self._register_handlers()
         submit_schema = self._registry.get_schema("submit_answer")
         if submit_schema is None or submit_schema.version != (
-            "1.1.0" if self._grounded_descriptions else "1.0.0"
+            "1.2.0"
+            if self._derived_answers
+            else "1.1.0"
+            if self._grounded_descriptions
+            else "1.0.0"
         ):
             raise ValueError("ToolLab registry tool description version mismatch")
         read_schema = self._registry.get_schema("read_document")
@@ -226,6 +331,11 @@ class ToolLabEnvironment(Environment):
             "1.1.0" if self._referenced_reads else "1.0.0"
         ):
             raise ValueError("ToolLab registry read description version mismatch")
+        search_schema = self._registry.get_schema("search_documents")
+        if search_schema is None or search_schema.version != (
+            "1.1.0" if self._id_search else "1.0.0"
+        ):
+            raise ValueError("ToolLab registry search description version mismatch")
 
     def _register_handlers(self) -> None:
         """Register environment-bound tool handlers if not already registered."""
@@ -243,14 +353,23 @@ class ToolLabEnvironment(Environment):
             self._registry.register(
                 name="submit_answer",
                 description=(
-                    "Submit the task answer and evidence IDs acquired by querying records "
+                    "Submit the exact task conclusion derived from successfully read facts "
+                    "under the task's stated rule, with acquired evidence IDs."
+                    if self._derived_answers
+                    else "Submit the task answer and evidence IDs acquired by querying records "
                     "or reading documents."
                     if self._grounded_descriptions
                     else "Submit the exact status value and evidence IDs returned by the query."
                 ),
                 risk_level="LOW_RISK_WRITE",
-                version="1.1.0" if self._grounded_descriptions else "1.0.0",
-                param_model=_GroundedSubmitAnswerArgs
+                version="1.2.0"
+                if self._derived_answers
+                else "1.1.0"
+                if self._grounded_descriptions
+                else "1.0.0",
+                param_model=_DerivedSubmitAnswerArgs
+                if self._derived_answers
+                else _GroundedSubmitAnswerArgs
                 if self._grounded_descriptions
                 else SubmitAnswerArgs,
                 handler=self._handle_submit_answer,
@@ -259,10 +378,16 @@ class ToolLabEnvironment(Environment):
         if not self._registry.has_tool("search_documents"):
             self._registry.register(
                 name="search_documents",
-                description="Search task documents by text and return matching document IDs.",
+                description=(
+                    "Find an exact document ID first; otherwise match literal title/content text. "
+                    "Returns IDs and titles only, not reading evidence. "
+                    "Read IDs from prior results or document references directly."
+                    if self._id_search
+                    else "Search task documents by text and return matching document IDs."
+                ),
                 risk_level="READ_ONLY",
-                version="1.0.0",
-                param_model=SearchDocumentsArgs,
+                version="1.1.0" if self._id_search else "1.0.0",
+                param_model=_IdSearchDocumentsArgs if self._id_search else SearchDocumentsArgs,
                 handler=self._handle_search_documents,
             )
 
@@ -276,6 +401,19 @@ class ToolLabEnvironment(Environment):
                 if self._referenced_reads
                 else ReadDocumentArgs,
                 handler=self._handle_read_document,
+            )
+
+        if self._planning_tool and not self._registry.has_tool("update_plan"):
+            self._registry.register(
+                name="update_plan",
+                description=(
+                    "Declare or update a bounded plan of subgoals with status and dependencies. "
+                    "The plan is your own declaration, never verified execution; at most 8 items."
+                ),
+                risk_level="READ_ONLY",
+                version="1.0.0",
+                param_model=UpdatePlanArgs,
+                handler=self._handle_update_plan,
             )
 
     def _handle_query_records(self, args: QueryRecordsArgs) -> JsonValue:
@@ -293,13 +431,11 @@ class ToolLabEnvironment(Environment):
 
     def _handle_search_documents(self, args: SearchDocumentsArgs) -> JsonValue:
         """Return compact matches without exposing document contents."""
-        query = args.query.casefold()
-        matches = [
-            {"document_id": doc["document_id"], "title": doc["title"]}
-            for doc in self._documents
-            if query in str(doc["title"]).casefold() or query in str(doc["content"]).casefold()
-        ][: args.top_k]
-        return {"documents": cast(JsonValue, deepcopy(matches))}
+        return deepcopy(
+            search_document_catalog(
+                self._documents, args.query, args.top_k, id_first=self._id_search
+            )
+        )
 
     def _handle_read_document(self, args: ReadDocumentArgs) -> JsonValue:
         """Return one document and mark its evidence as acquired."""
@@ -330,6 +466,13 @@ class ToolLabEnvironment(Environment):
             "submission": cast(JsonValue, deepcopy(self._submission)),
         }
 
+    def _handle_update_plan(self, args: UpdatePlanArgs) -> JsonValue:
+        """Echo the accepted declaration only; the session owns durable plan state."""
+        return {
+            "feedback": "Plan recorded. This declaration is not verified execution.",
+            "items": cast(JsonValue, [item.model_dump(mode="json") for item in args.plan]),
+        }
+
     def reset(self, task: TaskSpec, seed: int) -> Observation:
         """Rebuild deterministic state and return its public projection."""
         raw_orders = task.initial_state.get("orders", [])
@@ -354,6 +497,9 @@ class ToolLabEnvironment(Environment):
         self._allowed_tools = tuple(
             name for name in task.expected_tools if name not in task.forbidden_tools
         )
+        if self._planning_tool and "update_plan" not in task.forbidden_tools:
+            # The plan declaration is a component tool, never a task requirement.
+            self._allowed_tools = (*self._allowed_tools, "update_plan")
         self._acquired_evidence = set()
         self._submission = None
         self._done = False

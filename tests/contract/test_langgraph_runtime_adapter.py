@@ -1,7 +1,9 @@
 """Both schedulers must obey the same portable success and failure contracts."""
 
 import asyncio
+import sys
 from decimal import Decimal
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -24,7 +26,7 @@ from packages.domain.ports import ModelProviderError
 from packages.environments.tool_lab.environment import ToolLabEnvironment
 from packages.evaluation.order_status import OrderStatusEvaluator
 from packages.providers.fake import FakeModelProvider
-from packages.runtime.factory import create_runtime, runtime_version
+from packages.runtime.factory import RuntimeUnavailable, create_runtime, runtime_version
 
 ROOT = Path(__file__).resolve().parents[2]
 TASKS = sorted((ROOT / "benchmarks/tool_lab_core/tasks").glob("*.json"))
@@ -35,7 +37,11 @@ def load_agent(backend: RuntimeBackend, strategy: RuntimeStrategy) -> AgentSpec:
     agent = AgentSpec.model_validate_json(
         (ROOT / "benchmarks/tool_lab_core/agents/baseline-m0.json").read_text(encoding="utf-8")
     )
-    return agent.model_copy(update={"runtime_backend": backend, "runtime_strategy": strategy})
+    update: dict[str, object] = {"runtime_backend": backend, "runtime_strategy": strategy}
+    if backend == "pydantic_ai":
+        # The third backend joins at the additive Agent revision (ADR-038).
+        update["schema_version"] = "1.4"
+    return agent.model_copy(update=update)
 
 
 def run(
@@ -96,6 +102,42 @@ def test_same_suite_under_both_schedulers(
         assert graph.evaluation.success
 
 
+@pytest.mark.parametrize("task_path", TASKS, ids=lambda p: p.stem)
+def test_pydantic_ai_matches_reference(task_path: Path) -> None:
+    """The third scheduler keeps results, usage and Trace identical to the reference."""
+    task = TaskSpec.model_validate_json(task_path.read_text(encoding="utf-8"))
+    reference = run(load_agent("handwritten", "handwritten"), task, FakeModelProvider("success"))
+    third = run(load_agent("pydantic_ai", "handwritten"), task, FakeModelProvider("success"))
+    assert_equivalent(reference, third)
+    assert third.evaluation.success
+
+
+def test_missing_third_runtime_dependency_fails_closed() -> None:
+    """A declared backend without its distribution must not fall back to the reference."""
+    agent = load_agent("pydantic_ai", "handwritten")
+    provider = FakeModelProvider("success")
+    with patch.dict(sys.modules, {"packages.runtime.pydantic_ai": None}):
+        with pytest.raises(RuntimeUnavailable):
+            create_runtime(agent, provider)
+    assert provider._call_count == 0
+    with patch("packages.runtime.factory.version", side_effect=PackageNotFoundError):
+        with pytest.raises(RuntimeUnavailable):
+            runtime_version("pydantic_ai")
+
+
+def test_third_runtime_initialization_failure_is_runtime_error() -> None:
+    """A framework failure before its bridge call must not look like model failure."""
+    task = TaskSpec.model_validate_json(TASKS[0].read_text(encoding="utf-8"))
+    with patch(
+        "packages.runtime.pydantic_ai.adapter.PydanticAIRuntimeAdapter._framework_step",
+        new=AsyncMock(side_effect=RuntimeError("framework failed before request")),
+    ):
+        artifact = run(load_agent("pydantic_ai", "handwritten"), task, FakeModelProvider("success"))
+    assert artifact.episode.termination_reason == TerminationReason.RUNTIME_ERROR
+    assert artifact.episode.detail == "unhandled_runtime_error"
+    assert artifact.episode.model_call_count == 0
+
+
 @pytest.mark.parametrize(
     "case, reason, calls, tools",
     [
@@ -119,7 +161,7 @@ def test_failure_boundaries(case: str, reason: str, calls: int, tools: int, tmp_
     """A framework must not bypass permissions, budgets, stop reasons or one-retry limits."""
     task = TaskSpec.model_validate_json(TASKS[0].read_text(encoding="utf-8"))
     artifacts = []
-    for backend in ("handwritten", "langgraph"):
+    for backend in ("handwritten", "langgraph", "pydantic_ai"):
         agent = load_agent(backend, "handwritten_recovery")
         active_task = task
         provider = FakeModelProvider(case)
@@ -162,7 +204,8 @@ def test_failure_boundaries(case: str, reason: str, calls: int, tools: int, tmp_
         write_artifact(artifact, tmp_path / f"{backend}.json")
         assert read_artifact(tmp_path / f"{backend}.json") == artifact
         artifacts.append(artifact)
-    assert_equivalent(*artifacts)
+    assert_equivalent(artifacts[0], artifacts[1])
+    assert_equivalent(artifacts[0], artifacts[2])
     if case in ("tool_timeout", "environment_error"):
         assert [e.event_type for e in artifacts[1].events][-3:] == [
             EventType.TOOL_STARTED,

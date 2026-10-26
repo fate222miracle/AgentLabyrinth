@@ -1,8 +1,33 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { documentEvidence, flowFrames, flowPath, frameIndexAt } from '../src/flowFrames.ts';
+import { documentEvidence, savedDocumentReads, flowFrames, flowPath, frameIndexAt } from '../src/flowFrames.ts';
 
 const event = (event_type, payload, step_index = 1) => ({ event_type, payload, step_index });
+
+test('saved reading comparison distinguishes absent trace from zero and reuses successful read rules', () => {
+  const events = [event('EPISODE_STARTED', {}),
+    event('TOOL_CALL_PROPOSED', {call_id:'a', name:'read_document', arguments:{document_id:'policy'}}),
+    event('TOOL_SUCCEEDED', {call_id:'a', observation:{result:{document:{document_id:'policy',content:'Body'}}}}),
+    event('TOOL_CALL_PROPOSED', {call_id:'b', name:'read_document', arguments:{document_id:'policy'}}),
+    event('TOOL_FAILED', {call_id:'b'}),
+    event('TOOL_CALL_PROPOSED', {call_id:'c', name:'read_document', arguments:{document_id:'policy'}}),
+    event('TOOL_SUCCEEDED', {call_id:'c', observation:{result:{document:null}}}),
+    event('TOOL_CALL_PROPOSED', {call_id:'d', name:'read_document', arguments:{document_id:'policy'}}),
+    event('TOOL_SUCCEEDED', {call_id:'d', observation:{result:{document:{document_id:'other',content:'Wrong'}}}}),
+    event('TOOL_CALL_PROPOSED', {call_id:'e', name:'read_document', arguments:{document_id:'policy'}}),
+    event('TOOL_SUCCEEDED', {call_id:'e', observation:{result:{document:{document_id:'policy',content:'Body'}}}}),
+    event('ENVIRONMENT_UPDATED', {state:{acquired_evidence:['doc:unread']}}),
+    event('EPISODE_FINISHED', {}),
+  ];
+  assert.equal(savedDocumentReads([]), null);
+  assert.equal(savedDocumentReads(events.slice(0,-1)), null);
+  assert.equal(savedDocumentReads(events.slice(1)), null);
+  assert.deepEqual(savedDocumentReads([events[0],events.at(-1)]), {documents:[],total:0,repeated:0});
+  const reads = savedDocumentReads(events);
+  assert.equal(reads.total,2);
+  assert.equal(reads.repeated,1);
+  assert.deepEqual(reads.documents.map(doc=>doc.id),['policy']);
+});
 test('document shelf uses only arrived outcomes; failed, null and forged citations never acquire evidence', () => {
   const events = [
     event('OBSERVATION_CREATED', {initial_state:{documents:[

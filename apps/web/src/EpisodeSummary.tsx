@@ -25,6 +25,8 @@ export function EpisodeSummary({ artifact, explanation }: Props) {
         <span>{agent.runtime_backend ?? 'handwritten'} Runtime</span>
         <span>{agent.runtime_strategy === 'handwritten_recovery' ? '一次参数纠错' : '无参数纠错'}</span>
         <span>工具传输：{config.environment_version === 'tool-lab-mcp-v1' ? 'MCP HTTP' : '本地'}</span>
+        <span>工具调用：{agent.model.tool_call_mode === 'serial' ? '多工具 · 顺序执行' : '单工具'}</span>
+        {agent.planning && <span>规划：声明计划 · {agent.planning.algorithm_version}</span>}
         {agent.context_policy && <span>上下文：{contextLabel(agent.context_policy)}</span>}
       </div>
       <div className="metrics-grid episode-metrics">

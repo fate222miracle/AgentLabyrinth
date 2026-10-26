@@ -45,6 +45,7 @@ def inputs(backend: RuntimeBackend) -> tuple[AgentSpec, TaskSpec]:
         update={
             "runtime_backend": backend,
             "budget": Budget(schema_version="1.1", max_execution_time_ms=1000),
+            "schema_version": "1.4" if backend == "pydantic_ai" else "1.1",
         }
     )
     task = TaskSpec.model_validate_json(
@@ -99,7 +100,7 @@ class SlowProvider(FakeModelProvider):
         return await super().generate(messages, tools, config)
 
 
-@pytest.mark.parametrize("backend", ["handwritten", "langgraph"])
+@pytest.mark.parametrize("backend", ["handwritten", "langgraph", "pydantic_ai"])
 def test_model_deadline_cancels_wait(backend: RuntimeBackend) -> None:
     """An unanswered request has unknown cost and cannot lead to tool execution."""
     agent, task = inputs(backend)
@@ -115,7 +116,7 @@ def test_model_deadline_cancels_wait(backend: RuntimeBackend) -> None:
     assert not any(e.event_type == EventType.MODEL_RESPONDED for e in artifact.events)
 
 
-@pytest.mark.parametrize("backend", ["handwritten", "langgraph"])
+@pytest.mark.parametrize("backend", ["handwritten", "langgraph", "pydantic_ai"])
 def test_returned_response_accounts_usage_before_stopping(backend: RuntimeBackend) -> None:
     """A slow response that returns before cancellation retains its actual usage."""
     agent, task = inputs(backend)
@@ -137,7 +138,7 @@ def test_returned_response_accounts_usage_before_stopping(backend: RuntimeBacken
     assert any(e.event_type == EventType.MODEL_RESPONDED for e in artifact.events)
 
 
-@pytest.mark.parametrize("backend", ["handwritten", "langgraph"])
+@pytest.mark.parametrize("backend", ["handwritten", "langgraph", "pydantic_ai"])
 @pytest.mark.parametrize("after_submission", [False, True])
 def test_tool_saves_state_before_deadline_stop(
     backend: RuntimeBackend, after_submission: bool
@@ -163,7 +164,7 @@ def test_tool_saves_state_before_deadline_stop(
     assert any(e.event_type == EventType.ENVIRONMENT_UPDATED for e in artifact.events)
 
 
-@pytest.mark.parametrize("backend", ["handwritten", "langgraph"])
+@pytest.mark.parametrize("backend", ["handwritten", "langgraph", "pydantic_ai"])
 def test_resume_keeps_elapsed_time(backend: RuntimeBackend) -> None:
     """Restoring an exhausted safe point starts no new model and keeps the Trace chain."""
     agent, task = inputs(backend)
@@ -221,7 +222,7 @@ def test_legacy_budget_bytes_and_hash_are_stable() -> None:
     assert agent.model_dump(mode="json")["budget"]["max_execution_time_ms"] == 1000
 
 
-@pytest.mark.parametrize("backend", ["handwritten", "langgraph"])
+@pytest.mark.parametrize("backend", ["handwritten", "langgraph", "pydantic_ai"])
 def test_provider_timeout_is_not_a_total_deadline(backend: RuntimeBackend) -> None:
     """A provider's own TimeoutError before the deadline remains a provider failure."""
     agent, task = inputs(backend)

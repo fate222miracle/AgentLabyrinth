@@ -9,8 +9,12 @@ import { RequestGeneration } from './requestGeneration';
 import { useContentMotion } from './useContentMotion';
 import { HistoryReader } from './HistoryReader';
 import { EpisodeSummary } from './EpisodeSummary';
+import { EpisodeReviewPanel } from './EpisodeReviewPanel';
 import { ClassroomScenarios } from './ClassroomScenarios';
 import { ExperimentCharts } from './ExperimentCharts';
+import { ExperimentReviewSummary } from './ExperimentReviewSummary';
+import { MemoryPairReview } from './MemoryPairReview';
+import { PlanningPairReview } from './PlanningPairReview';
 import { ContextSettings, contextInput, contextLabel, type ContextChoice } from './ContextSettings';
 import { metaSchema, dashboardSchema, resumableIdsSchema,
   type TaskOption, type MetaResponse, type TraceEvent, type EpisodeArtifact,
@@ -134,14 +138,17 @@ function experimentCsv(experiment: ExperimentArtifact): string {
     'tool_argument_validity_rate', 'pair_retry_eligible', 'pair_recovered', 'context_mode', 'context_max_tool_rounds',
     'model_id', 'provider', 'task_name',
     'context_algorithm_version', 'context_memory_max_bytes',
+    'tool_call_mode', 'runtime_version', 'planning_algorithm_version',
   ];
   const axis = typeof experiment.config.comparison_axis === 'string'
     ? experiment.config.comparison_axis : 'recovery_policy';
   const savedModel = typeof experiment.config.model === 'string'
     ? experiment.config.model : experiment.config.model?.model;
-  const rows = experiment.pairs.flatMap((pair) => [
+  const savedCallMode = typeof experiment.config.model === 'object' ? experiment.config.model?.tool_call_mode ?? 'single' : 'single';
+  type CsvValue = string | number | boolean | null | undefined;
+  const rows = experiment.pairs.flatMap((pair): CsvValue[][] => [
     [experiment.experiment_id, experiment.config_hash, axis, pair.task_id, pair.seed,
-      pair.repeat_index ?? 1, axis === 'context_policy' ? 'full' : axis === 'memory_ablation' ? 'recent_window' : axis === 'runtime_backend' ? 'reference' : 'baseline',
+      pair.repeat_index ?? 1, axis === 'context_policy' ? 'full' : axis === 'memory_ablation' ? 'recent_window' : axis === 'planning' ? 'no_plan' : axis === 'runtime_backend' ? 'reference' : 'baseline',
       pair.baseline_episode_id, pair.baseline_success,
       pair.baseline_termination_reason, pair.baseline_steps, pair.baseline_model_calls,
       pair.baseline_tool_calls, pair.baseline_tokens, pair.baseline_duration_ms,
@@ -151,9 +158,11 @@ function experimentCsv(experiment: ExperimentArtifact): string {
       axis !== 'recovery_policy' ? null : pair.recovered,
       experiment.config.baseline_agent?.context_policy?.mode, experiment.config.baseline_agent?.context_policy?.max_tool_rounds,
       savedModel, experiment.config.provider, pair.task_name,
-      experiment.config.baseline_agent?.context_policy?.algorithm_version, experiment.config.baseline_agent?.context_policy?.memory_max_bytes],
+      experiment.config.baseline_agent?.context_policy?.algorithm_version, experiment.config.baseline_agent?.context_policy?.memory_max_bytes, savedCallMode,
+      experiment.config.baseline_agent?.runtime_version,
+      experiment.config.baseline_agent?.planning?.algorithm_version],
     [experiment.experiment_id, experiment.config_hash, axis, pair.task_id, pair.seed,
-      pair.repeat_index ?? 1, axis === 'context_policy' ? 'recent_tool_rounds' : axis === 'memory_ablation' ? 'recent_window_with_memory' : axis === 'runtime_backend' ? 'langgraph' : 'recovery',
+      pair.repeat_index ?? 1, axis === 'context_policy' ? 'recent_tool_rounds' : axis === 'memory_ablation' ? 'recent_window_with_memory' : axis === 'planning' ? 'declared_plan' : axis === 'runtime_backend' ? experiment.config.recovery_agent?.runtime_backend ?? 'langgraph' : 'recovery',
       pair.recovery_episode_id, pair.recovery_success,
       pair.recovery_termination_reason, pair.recovery_steps, pair.recovery_model_calls,
       pair.recovery_tool_calls, pair.recovery_tokens, pair.recovery_duration_ms,
@@ -163,7 +172,9 @@ function experimentCsv(experiment: ExperimentArtifact): string {
       axis !== 'recovery_policy' ? null : pair.recovered,
       experiment.config.recovery_agent?.context_policy?.mode, experiment.config.recovery_agent?.context_policy?.max_tool_rounds,
       savedModel, experiment.config.provider, pair.task_name,
-      experiment.config.recovery_agent?.context_policy?.algorithm_version, experiment.config.recovery_agent?.context_policy?.memory_max_bytes],
+      experiment.config.recovery_agent?.context_policy?.algorithm_version, experiment.config.recovery_agent?.context_policy?.memory_max_bytes, savedCallMode,
+      experiment.config.recovery_agent?.runtime_version,
+      experiment.config.recovery_agent?.planning?.algorithm_version],
   ]);
   return `\uFEFF${[headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
 }
@@ -179,6 +190,7 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   TOOL_SUCCEEDED: '工具执行成功',
   TOOL_FAILED: '工具执行失败',
   ENVIRONMENT_UPDATED: '环境状态更新',
+  PLAN_UPDATED: '更新计划声明',
   EPISODE_RESUMED: '从存档恢复',
   EPISODE_FINISHED: '运行结束',
 };
@@ -199,7 +211,12 @@ function parseSeedList(value: string): number[] | null {
   return new Set(seeds).size === seeds.length ? seeds : null;
 }
 
-function comparisonLabel(pair: PairComparison, axis: 'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation'): string {
+function comparisonLabel(pair: PairComparison, axis: 'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation' | 'planning'): string {
+  if (axis === 'planning') {
+    if (pair.baseline_success && pair.recovery_success) return '有无声明均通过';
+    if (!pair.baseline_success && !pair.recovery_success) return '有无声明均未通过';
+    return pair.baseline_success ? '仅无声明通过' : '仅声明计划通过';
+  }
   if (axis === 'context_policy') {
     if (pair.baseline_success && pair.recovery_success) return '两种上下文均通过';
     if (!pair.baseline_success && !pair.recovery_success) return '两种上下文均未通过';
@@ -213,7 +230,7 @@ function comparisonLabel(pair: PairComparison, axis: 'recovery_policy' | 'runtim
   if (axis === 'runtime_backend') {
     if (pair.baseline_success && pair.recovery_success) return '两种 Runtime 均通过';
     if (!pair.baseline_success && !pair.recovery_success) return '两种 Runtime 均未通过';
-    return pair.baseline_success ? 'Reference 通过' : 'LangGraph 通过';
+    return pair.baseline_success ? 'Reference 通过' : '外部框架通过';
   }
   if (pair.recovered) return '挽救成功 (RECOVERED)';
   if (pair.baseline_success && pair.recovery_success) return '两组均通过 (TIED)';
@@ -295,12 +312,16 @@ export default function App() {
   const [memoryAxisWindow, setMemoryAxisWindow] = useState(1);
   const [memoryAxisBytes, setMemoryAxisBytes] = useState(8192);
   const [singleContextChoice, setSingleContextChoice] = useState<ContextChoice>('full');
+  const [singlePlanning, setSinglePlanning] = useState(false);
   const [singleContextWindow, setSingleContextWindow] = useState(2);
   const [singleMemoryBytes, setSingleMemoryBytes] = useState(8192);
-  const [comparisonAxis, setComparisonAxis] = useState<'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation'>('recovery_policy');
+  const [comparisonAxis, setComparisonAxis] = useState<'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation' | 'planning'>('recovery_policy');
   const [expRuntimeBackend, setExpRuntimeBackend] = useState<'handwritten' | 'langgraph'>('handwritten');
+  const [expRuntimeTarget, setExpRuntimeTarget] = useState<'langgraph' | 'pydantic_ai'>('langgraph');
   const [expRuntimeStrategy, setExpRuntimeStrategy] = useState<'handwritten' | 'handwritten_recovery'>('handwritten_recovery');
-  const [singleRuntimeBackend, setSingleRuntimeBackend] = useState<'handwritten' | 'langgraph'>('handwritten');
+  const [singleRuntimeBackend, setSingleRuntimeBackend] = useState<'handwritten' | 'langgraph' | 'pydantic_ai'>('handwritten');
+  const [singleCallMode, setSingleCallMode] = useState<'single' | 'serial'>('serial');
+  const [expCallMode, setExpCallMode] = useState<'single' | 'serial'>('serial');
   const [singleToolTransport, setSingleToolTransport] = useState<'local' | 'mcp'>('local');
   const [singleRuntimeStrategy, setSingleRuntimeStrategy] = useState<'handwritten' | 'handwritten_recovery'>('handwritten');
   const [expTasks, setExpTasks] = useState<string[]>([]);
@@ -719,7 +740,12 @@ export default function App() {
       const isFake = selectedModel === 'fake' || currentModelObj?.provider === 'fake';
 
       const payload = {
-        schema_version: '1.3',
+        schema_version: singleRuntimeBackend === 'pydantic_ai'
+          ? '1.7'
+          : singlePlanning && selectedSingleTaskMeta?.supports_planning ? '1.6' : '1.5',
+        ...(singlePlanning && selectedSingleTaskMeta?.supports_planning
+          ? { planning: { schema_version: '1.0', algorithm_version: 'plan-update-v1' } } : {}),
+        tool_call_mode: selectedSuite === 'tool_lab_core' ? singleCallMode : 'single',
         ...(singleContextChoice !== 'full' ? { context_policy: contextInput(singleContextChoice, singleContextWindow, singleMemoryBytes) } : {}),
         provider: isFake ? 'fake' : 'aihubmix',
         model: isFake ? 'fake-model' : selectedModel,
@@ -888,7 +914,7 @@ export default function App() {
     setActiveJobId(null);
     setExperimentJob(null);
     setExperiment(null);
-    beginLoading(`正在串行执行${comparisonAxis === 'context_policy' ? '上下文' : comparisonAxis === 'memory_ablation' ? '工具记忆' : comparisonAxis === 'runtime_backend' ? 'Runtime' : '恢复策略'}对照，预计 ${episodeCount} 个 Episode。`);
+    beginLoading(`正在串行执行${comparisonAxis === 'context_policy' ? '上下文' : comparisonAxis === 'memory_ablation' ? '工具记忆' : comparisonAxis === 'runtime_backend' ? 'Runtime' : comparisonAxis === 'planning' ? '规划' : '恢复策略'}对照，预计 ${episodeCount} 个 Episode。`);
     setErrorMsg(null);
     let started = false;
     try {
@@ -917,8 +943,12 @@ export default function App() {
         max_reference_cost_usd: isFake || expReferenceBudget === '' ? null : expReferenceBudget,
         comparison_axis: comparisonAxis,
         ...(comparisonAxis === 'context_policy' ? { context_policy: contextInput(contextChoice, contextWindow, memoryBytes) } : {}),
-        ...(comparisonAxis === 'memory_ablation' ? { schema_version: '1.6', context_policy: contextInput('memory', memoryAxisWindow, memoryAxisBytes) } : {}),
-        runtime_backend: expRuntimeBackend,
+        ...(comparisonAxis === 'memory_ablation' ? { context_policy: contextInput('memory', memoryAxisWindow, memoryAxisBytes) } : {}),
+        schema_version: comparisonAxis === 'runtime_backend'
+          ? '1.10' : comparisonAxis === 'planning' ? '1.9' : '1.8',
+        tool_call_mode: expCallMode,
+        runtime_backend: comparisonAxis === 'runtime_backend' ? 'handwritten' : expRuntimeBackend,
+        ...(comparisonAxis === 'runtime_backend' ? { runtime_target: expRuntimeTarget } : {}),
         runtime_strategy: expRuntimeStrategy,
         fault_profile: isFake ? expFaultProfile : 'none',
       };
@@ -1082,6 +1112,7 @@ export default function App() {
   const singleAdvancedChangeCount = [
     singleRuntimeStrategy !== 'handwritten',
     singleContextChoice !== 'full',
+    singlePlanning && Boolean(selectedSingleTaskMeta?.supports_planning),
     singleToolTransport === 'mcp' && Boolean(selectedSingleTaskMeta?.supports_mcp),
     maxSteps !== defaultSingleMaxSteps,
     executionSeconds !== 300,
@@ -1107,7 +1138,8 @@ export default function App() {
   };
   const activeReplayEvent = visibleEvents[safeReplayIndex];
   const activeStep = replayView === 'story' ? traceSteps[safeReplayIndex] : undefined;
-  const proposedCall = activeStep?.events.find((event) => event.event_type === 'TOOL_CALL_PROPOSED');
+  const proposedCalls = activeStep?.events.filter((event) => event.event_type === 'TOOL_CALL_PROPOSED') ?? [];
+  const proposedCall = proposedCalls[0];
   const validation = activeStep?.events.find((event) => event.event_type === 'TOOL_CALL_VALIDATED');
   const toolResult = activeStep?.events.find((event) =>
     event.event_type === 'TOOL_SUCCEEDED' || event.event_type === 'TOOL_FAILED');
@@ -1128,7 +1160,9 @@ export default function App() {
     ? validation.payload.error_code : null;
   const validationRejected = Boolean(validationError || validation?.payload.arguments_valid === false
     || validation?.payload.permitted === false);
-  const stepFailed = Boolean(toolResult?.event_type === 'TOOL_FAILED'
+  const stepFailed = Boolean(activeStep?.events.some(event => event.event_type === 'TOOL_FAILED'
+    || event.event_type === 'TOOL_CALL_VALIDATED' && Boolean(event.payload.error_code || event.payload.permitted === false || event.payload.arguments_valid === false))
+    || toolResult?.event_type === 'TOOL_FAILED'
     || validationRejected || finishedEvent?.payload.success === false);
   const visibleFeedback = toolFeedbackFields(toolResult, String(proposedCall?.payload.name ?? ''));
   const visibleStateChanges: [string, unknown][] = keyFields(Object.fromEntries(stateChanges),
@@ -1162,6 +1196,8 @@ export default function App() {
     ? 'context_policy'
     : experiment?.config.comparison_axis === 'memory_ablation'
     ? 'memory_ablation'
+    : experiment?.config.comparison_axis === 'planning'
+    ? 'planning'
     : experiment?.config.comparison_axis === 'runtime_backend'
     ? 'runtime_backend'
     : experiment?.config.comparison_axis === 'recovery_policy'
@@ -1169,11 +1205,15 @@ export default function App() {
       : experiment ? 'recovery_policy' : comparisonAxis;
   const armLeftLabel = activeComparisonAxis === 'context_policy' ? '完整历史'
     : activeComparisonAxis === 'memory_ablation' ? '近期窗口（无记忆）'
+    : activeComparisonAxis === 'planning' ? '无声明计划'
     : activeComparisonAxis === 'runtime_backend' ? 'Reference Runtime' : 'Baseline Policy';
   const armRightLabel = activeComparisonAxis === 'context_policy'
     ? experiment?.config.recovery_agent?.context_policy?.memory_max_bytes !== undefined ? '近期窗口 + 工具记忆' : '最近完整工具轮次'
     : activeComparisonAxis === 'memory_ablation' ? '近期窗口 + 工具记忆'
-    : activeComparisonAxis === 'runtime_backend' ? 'LangGraph Runtime' : 'Recovery Policy';
+    : activeComparisonAxis === 'planning' ? '声明计划'
+    : activeComparisonAxis === 'runtime_backend'
+      ? `${experiment?.config.recovery_agent?.runtime_backend === 'pydantic_ai' ? 'PydanticAI' : 'LangGraph'} Runtime`
+      : 'Recovery Policy';
   const expEpisodeCount =
     expTasks.length * (parsedExpSeeds?.length ?? 0) * expRepeatCount * 2;
   const isExperimentRunReady = Boolean(meta) && Boolean(expModel) && expTasks.length > 0 &&
@@ -1204,18 +1244,28 @@ export default function App() {
       <div className="experiment-setup-grid">
       <div className="experiment-controls">
       <div className="form-group">
+        <label htmlFor="experiment-call-mode" className="form-label">两组共同的工具调用方式</label>
+        <select id="experiment-call-mode" className="form-select" value={expCallMode}
+          onChange={e => setExpCallMode(e.target.value as 'single' | 'serial')} disabled={isLoading}>
+          <option value="serial">多工具：同轮只读调用，按顺序执行</option>
+          <option value="single">单工具：每轮只接受一个调用</option>
+        </select>
+        <p className="form-hint">每批最多8个；每个工具独立校验与计数，提交答案单独调用。</p>
+      </div>
+      <div className="form-group">
         <label htmlFor="comparison-axis" className="form-label">对照变量</label>
         <select
           id="comparison-axis"
           className="form-select"
           value={comparisonAxis}
-          onChange={(e) => setComparisonAxis(e.target.value as 'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation')}
+          onChange={(e) => setComparisonAxis(e.target.value as 'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation' | 'planning')}
           disabled={isLoading}
         >
           <option value="recovery_policy">恢复策略：关闭 vs 一次参数纠错</option>
-          <option value="runtime_backend">执行框架：手写循环 vs LangGraph</option>
+          <option value="runtime_backend">执行框架：Reference vs LangGraph/PydanticAI</option>
           <option value="context_policy">上下文：完整历史 vs 最近完整工具轮次</option>
           <option value="memory_ablation">工具记忆：相同近期窗口 vs 相同窗口+记忆</option>
+          <option value="planning">规划：无声明 vs 声明计划</option>
         </select>
       </div>
 
@@ -1229,9 +1279,22 @@ export default function App() {
               <option value="handwritten_recovery">启用一次参数纠错</option>
             </select>
           </div>
+          <div className="form-group">
+            <label htmlFor="runtime-target" className="form-label">右侧执行框架</label>
+            <select id="runtime-target" className="form-select" value={expRuntimeTarget}
+              onChange={(e) => setExpRuntimeTarget(e.target.value as 'langgraph' | 'pydantic_ai')} disabled={isLoading}>
+              <option value="langgraph">LangGraph</option>
+              <option value="pydantic_ai">PydanticAI</option>
+            </select>
+          </div>
           <div className="strategy-summary" aria-label="Runtime 对照">
             <div><strong>Reference</strong><span>Python 手写调度循环</span></div>
-            <div><strong>LangGraph</strong><span>StateGraph 独立节点调度</span></div>
+            <div>
+              <strong>{expRuntimeTarget === 'pydantic_ai' ? 'PydanticAI' : 'LangGraph'}</strong>
+              <span>{expRuntimeTarget === 'pydantic_ai'
+                ? '框架驱动单步节点，步间由适配器推进'
+                : 'StateGraph 独立节点调度'}</span>
+            </div>
           </div>
         </>
       ) : (
@@ -1282,6 +1345,18 @@ export default function App() {
               </select>
             </div>
             <p className="form-help">只比较记忆开关本身，窗口轮次由两侧共享；Fake 只验证机制，单对探索不证明因果收益。</p>
+          </> : comparisonAxis === 'planning' ? <>
+            <div className="form-group">
+              <label htmlFor="planning-recovery" className="form-label">两组相同的恢复策略</label>
+              <select id="planning-recovery" className="form-select" value={expRuntimeStrategy}
+                onChange={(e) => setExpRuntimeStrategy(e.target.value as 'handwritten' | 'handwritten_recovery')} disabled={isLoading}>
+                <option value="handwritten">关闭参数纠错</option><option value="handwritten_recovery">启用一次参数纠错</option>
+              </select>
+            </div>
+            <p className="form-help">两侧固定完整上下文，仅规划组件变化：左侧无 <code>update_plan</code> 工具、不注入计划；右侧可用 <code>update_plan</code> 声明计划并每轮注入。计划是声明的子目标，不计为已执行。</p>
+            <details className="context-help"><summary>策略说明与限制</summary>
+              <p>计划声明仅记录与回填，真实完成仍由 <code>submit_answer</code> 与环境核验；额外调用与 Token 全部计入右侧自身预算，不另送免费调用。</p>
+            </details>
           </> : <div className="strategy-summary" aria-label="恢复策略对照">
             <div><strong>Baseline</strong><span>参数错误后终止</span></div>
             <div><strong>Recovery</strong><span>INVALID_ARGUMENTS 最多纠错一次</span></div>
@@ -1775,6 +1850,8 @@ export default function App() {
                       ? '只改变模型可见上下文，比较成功率、工具调用、已报告 Token 与耗时；不计算纠错挽救率。'
                       : activeComparisonAxis === 'memory_ablation'
                       ? '左右窗口相同，只切换单任务工具记忆；比较成功率、工具调用、已报告 Token 与耗时，不计算纠错挽救率。'
+                      : activeComparisonAxis === 'planning'
+                      ? '两侧固定完整上下文，只切换规划组件（是否可声明并注入计划）；比较成功率、工具调用、已报告 Token 与耗时，不计算纠错挽救率。'
                       : activeComparisonAxis === 'runtime_backend'
                       ? '比较两个 Runtime 在相同模型、任务、预算和恢复策略下的成功率、用量与耗时。'
                       : '比较恢复策略的成功率、参数错误挽救转化率与额外用量。'}
@@ -1784,7 +1861,9 @@ export default function App() {
                     <div>
                       {activeComparisonAxis === 'context_policy' && <p className="model-note-box" aria-label="已保存上下文对照">完整历史 vs {contextLabel(experiment.config.recovery_agent?.context_policy)} · 保存结果，不随草稿改变</p>}
                       {activeComparisonAxis === 'memory_ablation' && <p className="model-note-box" aria-label="已保存工具记忆对照">相同窗口：{contextLabel(experiment.config.baseline_agent?.context_policy)} vs {contextLabel(experiment.config.recovery_agent?.context_policy)} · 保存结果，不随草稿改变</p>}
+                      {activeComparisonAxis === 'planning' && <p className="model-note-box" aria-label="已保存规划对照">两侧完整上下文：{contextLabel(experiment.config.baseline_agent?.context_policy)} · 左侧无声明，右侧 {experiment.config.recovery_agent?.planning?.algorithm_version ?? '声明计划'} · 保存结果，不随草稿改变</p>}
                       <div className="episode-provenance" aria-label="已保存实验来源">
+                        <span>工具调用：{typeof experiment.config.model === 'object' && experiment.config.model?.tool_call_mode === 'serial' ? '多工具 · 顺序执行' : '单工具'}（两侧相同）</span>
                         <strong>{typeof experiment.config.model === 'string'
                           ? experiment.config.model : experiment.config.model?.model || '历史模型未提供'}</strong>
                         <span>{armLeftLabel} ↔ {armRightLabel}</span>
@@ -1811,6 +1890,15 @@ export default function App() {
                             {experiment.config.provider === 'fake' ? ' Fake 结果只验证机制。' : ' 单次小样本不足以证明稳定优胜。'}</p>
                         </div>
                       )}
+                      {activeComparisonAxis === 'planning' && (
+                        <div className="classroom-result-reading" aria-label="规划实验解读">
+                          <strong>这一场实验说明什么</strong>
+                          <p>同一模型、任务、预算与完整上下文，仅切换右侧规划声明。无声明计划通过 {experiment.metrics.baseline_success_count} / {experiment.metrics.total_pairs}，
+                            声明计划通过 {experiment.metrics.recovery_success_count} / {experiment.metrics.total_pairs}。</p>
+                          <p>计划是模型声明的子目标，不等于已执行；真实完成仍以 <code>submit_answer</code> 与环境核验为准。额外声明调用与 Token 全部计入右侧自身预算。
+                            {experiment.config.provider === 'fake' ? ' Fake 结果只验证机制。' : ' 单次小样本不足以证明稳定优胜。'}</p>
+                        </div>
+                      )}
                       {experiment.config.max_total_tokens != null && (
                         <p className="experiment-reading-note" aria-label="已保存全局 Token 预算">
                           全局 Token 边界预算：{experiment.config.max_total_tokens} · 已报告累计：
@@ -1825,6 +1913,11 @@ export default function App() {
                         durations={[experiment.metrics.baseline_avg_duration_ms, experiment.metrics.recovery_avg_duration_ms]}
                         total={experiment.metrics.total_pairs}
                         counts={[experiment.metrics.baseline_success_count, experiment.metrics.recovery_success_count]} />
+                      <ExperimentReviewSummary experiment={experiment} />
+                      {activeComparisonAxis === 'memory_ablation' && <MemoryPairReview key={experiment.experiment_id}
+                        pairs={experiment.pairs} labels={[armLeftLabel, armRightLabel]} />}
+                      {activeComparisonAxis === 'planning' && <PlanningPairReview key={experiment.experiment_id}
+                        pairs={experiment.pairs} labels={[armLeftLabel, armRightLabel]} />}
                       <div>
                         {/* Retry Recovery Count & Rate */}
                         {activeComparisonAxis === 'recovery_policy' && <div
@@ -2342,6 +2435,7 @@ export default function App() {
                     {([
                       ['handwritten', 'Reference', 'Python 手写控制循环'],
                       ['langgraph', 'LangGraph', '独立图节点调度'],
+                      ['pydantic_ai', 'PydanticAI', '框架节点驱动单步，步间由适配器推进'],
                     ] as const).map(([backend, name, description]) => (
                       <label className="execution-option" key={backend}>
                         <input type="radio" name="single-runtime-backend" value={backend}
@@ -2351,7 +2445,7 @@ export default function App() {
                       </label>
                     ))}
                   </div>
-                  <p className="metric-sub">两种调度方式使用相同工具与评测规则。</p>
+                  <p className="metric-sub">三种调度方式使用相同工具与评测规则；PydanticAI 的步间推进仍由适配器完成。</p>
                 </fieldset>
 
 
@@ -2360,7 +2454,7 @@ export default function App() {
                       <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
                       <span>
                         {currentSingleModelMeta?.name || selectedModel || '请选择模型'}
-                        {' · '}{singleRuntimeBackend === 'langgraph' ? 'LangGraph' : 'Reference'}
+                        {' · '}{singleRuntimeBackend === 'langgraph' ? 'LangGraph' : singleRuntimeBackend === 'pydantic_ai' ? 'PydanticAI' : 'Reference'}
                         {' · '}
                         {singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp
                           ? 'MCP HTTP'
@@ -2413,6 +2507,14 @@ export default function App() {
                     </div>
                   )}
                   <div className="form-group">
+                    <label htmlFor="single-call-mode" className="form-label">工具调用方式</label>
+                    <select id="single-call-mode" className="form-select" value={selectedSuite === 'tool_lab_core' ? singleCallMode : 'single'}
+                      onChange={e => setSingleCallMode(e.target.value as 'single' | 'serial')}
+                      disabled={isLoading || selectedSuite !== 'tool_lab_core'}>
+                      <option value="serial">多工具：同轮只读调用，按顺序执行</option>
+                      <option value="single">单工具：每轮只接受一个调用</option>
+                    </select>
+                    <p className="form-hint">{selectedSuite === 'tool_lab_core' ? '每批最多8个，提交答案单独调用；窗口按完整模型轮次保留。' : '当前BFCL任务按单函数调用评分，使用单工具方式。'}</p>
                     <label htmlFor="single-runtime-policy" className="form-label">参数纠错策略</label>
                     <select id="single-runtime-policy" className="form-select" value={singleRuntimeStrategy}
                       onChange={(e) => setSingleRuntimeStrategy(e.target.value as 'handwritten' | 'handwritten_recovery')} disabled={isLoading}>
@@ -2460,6 +2562,13 @@ export default function App() {
                     </section>
                     <section className="settings-group" aria-labelledby="single-context-heading">
                       <h3 id="single-context-heading">上下文与记忆</h3>
+                      {selectedSingleTaskMeta?.supports_planning && <div className="form-group">
+                        <label className="form-label" htmlFor="single-planning">
+                          <input id="single-planning" type="checkbox" checked={singlePlanning} disabled={isLoading}
+                            onChange={event => setSinglePlanning(event.target.checked)} /> 启用声明计划
+                        </label>
+                        <p className="form-hint">模型可声明、更新子目标；额外调用计入相同预算，声明不代表已执行。</p>
+                      </div>}
                   <ContextSettings prefix="single-context" choice={singleContextChoice} rounds={singleContextWindow} bytes={singleMemoryBytes} disabled={isLoading}
                     onChoice={setSingleContextChoice} onRounds={setSingleContextWindow} onBytes={setSingleMemoryBytes} />
                     </section>
@@ -2528,6 +2637,8 @@ export default function App() {
                     </div>
                   )}
                 </section>
+
+                {artifact && <EpisodeReviewPanel key={artifact.episode.episode_id} artifact={artifact} models={meta?.models ?? []} />}
 
                 {/* Trace Timeline */}
                 <section className="card" id="trace-panel" ref={tracePanelRef} tabIndex={-1} aria-labelledby="trace-title">
@@ -2733,7 +2844,23 @@ export default function App() {
                             <section className="story-sheet">
                               <span className="story-section-label">{proposedCall ? '01 · 模型行动' : initialObservation ? '01 · 任务观察' : '01 · 运行结果'}</span>
                               <h4>{proposedCall ? '选择工具并提交参数' : initialObservation ? '接收任务观察' : '运行结束'}</h4>
-                              {proposedCall ? <>
+                              {proposedCalls.length > 1 ? <div className="story-batch-list" aria-label="本轮工具列表">
+                                <p>本轮 {proposedCalls.length} 个调用，按顺序执行；以下仅展示已记录的事件。</p>
+                                {proposedCalls.map((call, i) => {
+                                  const related = activeStep.events.filter(event => event.payload.call_id === call.payload.call_id);
+                                  const returned = related.find(event => ['TOOL_SUCCEEDED', 'TOOL_FAILED'].includes(event.event_type));
+                                  const checked = related.find(event => event.event_type === 'TOOL_CALL_VALIDATED');
+                                  const rejected = checked?.payload.error_code || checked?.payload.permitted === false || checked?.payload.arguments_valid === false;
+                                  return <section className="story-batch-call" key={String(call.payload.call_id)}>
+                                    <h4>{i + 1}. {String(call.payload.name)}</h4>
+                                    <p className="story-muted">{String(call.payload.call_id)} · {returned ? returned.event_type === 'TOOL_SUCCEEDED' ? '执行成功' : '执行失败'
+                                      : rejected ? `校验拒绝：${String(checked?.payload.error_code ?? '未通过')}`
+                                      : related.some(event => event.event_type === 'TOOL_STARTED') ? '调用已开始，结果待确认' : '未执行'}</p>
+                                    {isRecord(call.payload.arguments) && <ReadableFields entries={Object.entries(call.payload.arguments)} />}
+                                    {returned && <ReadableFields entries={toolFeedbackFields(returned, String(call.payload.name))} />}
+                                  </section>;
+                                })}
+                              </div> : proposedCall ? <>
                                 <div className="story-tool-name">{String(proposedCall.payload.name ?? '未知工具')}</div>
                                 {isRecord(proposedCall.payload.arguments) && Object.keys(proposedCall.payload.arguments).length > 0
                                   ? <ReadableFields entries={Object.entries(proposedCall.payload.arguments)} />
@@ -2744,6 +2871,7 @@ export default function App() {
                               <span className="story-section-label">02 · 校验与反馈</span>
                               <h4>{toolResult?.event_type === 'TOOL_FAILED' || validationRejected
                                 ? '行动未通过' : toolResult ? '工具返回' : '尚无工具反馈'}</h4>
+                              {proposedCalls.length > 1 ? <p>{activeStep.events.filter(e => e.event_type === 'TOOL_SUCCEEDED').length} 个成功返回，{activeStep.events.filter(e => e.event_type === 'TOOL_FAILED').length} 个执行失败；各调用的校验、参数与结果见本轮工具列表。</p> : <>
                               {validation && <p className={`story-validation ${validationRejected ? 'failed' : ''}`}>
                                 工具校验：{validationRejected ? validationError ?? '未通过'
                                   : validation.payload.arguments_valid === true ? '通过' : '未记录结果'}
@@ -2752,6 +2880,7 @@ export default function App() {
                                 ? <ReadableFields entries={visibleFeedback} />
                                 : <p className="story-muted">{validationRejected
                                   ? '工具没有执行。' : initialObservation ? '等待模型选择行动。' : '本步没有工具返回。'}</p>}
+                              </>}
                               {finishedEvent && proposedCall && <p className="story-finish">
                                 终止：{String(finishedEvent.payload.termination_reason ?? '已结束')}
                               </p>}

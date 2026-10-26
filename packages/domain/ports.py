@@ -42,6 +42,7 @@ class ModelProviderError(RuntimeError):
             "REQUEST_TIMEOUT",
             "EMPTY_MODEL_CHOICES",
             "MULTIPLE_TOOL_CALLS",
+            "TOOL_BATCH_TOO_LARGE",
             "INVALID_TOOL_ARGUMENTS",
             "MALFORMED_TOOL_ARGUMENTS",
             "MISSING_TOKEN_USAGE",
@@ -52,8 +53,9 @@ class ModelProviderError(RuntimeError):
         }
     )
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, token_usage: TokenUsage | None = None) -> None:
         self.code = code if code in self.CODES else "PROVIDER_ERROR"
+        self.token_usage = token_usage
         super().__init__(self.code)
 
 

@@ -2178,6 +2178,25 @@ button:focus-visible,
 .experiment-workspace:not(.saved-experiment-grid) .empty-state { padding: 0.5rem; }
 .experiment-workspace .history-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
 .experiment-charts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; margin: 1rem 0; }
+.memory-pair-review { margin: 1rem 0; }
+.memory-pair-review .form-select { width: 100%; }
+.memory-review-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin: 1rem 0; }
+.memory-review-actions > span { color: var(--text-secondary); font-size: 0.875rem; }
+.memory-review-arms { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.memory-review-arm { min-width: 0; border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 1rem; }
+.memory-review-arm h4 { margin: 0; }
+.memory-review-id { font-size: 0.875rem; color: var(--text-secondary); overflow-wrap: anywhere; }
+.memory-review-error { color: var(--error-text); background: var(--error-soft); padding: 0.75rem; border-radius: var(--radius-md); overflow-wrap: anywhere; }
+.memory-review-counts { display: flex; flex-wrap: wrap; gap: 1rem 1.5rem; margin: 1rem 0; }
+.memory-review-counts dt { font-size: 0.875rem; color: var(--text-secondary); }
+.memory-review-counts dd { margin: 0.25rem 0 0; font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.memory-review-counts small { font-size: 0.875rem; font-weight: 400; }
+.memory-read-documents { list-style: none; padding: 0; }
+.memory-read-documents li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color); }
+.memory-read-documents span { min-width: 0; overflow-wrap: anywhere; }
+.memory-read-documents small { display: block; color: var(--text-secondary); }
+.memory-read-documents strong { white-space: nowrap; }
+@media (max-width: 760px) { .memory-review-arms { grid-template-columns: minmax(0, 1fr); } }
 .chart-panel { border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--color-surface); padding: 1.25rem; min-width: 0; }
 .chart-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem 1rem; }
 .chart-heading h3 { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
@@ -2268,4 +2287,186 @@ button:focus-visible,
   .history-reader .persistence-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; flex-direction: initial; }
   .episode-detail-grid { grid-template-columns: minmax(0, 1fr); }
   .episode-details > summary span { display: block; margin: 0.25rem 0 0; }
+}
+.story-stage-grid:has(.story-batch-list) > .story-sheet:first-child { grid-column: 1 / -1; }
+.story-batch-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.story-batch-list > p { grid-column: 1 / -1; }
+.story-batch-call { padding: 1rem; border: 1px solid var(--border-control); border-radius: 12px; overflow-wrap: anywhere; }
+@media (max-width: 767px) { .story-batch-list { grid-template-columns: 1fr; } }
+/* Independent post-hoc review stays visually separate from deterministic scoring. */
+.review-heading,
+.review-baseline,
+.review-item > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.review-heading .card-desc {
+  margin: 0.35rem 0 0;
+  font-weight: 400;
+  line-height: 1.6;
+}
+
+.review-baseline {
+  margin-top: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-secondary);
+}
+
+.review-baseline span,
+.review-item time {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.review-archive,
+.review-citations,
+.review-technical,
+.experiment-review-summary {
+  border-top: 1px solid var(--border-color);
+}
+
+.review-archive > summary,
+.review-citations > summary,
+.review-technical > summary,
+.experiment-review-summary > summary {
+  padding: 0.6rem 0;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.review-technical > summary span,
+.experiment-review-summary > summary span {
+  margin-left: 0.5rem;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.review-archive > summary:focus-visible,
+.review-citations > summary:focus-visible,
+.review-technical > summary:focus-visible,
+.experiment-review-summary > summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.review-judge-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.85rem;
+  padding: 1rem 0;
+}
+
+.review-judge-controls label {
+  display: grid;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.review-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.review-item {
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.review-item > strong {
+  display: block;
+  margin-top: 0.7rem;
+  font-size: 1.05rem;
+}
+
+.review-item p {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
+
+.review-agreement { display: block; margin: 0.3rem 0; color: var(--text-secondary); font-size: 0.875rem; }
+.review-citations { margin-top: 0.75rem; overflow-wrap: anywhere; }
+.review-technical, .review-archive { margin-top: 0.75rem; }
+.review-item .badge { white-space: normal; overflow-wrap: anywhere; }
+
+.review-item dl,
+.review-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin: 0.75rem 0 0;
+}
+
+.review-item dl div,
+.review-summary-grid div {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.65rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-secondary);
+}
+
+.review-item dt,
+.review-summary-grid span {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.review-item dd {
+  margin: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.review-item,
+.review-item dl > div { min-width: 0; }
+.review-item > div:first-child { flex-wrap: wrap; }
+.review-provenance dd { font-size: 0.85rem; }
+
+.review-failure {
+  color: var(--fail-text) !important;
+}
+
+.experiment-review-summary {
+  margin-top: 1rem;
+}
+
+.review-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.review-summary-grid strong {
+  font-size: 1.05rem;
+}
+
+@media (max-width: 760px) {
+  .review-heading,
+  .review-baseline {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .review-judge-controls,
+  .review-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .review-item dl { grid-template-columns: minmax(0, 1fr); }
+
+  .review-technical > summary span,
+  .experiment-review-summary > summary span {
+    display: block;
+    margin: 0.25rem 0 0;
+  }
 }

@@ -63,14 +63,16 @@ def preflight(
         "baseline_backend": "handwritten"
         if request.comparison_axis == "runtime_backend"
         else request.runtime_backend,
-        "recovery_backend": "langgraph"
+        "recovery_backend": (request.runtime_target or "langgraph")
         if request.comparison_axis == "runtime_backend"
         else request.runtime_backend,
         "baseline_strategy": request.runtime_strategy
-        if request.comparison_axis in ("runtime_backend", "context_policy", "memory_ablation")
+        if request.comparison_axis
+        in ("runtime_backend", "context_policy", "memory_ablation", "planning")
         else "handwritten",
         "recovery_strategy": request.runtime_strategy
-        if request.comparison_axis in ("runtime_backend", "context_policy", "memory_ablation")
+        if request.comparison_axis
+        in ("runtime_backend", "context_policy", "memory_ablation", "planning")
         else "handwritten_recovery",
     }
     if any(config.get(key) != value for key, value in expected.items()):
@@ -79,6 +81,8 @@ def preflight(
     for arm in ("baseline", "recovery"):
         if request.comparison_axis == "context_policy" and arm == "baseline":
             expected_policy: ContextPolicy | None = ContextPolicy(mode="full")
+        elif request.comparison_axis == "planning":
+            expected_policy = ContextPolicy(mode="full")
         elif request.comparison_axis == "memory_ablation" and arm == "baseline":
             expected_policy = (
                 ContextPolicy(mode="recent_tool_rounds", max_tool_rounds=policy.max_tool_rounds)
@@ -99,6 +103,13 @@ def preflight(
         )
         for task_id in request.task_ids
     ]
+    tasks = [
+        service._with_call_mode(
+            service._with_document_search(t, request.schema_version == "1.8"),
+            request.tool_call_mode,
+        )
+        for t in tasks
+    ]
     current_tasks = [
         {
             "id": str(task.id),
@@ -115,9 +126,28 @@ def preflight(
     agent_path = DEFAULT_FAKE_AGENT if request.provider == "fake" else DEFAULT_AIHUBMIX_AGENT
     agent = AgentSpec.model_validate_json(agent_path.read_text(encoding="utf-8"))
     agent = service._agent_with_task_capacity(agent, tasks)
+    agent = service._agent_with_call_mode(agent, request.tool_call_mode)
     tool_version = config["tool_set_version"]
     if tool_version not in TOOL_LAB_TOOL_SET_VERSIONS:
         raise ValueError("Regression agent or evaluation protocol changed")
+    if any(t.evaluator_config.get("planning_protocol") == "plan-update-v1" for t in tasks):
+        if tool_version != "v1.6.0":
+            raise ValueError("Planning tasks require the pinned plan-declaration tool profile")
+    elif any(
+        t.evaluator_config.get("document_reference_protocol") == "fact-unit-rule-v1" for t in tasks
+    ) and tool_version != (
+        "v1.5.0"
+        if any(
+            t.evaluator_config.get("document_search_protocol") == "id-first-literal-v1"
+            for t in tasks
+        )
+        else "v1.4.0"
+    ):
+        raise ValueError("Fact-rule tasks require their pinned derived-answer tool profile")
+    if any(
+        t.evaluator_config.get("document_search_protocol") == "id-first-literal-v1" for t in tasks
+    ) and tool_version != service._task_tool_version(tasks):
+        raise ValueError("ID search tasks require their pinned search tool profile")
     agent = agent.model_copy(update={"tool_set_version": tool_version})
     agent = service._agent_with_token_budget(agent, request.token_budget)
     agent = service._agent_with_time_budget(agent, request.max_execution_time_ms)
@@ -130,6 +160,7 @@ def preflight(
         or config["budget"] != agent.budget.model_dump(mode="json")
         or saved_model.get("temperature") != agent.model.temperature
         or saved_model.get("max_tokens") != agent.model.max_tokens
+        or saved_model.get("tool_call_mode") != agent.model.tool_call_mode
         or config["environment_version"] != "tool-lab-m0-v1"
         or config["evaluator"]
         != (

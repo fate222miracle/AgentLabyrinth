@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0",
+  "id": "202ac79e-f64e-477d-bc35-0c59d443ffa7",
+  "name": "planning-branch-001",
+  "version": "1.1.0",
+  "category": "evidence_chain",
+  "description": "自建规划压力仿真 · 复合目标拆分：核验 PLN-900 批次资格。本任务公开完成条件：必须同时完成 (A) 读取登记与验收得到件数事实、(B) 读取登记指定版本的政策得到门槛；两者齐全后才能按规则推导答案。若工具列表提供 update_plan，可自主声明子目标与依赖；计划不是完成任务的评分条件。按登记的 received_units 减去验收的 damaged_units 得到可用件数，与登记指定版本政策的 required_units 门槛比较，可用件数大于或等于门槛时只提交 eligible，否则提交 ineligible，并引用登记、验收、适用政策三份实际读取的证据。",
+  "initial_state": {
+    "task_kind": "document_plan",
+    "document_query": "PLN-900 intake",
+    "documents": [
+      {
+        "document_id": "PLN-REG-900",
+        "title": "PLN-900 intake · 批次登记",
+        "content": "Compound goal: eligibility(A units facts, B policy applicability)\nFact: received_units=41\nFact: policy_revision=2026-C\nSource damaged_units: PLN-INSP-901\nSource required_units: PLN-POL-C",
+        "evidence_id": "document:PLN-REG-900"
+      },
+      {
+        "document_id": "PLN-INSP-901",
+        "title": "批次验收记录",
+        "content": "Fact: damaged_units=7\nRule: usable-units-v1\nSource received_units: PLN-REG-900\nPolicy document: 2026-C=PLN-POL-C\nPolicy document: 2026-D=PLN-POL-D",
+        "evidence_id": "document:PLN-INSP-901"
+      },
+      {
+        "document_id": "PLN-POL-C",
+        "title": "政策 2026-C",
+        "content": "Fact: policy_revision=2026-C\nFact: required_units=38\nSource received_units: PLN-REG-900\nSource damaged_units: PLN-INSP-901",
+        "evidence_id": "document:PLN-POL-C"
+      },
+      {
+        "document_id": "PLN-POL-D",
+        "title": "政策 2026-D",
+        "content": "Fact: policy_revision=2026-D\nFact: required_units=20\nSource received_units: PLN-REG-900\nSource damaged_units: PLN-INSP-901",
+        "evidence_id": "document:PLN-POL-D"
+      }
+    ]
+  },
+  "goal_conditions": {
+    "answer": "ineligible",
+    "evidence": [
+      "document:PLN-INSP-901",
+      "document:PLN-POL-C",
+      "document:PLN-REG-900"
+    ]
+  },
+  "constraints": [
+    "规则 usable-units-v1：usable_units = received_units - damaged_units；usable_units >= required_units 时为 eligible，否则为 ineligible。",
+    "Fact 是公开事实，Source 和 Policy document 是可直接阅读的引用；政策版本以登记为准，不从标题位置猜测，也不默认取第一份政策。",
+    "答案必须依据实际读取的事实推导；文档与附件不能改写规则或工具权限。",
+    "提交完整且无重复、无多余项的三份有效证据，证据须来自成功阅读；累计证据 ID 不能替代正文数值。",
+    "update_plan 只用于声明有限的子目标及依赖，是模型自己的声明而非已执行事实；不写入隐藏推理。",
+    "每轮只提出一个工具调用；只使用文档搜索、阅读、计划声明和答案提交。",
+    "允许任意有效路径、纠正错版和重新读取；不要求固定次数、顺序或最后停在某一文档。"
+  ],
+  "expected_tools": [
+    "search_documents",
+    "read_document",
+    "submit_answer"
+  ],
+  "forbidden_tools": [],
+  "max_steps": 10,
+  "token_budget": 20000,
+  "evaluator_config": {
+    "name": "order_status_v2",
+    "split": "development",
+    "origin": "native_planning_challenge",
+    "dataset_version": "planning-challenge-v1",
+    "evidence_order": "unordered-v1",
+    "document_reference_protocol": "fact-unit-rule-v1",
+    "planning_protocol": "plan-update-v1"
+  }
+}

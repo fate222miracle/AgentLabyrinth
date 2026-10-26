@@ -149,3 +149,7 @@
   .flow-replay:fullscreen .flow-detail { grid-row: 8; }
   .flow-replay:fullscreen .flow-playback-note { grid-row: 9; }
 }
+
+.flow-replay:fullscreen .flow-plan { grid-column: 1 / -1; grid-row: 7; }
+.flow-replay:fullscreen:has(.flow-plan) .flow-detail { grid-row: 8; }
+.flow-replay:fullscreen:has(.flow-plan) .flow-playback-note { grid-row: 9; }

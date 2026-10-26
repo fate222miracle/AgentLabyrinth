@@ -115,7 +115,7 @@ def test_private_goal_cannot_drive_fake_and_forged_evidence_is_rejected(tmp_path
 def test_context_plan_and_legacy_catalog_boundary(tmp_path: Path) -> None:
     """Pin equal capacities on both arms; retain the twelve original tasks."""
     service = EpisodeService(artifacts_dir=tmp_path)
-    assert len(service._load_all_tasks()) == 15
+    assert len(service._load_all_tasks()) == 21
     assert len(list((ROOT / "benchmarks/tool_lab_core/tasks").glob("*.json"))) == 12
     with pytest.raises(ValueError, match="not found"):
         service._get_task("../long_chain/return-evidence-chain-001.json")

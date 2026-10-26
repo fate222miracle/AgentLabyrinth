@@ -3,7 +3,7 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from mcp import Client
 from mcp.server import MCPServer
@@ -14,6 +14,7 @@ from packages.environments.tool_lab.environment import (
     ReadDocumentArgs,
     SearchDocumentsArgs,
     ToolLabEnvironment,
+    search_document_catalog,
 )
 
 MCP_URL = "http://127.0.0.1:8765/mcp"
@@ -36,16 +37,22 @@ server = MCPServer("AgentLabyrinth ToolLab documents")
 
 
 @server.tool()
-def search_documents(task_name: str, query: str, top_k: int) -> dict[str, JsonValue]:
+def search_documents(
+    task_name: str,
+    query: str,
+    top_k: int,
+    search_protocol: Literal["literal-v1", "id-first-literal-v1"] = "literal-v1",
+) -> dict[str, JsonValue]:
     """Search a fixed task's documents and return IDs and titles."""
     args = SearchDocumentsArgs(query=query, top_k=top_k)
-    needle = args.query.casefold()
-    matches = [
-        {"document_id": doc["document_id"], "title": doc["title"]}
-        for doc in _documents(task_name)
-        if needle in str(doc["title"]).casefold() or needle in str(doc["content"]).casefold()
-    ][: args.top_k]
-    return {"documents": cast(JsonValue, matches)}
+    if search_protocol not in ("literal-v1", "id-first-literal-v1"):
+        raise ValueError("Unsupported document search protocol")
+    return search_document_catalog(
+        _documents(task_name),
+        args.query,
+        args.top_k,
+        id_first=search_protocol == "id-first-literal-v1",
+    )
 
 
 @server.tool()
@@ -90,7 +97,11 @@ class MCPToolLabEnvironment(ToolLabEnvironment):
         try:
             return _call_sync(
                 "search_documents",
-                {"task_name": self._remote_task_name, **args.model_dump()},
+                {
+                    "task_name": self._remote_task_name,
+                    **args.model_dump(),
+                    **({"search_protocol": "id-first-literal-v1"} if self._id_search else {}),
+                },
                 self._url,
             )
         except Exception as exc:

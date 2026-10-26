@@ -16,6 +16,9 @@ export const fieldLabels: Record<string, string> = {
   title: '标题', content: '内容', feedback: '反馈',
   submission: '提交内容', accepted: '已接受', proposed_call: '已提交调用',
   table: '数据表', filters: '筛选条件', query: '检索词', top_k: '返回上限',
+  search_mode: '检索方式', hint: '检索建议',
+  items: '计划项', plan: '计划声明', goal: '子目标', depends_on: '依赖子目标',
+  planning_overlay_messages_count: '额外计划消息数',
   description: '任务说明', question: '任务问题', done: '任务结束',
   termination_reason: '终止原因', detail: '详情', success: '成功',
 };
@@ -37,6 +40,7 @@ export function ReadableFields({ entries }: { entries: [string, unknown][] }) {
   return <dl className="story-fields">{entries.map(([key, value]) =>
     <div className="story-field" key={key}>
       <dt title={key}>{fieldLabels[key] ?? key.replace(/_/g, ' ')}</dt>
-      <dd><ReadableValue value={value} /></dd>
+      <dd><ReadableValue value={key === 'status' && typeof value === 'string'
+        ? ({ pending: '声明待办', active: '声明进行中', done: '声明完成', cancelled: '声明取消' }[value] ?? value) : value} /></dd>
     </div>)}</dl>;
 }

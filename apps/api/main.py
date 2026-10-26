@@ -12,8 +12,11 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from apps.api.schemas import (
     CreateEpisodeRequest,
+    CreateEpisodeReviewRequest,
     CreateExperimentRequest,
     EpisodeResponse,
+    EpisodeReviewListResponse,
+    EpisodeReviewResponse,
     ErrorResponse,
     ExperimentDashboardResponse,
     ExperimentJobState,
@@ -320,6 +323,62 @@ async def get_episode(
         request_id=uuid4(),
         artifact=artifact,
     )
+
+
+@app.post(
+    "/api/v1/episode-reviews",
+    response_model=EpisodeReviewResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create an explicit post-hoc Episode review",
+)
+async def create_episode_review(
+    req: CreateEpisodeReviewRequest,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> EpisodeReviewResponse:
+    """Create one versioned human, Fake or explicitly selected real Judge review."""
+    try:
+        review = await service.create_episode_review(req)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return EpisodeReviewResponse(request_id=req.request_id, review=review)
+
+
+@app.get(
+    "/api/v1/episode-reviews/{review_id}",
+    response_model=EpisodeReviewResponse,
+    summary="Read one saved Episode review without invoking a Judge",
+)
+async def get_episode_review(
+    review_id: UUID,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> EpisodeReviewResponse:
+    """Read and source-check one immutable review."""
+    try:
+        review = await asyncio.to_thread(service.get_episode_review, review_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if review is None:
+        raise HTTPException(status_code=404, detail=f"Review '{review_id}' not found.")
+    return EpisodeReviewResponse(request_id=uuid4(), review=review)
+
+
+@app.get(
+    "/api/v1/episodes/{episode_id}/reviews",
+    response_model=EpisodeReviewListResponse,
+    summary="List saved reviews for one Episode without invoking a Judge",
+)
+async def list_episode_reviews(
+    episode_id: UUID,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> EpisodeReviewListResponse:
+    """Return only persisted reviews for the requested source Episode."""
+    try:
+        reviews = await asyncio.to_thread(service.list_episode_reviews, episode_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return EpisodeReviewListResponse(request_id=uuid4(), episode_id=episode_id, reviews=reviews)
 
 
 @app.post(

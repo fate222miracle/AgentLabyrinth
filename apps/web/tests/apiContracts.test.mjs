@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { dashboardSchema, episodeResponseSchema, experimentArtifactSchema, jobSchema,
-  parseApi, requireIdentity, resumableIdsSchema, traceEventSchema } from '../src/apiContracts.ts';
+  episodeReviewListResponseSchema, episodeReviewResponseSchema, parseApi, requireIdentity,
+  resumableIdsSchema, traceEventSchema } from '../src/apiContracts.ts';
 import { readApi, readEpisode } from '../src/apiClient.ts';
 import { episodeId, episodeResponse, job, trace } from './apiFixtures.mjs';
 
@@ -42,6 +43,35 @@ test('bad Job, lists, payloads and dashboard never masquerade as empty success',
   assert.throws(() => parseApi(resumableIdsSchema, ['not-an-id']), /校验失败/);
   assert.throws(() => parseApi(traceEventSchema, { ...trace(), payload: [] }), /校验失败/);
   assert.throws(() => parseApi(dashboardSchema, { schema_version: '1.1', items: {}, skipped_count: 0 }), /校验失败/);
+});
+
+test('independent reviews preserve attribution and reject contradictory status', () => {
+  const review = {
+    schema_version: '1.0', review_id: '10000000-0000-4000-8000-000000000011',
+    episode_id: episodeId, episode_content_hash: 'a'.repeat(64), review_input_hash: 'b'.repeat(64),
+    created_at: '2026-10-22T08:00:00Z', method: 'human', rubric_version: 'tool-lab-review-v1',
+    status: 'completed', verdict: 'pass', answer_correctness: 'pass', evidence_support: 'pass',
+    process_safety: 'pass', rationale: 'Trace 与提交一致。', event_ids: [], reviewer_label: '课堂复核',
+    provider: null, model: null, prompt_version: null, token_usage: null, estimated_cost: null,
+    failure_code: null,
+  };
+  const response = { schema_version: '1.0', request_id: '10000000-0000-4000-8000-000000000012', review };
+  assert.equal(parseApi(episodeReviewResponseSchema, response).review.verdict, 'pass');
+  for (const prompt_version of ['episode-review-v1', 'episode-review-v2']) {
+    const judge = { ...review, method: 'llm_judge', reviewer_label: null,
+      provider: 'fake', model: 'fake-judge-v1', prompt_version };
+    assert.equal(parseApi(episodeReviewResponseSchema, { ...response, review: judge })
+      .review.prompt_version, prompt_version);
+    assert.throws(() => parseApi(episodeReviewResponseSchema, {
+      ...response, review: { ...judge, prompt_version: 'episode-review-v3' },
+    }), /校验失败/);
+  }
+  assert.equal(parseApi(episodeReviewListResponseSchema, {
+    ...response, episode_id: episodeId, reviews: [review], review: undefined,
+  }).reviews.length, 1);
+  assert.throws(() => parseApi(episodeReviewResponseSchema, {
+    ...response, review: { ...review, status: 'failed', failure_code: 'JUDGE_PROVIDER_ERROR' },
+  }), /校验失败/);
 });
 
 test('duplicate pair ownership cannot reuse an Episode or leave an orphan result', () => {
@@ -128,6 +158,52 @@ test('bounded memory sub-version survives history and cannot silently become an 
     const corrupt = structuredClone(value);
     Object.assign(corrupt.artifact.agent.context_policy, change);
     assert.throws(() => parseApi(episodeResponseSchema, corrupt), /校验失败/);
+  }
+});
+
+test('declared plan requires the additive Agent revision and a pinned algorithm', () => {
+  const value = episodeResponse();
+  value.artifact.agent.schema_version = '1.3';
+  value.artifact.agent.planning = { schema_version: '1.0', algorithm_version: 'plan-update-v1' };
+  assert.equal(parseApi(episodeResponseSchema, value).artifact.agent.planning.algorithm_version, 'plan-update-v1');
+  const wrongRevision = structuredClone(value); wrongRevision.artifact.agent.schema_version = '1.2';
+  assert.throws(() => parseApi(episodeResponseSchema, wrongRevision), /校验失败/);
+  const wrongAlgorithm = structuredClone(value); wrongAlgorithm.artifact.agent.planning.algorithm_version = 'future-v9';
+  assert.throws(() => parseApi(episodeResponseSchema, wrongAlgorithm), /校验失败/);
+});
+
+test('planning result requires revision 1.6, a declared right arm and no recovery metrics', () => {
+  const legacy = JSON.parse(readFileSync(new URL('../../../tests/fixtures/legacy_experiment.json', import.meta.url)));
+  legacy.schema_version = '1.6';
+  legacy.config.comparison_axis = 'planning';
+  legacy.config.baseline_agent = { runtime_backend: 'handwritten', runtime_strategy: 'handwritten',
+    runtime_version: 'reference-v2', recovery_policy: 'none', planning: null, context_policy: {
+    schema_version: '1.0', algorithm_version: 'tool-round-window-v1', mode: 'full', max_tool_rounds: null,
+  } };
+  legacy.config.recovery_agent = { ...legacy.config.baseline_agent, planning: {
+    schema_version: '1.0', algorithm_version: 'plan-update-v1',
+  } };
+  for (const pair of legacy.pairs) { pair.retry_eligible = null; pair.recovered = false; }
+  legacy.metrics.retry_eligible_count = null;
+  legacy.metrics.retry_recovery_count = null;
+  legacy.metrics.retry_recovery_rate = null;
+  const parsed = parseApi(experimentArtifactSchema, legacy);
+  assert.equal(parsed.config.comparison_axis, 'planning');
+  assert.equal(parsed.config.recovery_agent.planning.algorithm_version, 'plan-update-v1');
+  assert.equal(parsed.config.baseline_agent.planning, null);
+  for (const corrupt of [
+    (v) => { v.schema_version = '1.5'; },
+    (v) => { v.config.comparison_axis = 'memory_ablation'; },
+    (v) => { delete v.config.comparison_axis; },
+    (v) => { v.config.baseline_agent.planning = structuredClone(v.config.recovery_agent.planning); },
+    (v) => { v.config.recovery_agent.planning = null; },
+    (v) => { v.config.recovery_agent.context_policy = { ...v.config.recovery_agent.context_policy, mode: 'recent_tool_rounds', max_tool_rounds: 1 }; },
+    (v) => { v.config.recovery_agent.runtime_backend = 'langgraph'; },
+    (v) => { v.metrics.retry_recovery_rate = 0; },
+    (v) => { v.pairs[0].recovered = true; },
+  ]) {
+    const invalid = structuredClone(legacy); corrupt(invalid);
+    assert.throws(() => parseApi(experimentArtifactSchema, invalid));
   }
 });
 

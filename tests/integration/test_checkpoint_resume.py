@@ -43,6 +43,8 @@ def inputs(backend: str, recovery: bool = False) -> tuple[AgentSpec, TaskSpec, R
         update={
             "runtime_backend": backend,
             "runtime_strategy": "handwritten_recovery" if recovery else "handwritten",
+            # The third backend joins at the additive Agent revision (ADR-038).
+            "schema_version": "1.4" if backend == "pydantic_ai" else "1.1",
         }
     )
     task = TaskSpec.model_validate_json(
@@ -83,7 +85,7 @@ def child(backend: str, artifacts: Path, scenario: str = "success") -> None:
     raise AssertionError("Child failed to stop after the first tool")
 
 
-@pytest.mark.parametrize("backend", ["handwritten", "langgraph"])
+@pytest.mark.parametrize("backend", ["handwritten", "langgraph", "pydantic_ai"])
 def test_resume_across_processes(backend: str, tmp_path: Path) -> None:
     """Committed tool, budget and Trace survive while one final event is produced."""
     result = subprocess.run(

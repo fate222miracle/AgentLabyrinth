@@ -12,11 +12,13 @@ export interface FlowFrame {
   transport: 'mcp' | 'local' | 'unknown';
   failed: boolean;
   payload: Record<string, unknown>;
+  batchIndex?: number;
+  batchSize?: number;
 }
 
 /** Derive ordered visual beats from recorded calls, never invent tool execution. */
 export function flowFrames(events: TraceStepEvent[], environmentVersion: string): FlowFrame[] {
-  const calls = new Map<string, { tool: string; transport: FlowFrame['transport']; arguments: FlowFrame['arguments'] }>();
+  const calls = new Map<string, { tool: string; transport: FlowFrame['transport']; arguments: FlowFrame['arguments']; batchIndex?: number; batchSize?: number }>();
   const frames: FlowFrame[] = [];
   const record = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -25,12 +27,14 @@ export function flowFrames(events: TraceStepEvent[], environmentVersion: string)
     const id = String(event.payload.call_id ?? '');
     if (event.event_type === 'TOOL_CALL_PROPOSED') {
       calls.set(id, { tool: String(event.payload.name ?? '未知工具'), transport: 'unknown',
+        batchIndex: typeof event.payload.batch_index === 'number' ? event.payload.batch_index : undefined,
+        batchSize: typeof event.payload.batch_size === 'number' ? event.payload.batch_size : undefined,
         arguments: record(event.payload.arguments) ? event.payload.arguments : null });
     }
     const call = calls.get(id);
     if (event.event_type === 'TOOL_STARTED' && call) {
       call.transport = event.payload.transport === 'mcp' ? 'mcp'
-        : environmentVersion === 'tool-lab-m0-v1' || (environmentVersion === 'tool-lab-mcp-v1' && call.tool === 'submit_answer')
+        : event.payload.transport === 'local' || environmentVersion === 'tool-lab-m0-v1' || (environmentVersion === 'tool-lab-mcp-v1' && ['submit_answer', 'update_plan'].includes(call.tool))
           ? 'local' : 'unknown';
     }
     let phase: FlowFrame['phase'] | null = null;
@@ -45,6 +49,7 @@ export function flowFrames(events: TraceStepEvent[], environmentVersion: string)
     if (['EPISODE_STARTED', 'OBSERVATION_CREATED'].includes(event.event_type)) phase = 'observe';
     if (event.event_type === 'MODEL_REQUESTED') phase = 'request';
     if (event.event_type === 'MODEL_RESPONDED') phase = 'respond';
+    if (event.event_type === 'PLAN_UPDATED') { phase = 'update'; stateChanges = [['plan', event.payload.items]]; }
     if (event.event_type === 'TOOL_CALL_PROPOSED') phase = 'choose';
     if (event.event_type === 'TOOL_STARTED' && call) phase = 'execute';
     if (['TOOL_SUCCEEDED', 'TOOL_FAILED'].includes(event.event_type) && call) phase = 'return';
@@ -56,8 +61,10 @@ export function flowFrames(events: TraceStepEvent[], environmentVersion: string)
       arguments: call?.arguments ?? null,
       feedback: phase === 'return' ? toolFeedbackFields(event, call?.tool ?? '') : [],
       stateChanges, tool: call?.tool ?? null,
+      batchIndex: call?.batchIndex, batchSize: call?.batchSize,
       transport: call?.transport ?? 'unknown', failed: phase === 'reject'
-        || event.event_type === 'TOOL_FAILED' || event.payload.success === false, payload: event.payload });
+        || event.event_type === 'TOOL_FAILED' || event.payload.success === false
+        || (phase === 'respond' && event.payload.action_kind === 'rejected'), payload: event.payload });
   }
   return frames;
 }
@@ -198,4 +205,12 @@ export function documentEvidence(events: TraceStepEvent[], cutoff: number) {
   }
   for (const doc of docs.values()) doc.cited = doc.evidenceId !== null && citations.includes(doc.evidenceId);
   return { documents: [...docs.values()], activeId, readCursor };
+}
+
+/** Missing historical Trace is unknown; otherwise reuse the shelf's actual read outcomes. */
+export function savedDocumentReads(events: TraceStepEvent[]) {
+  if (events[0]?.event_type !== 'EPISODE_STARTED' || events.at(-1)?.event_type !== 'EPISODE_FINISHED') return null;
+  const documents = documentEvidence(events, events.length - 1).documents.filter(doc => doc.readCount > 0);
+  return { documents, total: documents.reduce((sum, doc) => sum + doc.readCount, 0),
+    repeated: documents.reduce((sum, doc) => sum + doc.readCount - 1, 0) };
 }

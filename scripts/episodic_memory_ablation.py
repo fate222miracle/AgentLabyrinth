@@ -16,6 +16,7 @@ from packages.evaluation.order_status import OrderStatusEvaluator
 from packages.providers.fake import FakeModelProvider
 from packages.runtime.factory import create_runtime
 from scripts.context_ablation import load_inputs
+from scripts.review_memory import successful_document_reads
 
 
 async def run_ablation(directory: Path) -> list[dict[str, object]]:
@@ -141,28 +142,7 @@ async def run_window_pair(
         if fixed is not None and current != fixed:
             raise ValueError("Memory comparison changed a fixed variable")
         fixed = current
-        proposals = {
-            event.payload["call_id"]: event.payload
-            for event in artifact.events
-            if event.event_type == EventType.TOOL_CALL_PROPOSED
-        }
-        reads = []
-        for event in artifact.events:
-            if event.event_type != EventType.TOOL_SUCCEEDED:
-                continue
-            call = proposals.get(event.payload.get("call_id"))
-            if call is not None and call.get("name") == "read_document":
-                arguments = call.get("arguments")
-                observation = event.payload.get("observation")
-                result = observation.get("result") if isinstance(observation, dict) else None
-                document = result.get("document") if isinstance(result, dict) else None
-                if (
-                    isinstance(arguments, dict)
-                    and isinstance(arguments.get("document_id"), str)
-                    and isinstance(document, dict)
-                    and document.get("document_id") == arguments["document_id"]
-                ):
-                    reads.append(arguments["document_id"])
+        reads = [row["document_id"] for row in successful_document_reads(artifact.events)]
         row: dict[str, object] = {
             "strategy": label,
             "episode_id": str(episode.episode_id),

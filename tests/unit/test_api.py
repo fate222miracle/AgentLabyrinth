@@ -235,7 +235,7 @@ def test_get_meta_returns_all_native_tasks(client: TestClient) -> None:
         )
     }
     assert {task["id"] for task in native_tasks} == expected
-    assert len(native_tasks) == 15
+    assert len(native_tasks) == 21
 
 
 def test_create_and_get_experiment(client: TestClient, temp_artifacts_dir: Path) -> None:
@@ -416,6 +416,75 @@ def test_execution_time_is_saved_and_read_back(client: TestClient) -> None:
             ).status_code
             == 422
         )
+
+
+def test_third_runtime_requires_its_additive_revisions(client: TestClient) -> None:
+    """The PydanticAI backend is only reachable through the revisions that declare it."""
+    payload = {
+        "provider": "fake",
+        "model": "fake-model",
+        "scenario": "success",
+        "task_ids": ["order-status-001"],
+        "comparison_axis": "runtime_backend",
+        "tool_call_mode": "single",
+    }
+    legacy = client.post("/api/v1/experiments", json={**payload, "schema_version": "1.8"})
+    assert legacy.status_code == 201
+    assert legacy.json()["experiment"]["config"]["recovery_agent"]["runtime_backend"] == "langgraph"
+    assert legacy.json()["experiment"]["schema_version"] == "1.2"
+
+    third = client.post(
+        "/api/v1/experiments",
+        json={**payload, "schema_version": "1.10", "runtime_target": "pydantic_ai"},
+    )
+    assert third.status_code == 201
+    experiment = third.json()["experiment"]
+    assert experiment["schema_version"] == "1.7"
+    assert experiment["config"]["baseline_agent"]["runtime_backend"] == "handwritten"
+    assert experiment["config"]["recovery_agent"]["runtime_backend"] == "pydantic_ai"
+    episode = client.get(f"/api/v1/episodes/{experiment['episode_ids'][1]}").json()["artifact"]
+    assert episode["agent"]["schema_version"] == "1.4"
+    assert episode["run_config"]["runtime_version"] == "pydantic-ai-slim-2.57.0"
+
+    assert (
+        client.post(
+            "/api/v1/experiments",
+            json={**payload, "schema_version": "1.8", "runtime_target": "pydantic_ai"},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/api/v1/experiments",
+            json={**payload, "schema_version": "1.10", "runtime_target": "handwritten"},
+        ).status_code
+        == 422
+    )
+    single = client.post(
+        "/api/v1/episodes",
+        json={
+            "provider": "fake",
+            "model": "fake-model",
+            "scenario": "success",
+            "runtime_backend": "pydantic_ai",
+            "schema_version": "1.7",
+        },
+    )
+    assert single.status_code == 201
+    assert single.json()["artifact"]["agent"]["schema_version"] == "1.4"
+    assert (
+        client.post(
+            "/api/v1/episodes",
+            json={
+                "provider": "fake",
+                "model": "fake-model",
+                "scenario": "success",
+                "runtime_backend": "pydantic_ai",
+                "schema_version": "1.6",
+            },
+        ).status_code
+        == 422
+    )
 
 
 def test_bfcl_episode_whitelist_and_readback_do_not_recall_model(

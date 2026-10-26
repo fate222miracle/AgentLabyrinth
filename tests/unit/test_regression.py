@@ -1,5 +1,6 @@
 """Fixed-suite comparison rejects mixed protocols and reports per-cell regressions."""
 
+import asyncio
 from pathlib import Path
 from uuid import uuid4
 
@@ -63,3 +64,31 @@ def test_preflight_rejects_task_or_model_change_before_execution(tmp_path: Path)
     )
     with pytest.raises(ValueError, match="task version"):
         preflight(changed, request, service)
+
+
+@pytest.mark.parametrize("target", [None, "langgraph", "pydantic_ai"])
+def test_preflight_pins_runtime_target(tmp_path: Path, target: str | None) -> None:
+    """Honor explicit targets while retaining the legacy LangGraph default."""
+    service = EpisodeService(artifacts_dir=tmp_path)
+    request = CreateExperimentRequest.model_validate(
+        {
+            "schema_version": "1.5" if target is None else "1.10",
+            "provider": "fake",
+            "model": "fake-model",
+            "scenario": "success",
+            "task_ids": ["order-status-001"],
+            "comparison_axis": "runtime_backend",
+            **({"runtime_target": target} if target is not None else {}),
+        }
+    )
+    baseline = asyncio.run(service.execute_experiment(request))
+    preflight(baseline, request, service)
+    other = CreateExperimentRequest.model_validate(
+        {
+            **request.model_dump(mode="json"),
+            "schema_version": "1.10",
+            "runtime_target": "langgraph" if target == "pydantic_ai" else "pydantic_ai",
+        }
+    )
+    with pytest.raises(ValueError, match="pinned baseline"):
+        preflight(baseline, other, service)

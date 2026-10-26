@@ -4,7 +4,7 @@ import { Background, BaseEdge, Controls, Handle, MarkerType, Position, ReactFlow
 import '@xyflow/react/dist/style.css';
 import { documentEvidence, flowFrames, flowPath, frameIndexAt, type FlowFrame } from './flowFrames';
 import { DocumentEvidence } from './DocumentEvidence';
-import type { TraceStepEvent } from './traceSteps';
+import { latestDeclaredPlan, type TraceStepEvent } from './traceSteps';
 import { ReadableFields } from './ReadableFields';
 import { useContentMotion } from './useContentMotion';
 import './flowReplay.css';
@@ -162,6 +162,7 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
     { label: '目标订单', value: initialInput.target_order_id },
   ].filter((item): item is { label: string; value: string } => typeof item.value === 'string' && item.value.length > 0);
   const cutoff = following ? frame?.eventIndex ?? -1 : eventIndex;
+  const declaredPlan = latestDeclaredPlan(events, cutoff);
   const documents = useMemo(() => documentEvidence(isToolLab ? events : [], cutoff), [events, cutoff, isToolLab]);
   const hasDocuments = documents.documents.length > 0;
   const path = useMemo(() => flowPath(frames, cutoff), [frames, cutoff]);
@@ -209,7 +210,8 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
       width: 224, height: 152, type: 'visual', ariaLabel: `Step ${beat.step} · ${node.kind === 'tool' ? beat.tool ?? '调用校验' : node.kind === 'model' ? '模型请求' : node.kind === 'task' ? '接收任务' : '运行结束'} · ${status}`,
       data: { title: node.kind === 'model' ? '模型请求' : node.kind === 'task' ? '接收任务' : node.kind === 'finish' ? isBfcl && hasRecordedCall ? '函数调用输出' : recordedAnswer !== null ? '任务答案' : '运行结束' : toolLabels[beat.tool ?? ''] ?? beat.tool ?? '调用校验',
         subtitle: node.kind === 'model' ? model : node.kind === 'task' ? '任务输入与初始观察' : node.kind === 'finish' ? isBfcl && hasRecordedCall ? callLabel(recordedCall) : recordedAnswer ?? String(beat.payload.termination_reason ?? '终止原因未记录') : beat.tool === 'read_document' && typeof beat.arguments?.document_id === 'string' ? beat.arguments.document_id : beat.tool ?? '工具名未记录',
-        kind: node.kind === 'tool' ? beat.tool ?? 'gateway' : node.kind, step: beat.step, status, active: activeNode === node.id,
+        kind: node.kind === 'tool' ? beat.tool ?? 'gateway' : node.kind, step: beat.step,
+        status: beat.batchSize ? `同轮 ${beat.batchIndex}/${beat.batchSize} · ${status}` : status, active: activeNode === node.id,
         complete: !beat.failed && ['respond', 'return', 'observe'].includes(beat.phase), failed: beat.failed, frameIndex: node.frameIndex,
         transport: node.kind !== 'tool' || isBfcl ? '' : beat.phase === 'reject' ? '未执行' : beat.phase === 'choose' ? '待校验'
           : beat.transport === 'mcp' ? 'MCP HTTP' : beat.transport === 'local' ? '本地' : '传输未记录' } };
@@ -279,7 +281,10 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
             'memory_max_bytes', 'memory_entries_count', 'memory_omitted_entries_count', 'memory_bytes', 'memory_source_call_ids'].includes(key))} />
         <p>字节仅为序列化消息 UTF-8 大小，不是 Token 或 HTTP 包大小；完整历史仍保留。</p>
       </section>}
-      {frame.phase === 'respond' && <p>已收到模型响应，后续调用以记录的校验与执行事件为准。</p>}
+      {frame.phase === 'respond' && <p>{frame.payload.action_kind === 'rejected'
+        ? `响应被拒绝：${String(frame.payload.error_code ?? '协议错误')}；没有执行本轮工具。`
+        : typeof frame.payload.tool_calls_count === 'number' ? `本轮提出 ${frame.payload.tool_calls_count} 个工具调用，校验通过后按顺序执行。`
+        : '已收到模型响应，后续调用以记录的校验与执行事件为准。'}</p>}
       {frame.phase === 'reject' && <section><h4>校验未通过 · 工具未执行</h4>
         <ReadableFields entries={['error_code', 'message', 'arguments_valid', 'permitted']
           .filter((key) => key in frame.payload).map((key) => [key, frame.payload[key]])} /></section>}
@@ -327,6 +332,12 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
         {!live && (isBfcl || answer === null) && <span className="flow-bookend-meta">{termination}{detail ? ` · ${detail}` : ''}</span>}
       </div>
     </div>
+    {declaredPlan && <section className="flow-bookend flow-plan" aria-label="当前计划声明"><div>
+      <span className="flow-bookend-label">当前计划 · 模型声明</span>
+      <p>这是子目标声明，状态由模型填写；实际完成以工具返回和任务评测为准。</p>
+      <div className="story-value-list">{Array.isArray(declaredPlan.payload.items) && declaredPlan.payload.items.map((item, i) =>
+        <div className="story-value-item" key={i}><ReadableFields entries={Object.entries(savedRecord(item)).filter(([key]) => key !== 'schema_version')} /></div>)}</div>
+    </div></section>}
     <details className="flow-detail"><summary>查看当前记录</summary><pre>{JSON.stringify(frame.payload, null, 2)}</pre></details>
   </section>;
 }

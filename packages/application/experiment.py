@@ -23,6 +23,7 @@ from packages.domain.models import (
     ContextPolicy,
     EpisodeArtifact,
     EventType,
+    PlanningConfig,
     RunConfig,
     TaskSpec,
     TerminationReason,
@@ -38,7 +39,9 @@ from packages.runtime.factory import create_runtime, runtime_version
 from packages.tools.executor import ToolExecutor
 from packages.tools.registry import DefaultToolValidator
 
-ComparisonAxis = Literal["recovery_policy", "runtime_backend", "context_policy", "memory_ablation"]
+ComparisonAxis = Literal[
+    "recovery_policy", "runtime_backend", "context_policy", "memory_ablation", "planning"
+]
 
 
 class PairComparison(BaseModel):
@@ -138,7 +141,7 @@ class ExperimentArtifact(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = "1.2"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] = "1.2"
     experiment_id: UUID
     created_at: str
     config: dict[str, Any]
@@ -154,8 +157,69 @@ class ExperimentArtifact(BaseModel):
             "1.3",
             "1.4",
             "1.5",
+            "1.6",
+            "1.7",
         ):
             raise ValueError("Global Token budget requires experiment revision 1.3")
+        if self.schema_version == "1.7" and self.config.get("comparison_axis") != "runtime_backend":
+            raise ValueError("Experiment revision 1.7 supports only the Runtime comparison")
+        if self.config.get("comparison_axis") == "runtime_backend":
+            arms = (self.config.get("baseline_agent"), self.config.get("recovery_agent"))
+            backends = tuple(
+                arm.get("runtime_backend") if isinstance(arm, dict) else None for arm in arms
+            )
+            if "pydantic_ai" in backends and self.schema_version != "1.7":
+                raise ValueError("PydanticAI Runtime comparison requires experiment revision 1.7")
+            if "pydantic_ai" in backends and backends != ("handwritten", "pydantic_ai"):
+                raise ValueError("PydanticAI Runtime comparison requires Reference on the left")
+        if self.schema_version == "1.6" and self.config.get("comparison_axis") != "planning":
+            raise ValueError("Experiment revision 1.6 supports only the planning challenge")
+        if self.config.get("comparison_axis") == "planning":
+            if self.schema_version != "1.6":
+                raise ValueError("Planning challenge requires experiment revision 1.6")
+            left_arm = self.config.get("baseline_agent")
+            right_arm = self.config.get("recovery_agent")
+            if not isinstance(left_arm, dict) or not isinstance(right_arm, dict):
+                raise ValueError("Planning challenge requires both saved arm configurations")
+            if left_arm.get("planning") is not None:
+                raise ValueError("Planning challenge requires a plain baseline")
+            PlanningConfig.model_validate(right_arm.get("planning"))
+            if any(
+                left_arm.get(field) is None or left_arm.get(field) != right_arm.get(field)
+                for field in (
+                    "runtime_backend",
+                    "runtime_strategy",
+                    "runtime_version",
+                    "recovery_policy",
+                )
+            ):
+                raise ValueError("Planning challenge requires the same Runtime and recovery policy")
+            if (
+                left_arm["runtime_backend"] not in ("handwritten", "langgraph")
+                or left_arm["runtime_strategy"] not in ("handwritten", "handwritten_recovery")
+                or not isinstance(left_arm["runtime_version"], str)
+                or not left_arm["runtime_version"]
+                or left_arm["recovery_policy"]
+                != (
+                    "invalid_arguments_once"
+                    if left_arm["runtime_strategy"] == "handwritten_recovery"
+                    else "none"
+                )
+            ):
+                raise ValueError("Planning challenge requires valid Runtime provenance")
+            left_context = ContextPolicy.model_validate(left_arm.get("context_policy"))
+            right_context = ContextPolicy.model_validate(right_arm.get("context_policy"))
+            if left_context != right_context or left_context.mode != "full":
+                raise ValueError("Planning challenge requires the same full context on both arms")
+            if any(pair.retry_eligible is not None or pair.recovered for pair in self.pairs) or any(
+                value is not None
+                for value in (
+                    self.metrics.retry_eligible_count,
+                    self.metrics.retry_recovery_count,
+                    self.metrics.retry_recovery_rate,
+                )
+            ):
+                raise ValueError("Planning challenge has no recovery metrics")
         if self.schema_version == "1.5" and self.config.get("comparison_axis") != "memory_ablation":
             raise ValueError("Experiment revision 1.5 supports only memory ablation")
         if self.config.get("comparison_axis") == "memory_ablation":
@@ -232,7 +296,7 @@ class ExperimentCheckpoint(BaseModel):
     """Frozen paired-run plan; completed Episode artifacts are the progress ledger."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = "1.0"
     experiment_id: UUID
     created_at: str
     baseline_agent: AgentSpec
@@ -253,18 +317,41 @@ class ExperimentCheckpoint(BaseModel):
             "1.1",
             "1.2",
             "1.3",
+            "1.4",
+            "1.5",
         ):
             raise ValueError("Global Token budget requires experiment plan revision 1.1")
+        if self.comparison_axis == "runtime_backend" and "pydantic_ai" in (
+            self.baseline_agent.runtime_backend,
+            self.recovery_agent.runtime_backend,
+        ):
+            if self.schema_version != "1.5":
+                raise ValueError("PydanticAI Runtime comparison requires plan revision 1.5")
+        if self.schema_version == "1.5" and (
+            self.comparison_axis != "runtime_backend"
+            or "pydantic_ai"
+            not in (
+                self.baseline_agent.runtime_backend,
+                self.recovery_agent.runtime_backend,
+            )
+        ):
+            raise ValueError("Plan revision 1.5 supports only the PydanticAI Runtime comparison")
         if self.comparison_axis == "context_policy" and self.schema_version != "1.2":
             raise ValueError("Context comparison requires plan revision 1.2")
         if self.comparison_axis == "memory_ablation" and self.schema_version != "1.3":
             raise ValueError("Memory ablation requires plan revision 1.3")
         if self.schema_version == "1.3" and self.comparison_axis != "memory_ablation":
             raise ValueError("Plan revision 1.3 supports only memory ablation")
+        if self.comparison_axis == "planning" and self.schema_version != "1.4":
+            raise ValueError("Planning challenge requires plan revision 1.4")
+        if self.schema_version == "1.4" and self.comparison_axis != "planning":
+            raise ValueError("Plan revision 1.4 supports only the planning challenge")
         if self.comparison_axis == "context_policy":
             _validate_context_agents(self.baseline_agent, self.recovery_agent)
         if self.comparison_axis == "memory_ablation":
             _validate_memory_agents(self.baseline_agent, self.recovery_agent)
+        if self.comparison_axis == "planning":
+            _validate_planning_agents(self.baseline_agent, self.recovery_agent)
 
 
 def experiment_checkpoint_path(artifacts_dir: Path, experiment_id: UUID) -> Path:
@@ -340,6 +427,27 @@ def _validate_memory_agents(baseline_agent: AgentSpec, recovery_agent: AgentSpec
     _require_memory_arm_pair(baseline_agent.context_policy, recovery_agent.context_policy)
 
 
+def _validate_planning_agents(baseline_agent: AgentSpec, recovery_agent: AgentSpec) -> None:
+    """Reject mixed planning comparisons before creation or recovery."""
+    if (
+        baseline_agent.runtime_backend != recovery_agent.runtime_backend
+        or baseline_agent.runtime_strategy != recovery_agent.runtime_strategy
+        or baseline_agent.recovery_policy != recovery_agent.recovery_policy
+    ):
+        raise ValueError("Planning challenge requires the same backend and recovery policy")
+    if baseline_agent.context_policy is None or baseline_agent.context_policy.mode != "full":
+        raise ValueError("Planning challenge requires full context on both arms")
+    if baseline_agent.context_policy != recovery_agent.context_policy:
+        raise ValueError("Planning challenge requires the same context policy on both arms")
+    if baseline_agent.planning is not None or recovery_agent.planning is None:
+        raise ValueError("Planning challenge requires a plain left and a planning right")
+    fixed_fields = {"id", "name", "planning"}
+    if baseline_agent.model_dump(exclude=fixed_fields) != recovery_agent.model_dump(
+        exclude=fixed_fields
+    ):
+        raise ValueError("Planning challenge agents must share all inputs except identity and plan")
+
+
 def create_experiment_plan(
     baseline_agent: AgentSpec,
     recovery_agent: AgentSpec,
@@ -353,18 +461,24 @@ def create_experiment_plan(
     """Validate and freeze a paired matrix before accepting or executing work."""
     if not tasks or not seeds or len(set(seeds)) != len(seeds) or repeat_count < 1:
         raise ValueError("Experiment requires tasks, unique seeds and a positive repeat count")
-    for field in ("model", "prompt_version", "tool_set_version", "budget") + (
-        () if comparison_axis in ("context_policy", "memory_ablation") else ("context_policy",)
-    ):
+    shared_fields = ["model", "prompt_version", "tool_set_version", "budget"]
+    if comparison_axis not in ("context_policy", "memory_ablation"):
+        shared_fields.append("context_policy")
+    if comparison_axis != "planning":
+        shared_fields.append("planning")
+    for field in shared_fields:
         if getattr(baseline_agent, field) != getattr(recovery_agent, field):
             raise ValueError(f"Paired agents must share {field}")
     if comparison_axis == "runtime_backend":
-        if (
-            baseline_agent.runtime_backend != "handwritten"
-            or recovery_agent.runtime_backend != "langgraph"
-            or baseline_agent.runtime_strategy != recovery_agent.runtime_strategy
-        ):
-            raise ValueError("Runtime comparison requires Reference/LangGraph with the same policy")
+        left, right = baseline_agent.runtime_backend, recovery_agent.runtime_backend
+        if (left, right) not in (
+            ("handwritten", "langgraph"),
+            ("handwritten", "pydantic_ai"),
+        ) or baseline_agent.runtime_strategy != recovery_agent.runtime_strategy:
+            raise ValueError(
+                "Runtime comparison requires Reference/LangGraph or Reference/PydanticAI "
+                "with the same policy"
+            )
     elif comparison_axis == "recovery_policy":
         if (
             baseline_agent.runtime_backend != recovery_agent.runtime_backend
@@ -376,6 +490,8 @@ def create_experiment_plan(
         _validate_context_agents(baseline_agent, recovery_agent)
     elif comparison_axis == "memory_ablation":
         _validate_memory_agents(baseline_agent, recovery_agent)
+    elif comparison_axis == "planning":
+        _validate_planning_agents(baseline_agent, recovery_agent)
     else:
         raise ValueError("Unknown comparison axis")
     raw_limit = config_metadata.get("max_reference_cost_usd")
@@ -385,7 +501,11 @@ def create_experiment_plan(
         raise ValueError("Reference cost budget requires a positive limit and price version")
     token_limit = _global_token_limit(config_metadata)
     plan = {
-        "schema_version": "1.3"
+        "schema_version": "1.5"
+        if "pydantic_ai" in (baseline_agent.runtime_backend, recovery_agent.runtime_backend)
+        else "1.4"
+        if comparison_axis == "planning"
+        else "1.3"
         if comparison_axis == "memory_ablation"
         else "1.2"
         if comparison_axis == "context_policy"
@@ -864,15 +984,18 @@ async def run_experiment(
         is_reference_cost_known=reference_known,
     )
 
+    runtime_label = "PydanticAI" if recovery_agent.runtime_backend == "pydantic_ai" else "LangGraph"
     exp_config: dict[str, Any] = {
         "comparison_axis": comparison_axis,
         "arm_labels": (
-            {"baseline": "Reference Runtime", "recovery": "LangGraph Runtime"}
+            {"baseline": "Reference Runtime", "recovery": f"{runtime_label} Runtime"}
             if comparison_axis == "runtime_backend"
             else {"baseline": "Full Context", "recovery": "Recent Tool Rounds"}
             if comparison_axis == "context_policy"
             else {"baseline": "Recent Window", "recovery": "Recent Window + Memory"}
             if comparison_axis == "memory_ablation"
+            else {"baseline": "No Planning", "recovery": "Declared Plan"}
+            if comparison_axis == "planning"
             else {"baseline": "Baseline Policy", "recovery": "Recovery Policy"}
         ),
         "baseline_agent": {
@@ -894,6 +1017,11 @@ async def run_experiment(
             "recovery_policy": recovery_agent.recovery_policy,
         },
         "model": {
+            **(
+                {"schema_version": "1.1", "tool_call_mode": baseline_agent.model.tool_call_mode}
+                if baseline_agent.model.tool_call_mode is not None
+                else {}
+            ),
             "provider": baseline_agent.model.provider,
             "model": baseline_agent.model.model,
             "temperature": baseline_agent.model.temperature,
@@ -927,6 +1055,8 @@ async def run_experiment(
             exp_config[f"{arm}_agent"]["context_policy"] = agent.context_policy.model_dump(
                 mode="json"
             )
+        if agent.planning is not None:
+            exp_config[f"{arm}_agent"]["planning"] = agent.planning.model_dump(mode="json")
 
     if config_metadata:
         # Execution inputs remain authoritative, including for non-API callers.
@@ -937,7 +1067,11 @@ async def run_experiment(
     config_hash = compute_config_hash(exp_config)
 
     experiment_artifact = ExperimentArtifact(
-        schema_version="1.5"
+        schema_version="1.7"
+        if "pydantic_ai" in (baseline_agent.runtime_backend, recovery_agent.runtime_backend)
+        else "1.6"
+        if comparison_axis == "planning"
+        else "1.5"
         if comparison_axis == "memory_ablation"
         else "1.4"
         if comparison_axis == "context_policy"

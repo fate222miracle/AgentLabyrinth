@@ -26,7 +26,7 @@ test('linked evidence task runs from the actual UI and stays read-only on refres
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/?mode=single');
   await page.getByRole('button').filter({ has: page.getByText('refund-evidence-chain-003', { exact: true }) }).click();
-  await expect(page.getByText('跨文档证据链 · 自建仿真', { exact: true })).toHaveCount(3);
+  await expect(page.getByText('跨文档证据链 · 自建仿真', { exact: true })).toHaveCount(9);
   await page.getByRole('button', { name: '开始运行 Episode', exact: true }).click();
   await expect(page).toHaveURL(/episode_id=[a-f0-9-]+/);
   const id = new URL(page.url()).searchParams.get('episode_id');

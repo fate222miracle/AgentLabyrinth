@@ -83,12 +83,18 @@ class LangGraphRuntimeAdapter:
         graph.add_conditional_edges(
             "validate", route, {"execute": "execute", "model": "model", "end": END}
         )
-        graph.add_conditional_edges("execute", route, {"model": "model", "end": END})
+        graph.add_conditional_edges(
+            "execute", route, {"model": "model", "execute": "execute", "end": END}
+        )
         try:
             # One model step uses up to three graph nodes, plus observe and the stop check.
             await graph.compile().ainvoke(
                 {"next_node": "model"},
-                config={"recursion_limit": 3 * session.budget.max_steps + 3},
+                config={
+                    "recursion_limit": 3 * session.budget.max_steps
+                    + session.budget.max_tool_calls
+                    + 3
+                },
             )
         except CheckpointFailure:
             raise

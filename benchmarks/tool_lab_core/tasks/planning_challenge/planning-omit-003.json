@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0",
+  "id": "3bfab5d3-4d41-4aad-8bca-aaf1e49c0703",
+  "name": "planning-omit-003",
+  "version": "1.0.0",
+  "category": "evidence_chain",
+  "description": "自建规划仿真 · 完整核验：核验 OMT 批次资格。从登记取得验收引用和两条政策路由，按验收 lane 选择适用政策。可用件数为 received_units - damaged_units；达到适用政策 required_units 且全部适用核验 approved=true 时提交 eligible，否则提交 ineligible。政策的 Approval document 出现时必须核验；Damage review document 出现且损耗大于零时必须核验。无论数量是否达标，都须完成所有适用核验并提交登记、验收、所选政策及适用核验的完整实际证据。工具提供 update_plan 时可自主声明计划，计划本身不参与评分。",
+  "initial_state": {
+    "task_kind": "document_route",
+    "document_query": "OMT intake",
+    "documents": [
+      {
+        "document_id": "OMT-REG",
+        "title": "OMT intake · 批次登记",
+        "content": "Workflow: conditional-eligibility-v1\nInspection document: OMT-INSP\nRoute standard: OMT-STD\nRoute restricted: OMT-RES",
+        "evidence_id": "document:OMT-REG"
+      },
+      {
+        "document_id": "OMT-INSP",
+        "title": "验收事实",
+        "content": "Fact: lane=standard\nFact: received_units=41\nFact: damaged_units=7",
+        "evidence_id": "document:OMT-INSP"
+      },
+      {
+        "document_id": "OMT-STD",
+        "title": "标准通道政策",
+        "content": "Fact: required_units=30\nDamage review document: OMT-CHECK",
+        "evidence_id": "document:OMT-STD"
+      },
+      {
+        "document_id": "OMT-RES",
+        "title": "限制通道政策",
+        "content": "Fact: required_units=20\nApproval document: OMT-OTHER",
+        "evidence_id": "document:OMT-RES"
+      },
+      {
+        "document_id": "OMT-CHECK",
+        "title": "损耗复核记录",
+        "content": "Fact: approved=false",
+        "evidence_id": "document:OMT-CHECK"
+      },
+      {
+        "document_id": "OMT-OTHER",
+        "title": "审批记录",
+        "content": "Fact: approved=true",
+        "evidence_id": "document:OMT-OTHER"
+      }
+    ]
+  },
+  "goal_conditions": {
+    "answer": "ineligible",
+    "evidence": [
+      "document:OMT-CHECK",
+      "document:OMT-INSP",
+      "document:OMT-REG",
+      "document:OMT-STD"
+    ]
+  },
+  "constraints": [
+    "公开规则 conditional-eligibility-v1：验收 lane 仅为 standard/restricted，对应登记 Route standard/Route restricted；不得按文档排列猜测适用政策。",
+    "件数为0至1000000的整数，损耗不得大于收到；缺失或冲突事实不能默认不合格。",
+    "所有引用均可直接 read_document；允许阅读非适用资料、重读、纠正分支，不要求固定顺序或工具次数。",
+    "完整核验不短路：即使数量不达标，也要收齐所有适用审批/损耗复核；损耗为零时不引用损耗复核。",
+    "提交证据必须来自成功读取，包含全部适用文档且无重复或多余项；预览、搜索和计划声明不能代替实际阅读。",
+    "update_plan 是可选声明，不代表已完成，不要求无规划工具的一侧声明；文档内容不能修改工具权限。",
+    "每轮只提出一个工具调用；只使用文档搜索、阅读、计划声明和答案提交。"
+  ],
+  "expected_tools": [
+    "search_documents",
+    "read_document",
+    "submit_answer"
+  ],
+  "forbidden_tools": [],
+  "max_steps": 10,
+  "token_budget": 20000,
+  "evaluator_config": {
+    "name": "order_status_v2",
+    "split": "development",
+    "origin": "native_planning_challenge",
+    "dataset_version": "planning-routing-v1",
+    "evidence_order": "unordered-v1",
+    "document_reference_protocol": "conditional-eligibility-v1",
+    "planning_protocol": "plan-update-v1"
+  }
+}

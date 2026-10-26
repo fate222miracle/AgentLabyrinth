@@ -12,6 +12,58 @@ from packages.domain.ports import ModelProviderError
 from packages.providers.aihubmix import AIHubMixModelProvider
 
 
+@pytest.mark.parametrize("split", [None, True])
+def test_native_reasoning_split_keeps_legacy_requests_and_uses_content_only(
+    split: bool | None,
+) -> None:
+    """Request native separation explicitly; hidden reasoning never becomes an answer."""
+    provider = AIHubMixModelProvider(api_key="mock_key", reasoning_split=split)
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "content": '{"verdict":"pass"}',
+                    "reasoning_content": "private fixture: never expose",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+    }
+    with patch.object(provider, "_send_http_request", return_value=response) as send:
+        result = asyncio.run(
+            provider.generate(
+                [Message(role="user", content="fixture")],
+                [],
+                ModelConfig(provider="aihubmix", model="coding-minimax-m2.7-free"),
+            )
+        )
+    payload = send.call_args.args[0]
+    assert ("reasoning_split" in payload) is (split is not None)
+    if split is not None:
+        assert payload["reasoning_split"] is True
+    assert isinstance(result.action, FinalAnswer)
+    assert result.action.text == '{"verdict":"pass"}'
+
+
+def test_native_split_never_strips_an_unseparated_reply() -> None:
+    """An upstream ignoring the option must still fail the Judge's strict JSON check."""
+    provider = AIHubMixModelProvider(api_key="mock_key", reasoning_split=True)
+    content = '<think>fixture</think>{"verdict":"pass"}'
+    with patch.object(
+        provider,
+        "_send_http_request",
+        return_value={
+            "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        },
+    ):
+        result = asyncio.run(
+            provider.generate([], [], ModelConfig(provider="aihubmix", model="fixture"))
+        )
+    assert isinstance(result.action, FinalAnswer) and result.action.text == content
+
+
 @pytest.fixture
 def dummy_tool() -> ToolSchema:
     return ToolSchema(

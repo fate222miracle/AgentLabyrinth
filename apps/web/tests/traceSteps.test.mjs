@@ -1,6 +1,33 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { changedStateFields, groupTraceByStep, keyFields, stepOutcome, stepTitle } from '../src/traceSteps.ts';
+import { changedStateFields, groupTraceByStep, keyFields, stepOutcome, stepTitle, toolFeedbackFields, latestDeclaredPlan } from '../src/traceSteps.ts';
+
+test('A declaration follows the arrived prefix and never uses a proposed or future plan', () => {
+  const events = [
+    { event_type: 'TOOL_CALL_PROPOSED', step_index: 1, payload: { name: 'update_plan', arguments: { plan: [{ id: 'future' }] } } },
+    { event_type: 'PLAN_UPDATED', step_index: 1, payload: { items: [{ id: 'first', status: 'pending' }] } },
+    { event_type: 'PLAN_UPDATED', step_index: 3, payload: { items: [{ id: 'later', status: 'done' }] } },
+  ];
+  assert.equal(latestDeclaredPlan(events, 0), undefined);
+  assert.equal(latestDeclaredPlan(events, 1)?.payload.items[0].id, 'first');
+  assert.equal(latestDeclaredPlan(events, 2)?.payload.items[0].id, 'later');
+});
+
+test('Search feedback shows recorded matching and guidance without inventing legacy fields', () => {
+  const event = result => ({ step_index: 1, event_type: 'TOOL_SUCCEEDED', payload: { observation: { result } } });
+  assert.deepEqual(toolFeedbackFields(event({ documents: [], search_mode: 'none', hint: '使用原文片段' }), 'search_documents'),
+    [['documents', []], ['search_mode', '无匹配'], ['hint', '使用原文片段']]);
+  assert.deepEqual(toolFeedbackFields(event({ documents: [] }), 'search_documents'), [['documents', []]]);
+  assert.equal(toolFeedbackFields(event({ documents: [{ document_id: 'INSPECTION' }], search_mode: 'exact_id' }), 'search_documents')[1][1], '文档 ID 精确匹配');
+  assert.deepEqual(toolFeedbackFields(undefined, 'search_documents'), []);
+});
+
+test('A model round with several calls has an explicit multi-tool title', () => {
+  assert.equal(stepTitle([
+    { step_index: 3, event_type: 'TOOL_CALL_PROPOSED', payload: { name: 'read_document', call_id: 'a' } },
+    { step_index: 3, event_type: 'TOOL_CALL_PROPOSED', payload: { name: 'read_document', call_id: 'b' } },
+  ]), '多工具调用 · 2 个');
+});
 
 test('Replay groups saved actions and reports observed failures', () => {
   const events = [

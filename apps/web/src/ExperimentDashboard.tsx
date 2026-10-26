@@ -14,6 +14,7 @@ interface Props {
 
 const axisLabel = (item: ExperimentDashboardItem) => item.comparison_axis === 'context_policy' ? '上下文对照'
   : item.comparison_axis === 'memory_ablation' ? '工具记忆对照'
+  : item.comparison_axis === 'planning' ? '规划对照'
   : item.comparison_axis === 'runtime_backend' ? 'Runtime 对照' : item.comparison_axis === 'recovery_policy' ? '恢复策略对照' : '对照类型未记录';
 const signed = (value: number) => `${value > 0 ? '+' : ''}${Number(value.toFixed(2))}`;
 const cost = (value: string | null | undefined) => value == null ? '未知' : `$${value}`;
@@ -58,7 +59,7 @@ export function ExperimentDashboard({ items, loading, error, skipped, activeId, 
           <h3>{spotlight.model_id ?? '模型未记录'} · {axisLabel(spotlight)}</h3></div>
           <button type="button" className="btn-secondary" onClick={() => onOpen(spotlight.experiment_id)}>读取这场实验</button></div>
         <p className="chart-note">{spotlight.provider === 'fake' ? '离线模拟' : spotlight.provider === 'aihubmix' ? '真实模型记录' : '来源未记录'} · {new Date(spotlight.created_at).toLocaleString()} · {spotlight.total_pairs} 对任务</p>
-        <ExperimentCharts labels={comparisonLabels(spotlight.comparison_axis)} total={spotlight.total_pairs}
+        <ExperimentCharts labels={comparisonLabels(spotlight.comparison_axis, spotlight.recovery_backend)} total={spotlight.total_pairs}
           rates={[spotlight.baseline_success_rate, spotlight.recovery_success_rate]}
           tokens={[spotlight.baseline_total_tokens, spotlight.recovery_total_tokens]}
           durations={[spotlight.baseline_avg_duration_ms, spotlight.recovery_avg_duration_ms]} />
@@ -78,7 +79,7 @@ export function ExperimentDashboard({ items, loading, error, skipped, activeId, 
       {key && visible.length === 1 && <p className="metric-sub">当前配置只有一次完整运行，尚无历史差值。</p>}
       <div className="experiment-dashboard-list">
         {visible.slice(0, limit).map((item) => {
-          const labels = comparisonLabels(item.comparison_axis);
+          const labels = comparisonLabels(item.comparison_axis, item.recovery_backend);
           return (
             <article className="experiment-dashboard-item" key={item.experiment_id}>
               <button className="dashboard-open" type="button" aria-current={activeId === item.experiment_id ? 'true' : undefined} onClick={() => onOpen(item.experiment_id)}>

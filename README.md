@@ -1,5 +1,41 @@
 # AgentLabyrinth
 
+2026-10-26 [V0.3阶段回顾与后续安排](docs/handoffs/V0.3-stage-review-20261026.md)：汇总记忆、多工具、规划、第三Runtime和真实Judge的交付与证据边界。负责人授权本次GitHub同步；下文“不提交”是各历史阶段的当时约束。
+
+2026-10-25 按负责人确认的[ADR-040](docs/adr/ADR-040-real-judge-product-entry.md)接入真实大模型Judge：选择型号、显式一次评审，显示理由/引用及规则分歧；撤下人工/Fake产品操作，旧记录保留。[源码/实测/效果证据交接](docs/learning/V0.3-real-judge-entry-20261025.md)，最新门禁与一次免费模型实测见current-state。Judge不改变任务成绩，Memory/Planning收益仍须真实对照。
+
+2026-10-25 结果复核易用性优化：先说明检查用途，人工/真实模型意见与模拟测试分开，技术字段默认折叠；保留全部历史与完整CSV。[源码与验证交接](docs/learning/V0.3-review-usability-20261025.md)，实际最新门禁见current-state。
+
+2026-10-25 负责人已确认当前交付范围现场体验通过；接续修复PydanticAI回归目标校验，完成六题固定Fake对照与离线报告。[固定实验、实际结果与下一步](docs/learning/V0.3-fixed-experiment-preparation-20261025.md)。59项定向Python、旧22格及新14格回归通过；真实效果、Reflection暂缓与A1边界仍按记录保留，不提交GitHub。
+
+2026-10-25 评审展示收尾：真实历史来源不再误标Fake，提示/量表版本、评审Token与未知费用可查看，独立CSV补齐来源和用量。[三分钟Fake演示与失败预置](docs/handoffs/V0.3-demo-20261025.md)、[源码交接](docs/learning/V0.3-review-presentation-20261025.md)。最新门禁见current-state；真实Judge v2未新增验证。
+
+2026-10-23 [Codex复核与整改](docs/tasks/V0.3-trae-review-20261023.md)：Judge v2及Runtime/下载交付定向通过，补历史回读和严格失败回归，纠正费用说明。下一项交[Trae](docs/handoffs/trae-20261023.md)完成Review来源/用量/CSV展示与现场验收材料；真实v2仍需单独授权，整版未签收，不提交GitHub。
+
+2026-10-22 负责人确认并完成[ADR-039独立Episode评审](docs/adr/ADR-039-independent-episode-review.md)：人工复核与一次Fake Judge独立保存，Episode并列展示、Experiment按需覆盖摘要及Review CSV可用；源Episode/输入/事件归属校验，刷新只GET，原确定性评分、预算和旧CSV保持。Fake只验证链路，真实Judge另行授权；[源码与失败交接](docs/learning/V0.3-independent-review-20261022.md)。第三Runtime边界修复仍保持，不提交GitHub。
+
+2026-10-21 [ADR-038](docs/adr/ADR-038-second-external-runtime-selection.md)已接入PydanticAI第三Runtime：固定`pydantic-ai-slim==2.57.0`、单次与正式Runtime对照API/Web、保存恢复和CSV已完成，A1步间由adapter推进的调度缺口保留。实际624 Python/44 Node/61 Edge通过，真实模型未运行，见[current-state](docs/handoffs/current-state.md)。
+
+2026-10-21 [Trae二次复核](docs/tasks/V0.3-trae-review-20261021.md)：本轮新增为设计补充，尚无新框架代码/测试。关键源码已只读定位，独立调度/版本指纹/超时事件断言已修正；[下一执行卡](docs/tasks/V0.3-runtime-admission-trae-20261021.md)先提隔离Fake准入审批，通过运行验证再推进成品。未安装依赖/调用真实模型/提交GitHub。
+
+2026-10-21 [Trae成果复核](docs/tasks/V0.3-trae-review-20261021.md)：153项复跑通过、旧22格报告重算一致，纠正Fake/真实证据归类与设计缺口。Reflection按记录暂缓，第二框架尚未实施；[下一执行卡](docs/tasks/V0.3-runtime-admission-trae-20261021.md)先补ADR-038准入设计，具体确认后Fake验证及正常产品闭环。无新模型调用/依赖安装/Git提交。
+
+2026-10-21 [最新Trae交接](docs/handoffs/trae-20261021.md)、[下一阶段执行卡](docs/tasks/V0.3-reflection-recovery-trae-20261021.md)：保护本地全部未提交成果，Planning已实现，下一主项为受限Reflection具体ADR与现有Recovery专项模板/报告；后续第二外部Runtime/Judge逐项推进。仅文档交接，不授权真实模型调用或Git提交，596/44/61为接手前门禁。
+
+2026-10-20 按负责人确认的[ADR-036](docs/adr/ADR-036-conditional-planning-tasks.md)新增条件路由/遗漏核验两题。ToolLab搜索`planning-`，正常单次或规划对照可运行，复用实时资料、实际输出、声明与CSV；原19题保持。596 Python/44 Node/61 Edge及实际MCP HTTP新进程恢复通过，[源码/操作/失败与交接](docs/learning/V0.3-conditional-planning-20261020.md)。仅Fake机制验证，真实规划效果未测，不提交GitHub。
+
+2026-10-20 [Codex验收Trae规划交付](docs/tasks/V0.3-planning-review-20261020.md)：修正计划恢复/结果来源及基线描述，补单次规划开关、实时声明与历史隔离；修补后534 Python/44 Node/58 Edge及两Runtime实际MCP HTTP跨进程恢复通过。属于组件技术验收，尚未验证真实模型规划收益或整版V0.3；本地保留、不提交GitHub。
+
+2026-10-19 负责人指定Trae接续V0.3开发：[最新工作交接](docs/handoffs/trae-20261019.md)、[Planning任务卡](docs/tasks/V0.3-planning-trae-20261019.md)。最新成果在当前本地工作区尚未提交，接手先保护已有修改；按周计划推进并持续更新current-state，不自动提交GitHub。
+
+2026-10-19 接续[本周V0.3开发计划](docs/tasks/V0.3-week-plan-20261019.md)，先按[ADR-034](docs/adr/ADR-034-document-id-search.md)修复实际检索障碍：新网页文档运行支持文档ID精确查找，空搜索显示字面规则及下一步建议，本地/MCP一致；旧历史/恢复不升级。搜索仍不计已读证据，无新增配置项。[源码、验证及交接](docs/learning/V0.3-document-search-20261019.md)。这不是整版签收，Planning/Reflection/第二框架/Judge等未实现项如实保留。
+
+2026-10-19 多工具调用按[ADR-033](docs/adr/ADR-033-serial-tool-batches.md)接入：网页ToolLab默认允许同轮最多8个只读调用，按顺序逐项校验执行与保存；单工具仍兼容且可选，BFCL保持单函数协议。同轮每个Call ID在实时画布/概览独立呈现，CSV记录保存模式，历史/恢复不按新草稿升级。[源码与工作交接](docs/learning/V0.3-serial-tool-batches-20261019.md)。
+
+2026-10-19 按Accepted ADR-032接入三题自建事实记忆压力场景：ToolLab搜索`memory-`，组合登记/验收/适用政策计算结论；支持原实时资料/最终输出、正式同窗口记忆对照、CSV及只读历史。大返回允许合法重读，版本题按登记选择政策，旧任务/评分保持。[任务说明](benchmarks/tool_lab_core/tasks/memory_challenge/README.md)、[源码/测试/实际免费模型交接](docs/learning/V0.3-memory-challenge-20261019.md)。本地保留、不自动提交；不是整版V0.3验收或泛化收益结论。
+
+2026-10-18 新增已保存记忆记录的离线诊断：`uv --cache-dir .uv-cache run --locked python -m scripts.review_memory --help`。支持正式Experiment或一对独立Episode，输出逐次窗口/记忆来源、成功/重复阅读与任务结果的Markdown和JSON；零模型/工具执行，不覆盖原产物。[命令、源码与失败路径](docs/learning/V0.3-offline-memory-review-20261018.md)。
+
 2026-10-15 同窗口工具记忆对照已接入正式网页/API：对照实验选择“工具记忆”，两侧共享窗口N，仅右侧增加M字节记忆。支持冻结/恢复、失败显式重跑、保存结果与CSV；旧full上下文轴和单次默认full保持。Codex复核并补固定变量及历史来源校验，[使用与源码交接](docs/learning/V0.3-memory-ablation-20261015.md)，最新验证见current-state。Fake只验证机制，未签收整版V0.3，不提交GitHub。
 
 2026-10-14 完成一对真实同窗口工具记忆探索：MiniMax M2.7退货场景两侧均通过，工具调用8→5、重复阅读3→0、报告Token15766→10317。仅单个探索样本，不是成功率或稳定收益结论。资料侧栏新增当前前缀的实际阅读/重复次数；显式真实验证命令 `uv --cache-dir .uv-cache run --locked python -m scripts.episodic_memory_ablation --model coding-minimax-m2.7-free`，默认不带--model仍为Fake。[复现与工作交接](docs/tasks/V0.3-memory-real-pair-20261014.md)。不提交GitHub。

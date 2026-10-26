@@ -26,6 +26,14 @@ class OrderStatusEvaluator(Evaluator):
         # 1. Collect event data for metrics and verification
         proposed_events = [e for e in events if e.event_type == EventType.TOOL_CALL_PROPOSED]
         validated_events = [e for e in events if e.event_type == EventType.TOOL_CALL_VALIDATED]
+        if task.evaluator_config.get("planning_protocol") == "plan-update-v1":
+            # The plan declaration is an optional component, not a task tool selection.
+            proposed_events = [
+                e for e in proposed_events if str(e.payload.get("name")) != "update_plan"
+            ]
+            validated_events = [
+                e for e in validated_events if str(e.payload.get("name")) != "update_plan"
+            ]
         succeeded_events = [e for e in events if e.event_type == EventType.TOOL_SUCCEEDED]
 
         num_proposed = len(proposed_events)
@@ -49,7 +57,10 @@ class OrderStatusEvaluator(Evaluator):
             tool_argument_validity_rate = None
 
         forbidden_tool_call_count = sum(
-            1 for e in proposed_events if str(e.payload.get("name")) in task.forbidden_tools
+            1
+            for e in events
+            if e.event_type == EventType.TOOL_CALL_PROPOSED
+            and str(e.payload.get("name")) in task.forbidden_tools
         )
 
         succeeded_tool_names = {

@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from packages.domain.models import (
     EstimatedCost,
@@ -23,6 +23,7 @@ from packages.domain.models import (
     ModelResponse,
     TokenUsage,
     ToolCall,
+    ToolCallBatch,
     ToolSchema,
 )
 from packages.domain.ports import ModelProvider, ModelProviderError
@@ -136,11 +137,13 @@ class AIHubMixModelProvider(ModelProvider):
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = 30.0,
         min_request_interval: float = 0.0,
+        reasoning_split: bool | None = None,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._min_request_interval = min_request_interval
+        self._reasoning_split = reasoning_split
 
     def _resolve_key(self) -> str:
         """Resolve API key on demand without persisting in logs or public fields."""
@@ -287,64 +290,90 @@ class AIHubMixModelProvider(ModelProvider):
         }
         if config.max_tokens is not None:
             payload["max_tokens"] = config.max_tokens
+        if self._reasoning_split is not None:
+            payload["reasoning_split"] = self._reasoning_split
 
         if tools:
             payload["tools"] = self._format_tools(tools)
             payload["tool_choice"] = "auto"
-            payload["parallel_tool_calls"] = False
+            payload["parallel_tool_calls"] = config.tool_call_mode == "serial"
 
         response_data = await asyncio.to_thread(self._send_http_request, payload, api_key)
 
+        usage_data = response_data.get("usage")
+        token_usage = None
+        if isinstance(usage_data, dict):
+            prompt_tokens = usage_data.get("prompt_tokens")
+            completion_tokens = usage_data.get("completion_tokens")
+            if (
+                type(prompt_tokens) is int
+                and prompt_tokens >= 0
+                and type(completion_tokens) is int
+                and completion_tokens >= 0
+            ):
+                token_usage = TokenUsage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    simulated=False,
+                )
+
+        def reject(code: str) -> NoReturn:
+            raise ModelProviderError(
+                code, token_usage=token_usage if config.schema_version == "1.1" else None
+            )
+
         choices = response_data.get("choices")
         if not choices or not isinstance(choices, list):
-            raise ModelProviderError("EMPTY_MODEL_CHOICES")
+            reject("EMPTY_MODEL_CHOICES")
+        if not isinstance(choices[0], dict):
+            reject("INVALID_MODEL_RESPONSE")
 
         if choices[0].get("finish_reason") == "length":
-            raise ModelProviderError("OUTPUT_TRUNCATED")
+            reject("OUTPUT_TRUNCATED")
         choice_msg = choices[0].get("message", {})
+        if not isinstance(choice_msg, dict):
+            reject("INVALID_MODEL_RESPONSE")
         tool_calls = choice_msg.get("tool_calls")
+        if tool_calls is not None and not isinstance(tool_calls, list):
+            reject("INVALID_MODEL_RESPONSE")
 
-        action: ToolCall | FinalAnswer
+        action: ToolCall | FinalAnswer | ToolCallBatch
         if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
-            if len(tool_calls) > 1:
-                raise ModelProviderError("MULTIPLE_TOOL_CALLS")
-            tc = tool_calls[0]
-            call_id = tc.get("id") or "call_unknown"
-            func = tc.get("function", {})
-            name = func.get("name", "")
-            raw_args = func.get("arguments", "{}")
-
-            if isinstance(raw_args, str):
+            if len(tool_calls) > 1 and config.tool_call_mode != "serial":
+                reject("MULTIPLE_TOOL_CALLS")
+            if len(tool_calls) > 8:
+                reject("TOOL_BATCH_TOO_LARGE")
+            calls: list[ToolCall] = []
+            for tc in tool_calls:
+                if not isinstance(tc, dict) or not isinstance(tc.get("function"), dict):
+                    reject("MALFORMED_TOOL_ARGUMENTS")
+                call_id = tc.get("id") or "call_unknown"
+                if config.schema_version == "1.1" and (
+                    not isinstance(tc.get("id"), str) or not tc["id"].strip()
+                ):
+                    reject("MALFORMED_TOOL_ARGUMENTS")
+                func = tc.get("function", {})
+                name = func.get("name", "")
+                raw_args = func.get("arguments", "{}")
                 try:
-                    parsed_args = json.loads(raw_args)
+                    parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 except json.JSONDecodeError:
-                    raise ModelProviderError("INVALID_TOOL_ARGUMENTS") from None
-            elif isinstance(raw_args, dict):
-                parsed_args = raw_args
-            else:
-                raise ModelProviderError("MALFORMED_TOOL_ARGUMENTS")
-
-            if not isinstance(parsed_args, dict) or not isinstance(name, str) or not name:
-                raise ModelProviderError("MALFORMED_TOOL_ARGUMENTS")
-            action = ToolCall(call_id=call_id, name=name, arguments=parsed_args)
+                    reject("INVALID_TOOL_ARGUMENTS")
+                if not isinstance(parsed_args, dict) or not isinstance(name, str) or not name:
+                    reject("MALFORMED_TOOL_ARGUMENTS")
+                try:
+                    calls.append(ToolCall(call_id=call_id, name=name, arguments=parsed_args))
+                except ValueError:
+                    reject("MALFORMED_TOOL_ARGUMENTS")
+            action = calls[0] if len(calls) == 1 else ToolCallBatch(calls=tuple(calls))
         else:
             content = choice_msg.get("content") or ""
             action = FinalAnswer(text=content)
 
-        usage_data = response_data.get("usage")
         if not isinstance(usage_data, dict):
             raise ModelProviderError("MISSING_TOKEN_USAGE")
-
-        prompt_tokens = usage_data.get("prompt_tokens")
-        completion_tokens = usage_data.get("completion_tokens")
-        if not isinstance(prompt_tokens, int) or not isinstance(completion_tokens, int):
+        if token_usage is None:
             raise ModelProviderError("INVALID_TOKEN_USAGE")
-
-        token_usage = TokenUsage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            simulated=False,
-        )
 
         # Cost tracking for AIHubMix free models (unverified free tier)
         estimated_cost = EstimatedCost(
@@ -356,6 +385,7 @@ class AIHubMixModelProvider(ModelProvider):
         )
 
         return ModelResponse(
+            schema_version="1.1" if isinstance(action, ToolCallBatch) else "1.0",
             action=action,
             token_usage=token_usage,
             estimated_cost=estimated_cost,

@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import type { ExperimentDashboardItem } from './historySummary';
 
-export function comparisonLabels(axis: string): [string, string] {
+export function comparisonLabels(axis: string, runtimeRight?: string | null): [string, string] {
   return axis === 'context_policy' ? ['完整历史', '近期窗口'] : axis === 'memory_ablation'
-    ? ['窗口（无记忆）', '窗口 + 记忆'] : axis === 'runtime_backend'
-    ? ['Reference', 'LangGraph'] : axis === 'recovery_policy' ? ['Baseline', 'Recovery'] : ['左侧', '右侧'];
+    ? ['窗口（无记忆）', '窗口 + 记忆'] : axis === 'planning'
+    ? ['无声明计划', '声明计划'] : axis === 'runtime_backend'
+    ? ['Reference', runtimeRight === 'pydantic_ai' ? 'PydanticAI' : 'LangGraph']
+    : axis === 'recovery_policy' ? ['Baseline', 'Recovery'] : ['左侧', '右侧'];
 }
 
 export function ExperimentCharts({ labels, rates, tokens, durations, total, counts }: {
@@ -42,7 +44,7 @@ export function ExperimentCharts({ labels, rates, tokens, durations, total, coun
 export function HistoryTrendChart({ items, onOpen }: { items: ExperimentDashboardItem[]; onOpen: (id: string) => void }) {
   const [metric, setMetric] = useState('success');
   const history = items.filter(item => item.total_pairs > 0).slice().reverse().slice(-30);
-  const labels = comparisonLabels(history[0]?.comparison_axis ?? '');
+  const labels = comparisonLabels(history[0]?.comparison_axis ?? '', history[0]?.recovery_backend);
   const unit = metric === 'success' ? '%' : metric === 'tokens' ? 'tokens' : 'ms';
   const title = metric === 'success' ? '成功率' : metric === 'tokens' ? 'Token 总量' : '平均耗时';
   const values = history.map(item => metric === 'success' ? [item.baseline_success_rate * 100, item.recovery_success_rate * 100]

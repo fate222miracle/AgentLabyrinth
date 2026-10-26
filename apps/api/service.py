@@ -8,11 +8,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic, time_ns
+from typing import Any
 from uuid import UUID, uuid4
 
 from apps.api.schemas import (
     ALLOWED_FAKE_SCENARIOS,
     CreateEpisodeRequest,
+    CreateEpisodeReviewRequest,
     CreateExperimentRequest,
     ExperimentDashboardItem,
     ExperimentDashboardResponse,
@@ -42,13 +44,29 @@ from packages.application.experiment import (
 )
 from packages.application.reference_pricing import reference_price_version
 from packages.application.regression import fixed_config
-from packages.application.trace import read_artifact, write_text_atomically
+from packages.application.review import (
+    EpisodeReviewArtifact,
+    build_review_input,
+    create_human_review,
+    create_judge_review,
+    read_review,
+    write_review,
+)
+from packages.application.trace import content_hash, read_artifact, write_text_atomically
 from packages.domain.models import (
     AgentSpec,
     ContextPolicy,
     EpisodeArtifact,
+    EstimatedCost,
+    FinalAnswer,
+    ModelConfig,
+    ModelResponse,
+    PlanningConfig,
     RunConfig,
+    RuntimeBackend,
     TaskSpec,
+    TokenUsage,
+    ToolCallMode,
     TraceEvent,
 )
 from packages.domain.ports import (
@@ -91,6 +109,18 @@ class ExperimentJobStopped(Exception):
     def __init__(self, action: str) -> None:
         self.action = action
         super().__init__(action)
+
+
+def _backend_revision(backend: RuntimeBackend) -> str:
+    """PydanticAI joined the additive Agent revision; older backends keep the legacy one."""
+    return "1.4" if backend == "pydantic_ai" else "1.1"
+
+
+def _recovery_backend(config: dict[str, Any]) -> RuntimeBackend | None:
+    """Report the saved right-side backend so charts never mislabel a third Runtime."""
+    recovery = config.get("recovery_agent")
+    backend = recovery.get("runtime_backend") if isinstance(recovery, dict) else None
+    return backend if backend in ("handwritten", "langgraph", "pydantic_ai") else None
 
 
 class EpisodeService:
@@ -294,6 +324,64 @@ class EpisodeService:
         )
 
     @staticmethod
+    def _with_document_search(task: TaskSpec, enabled: bool) -> TaskSpec:
+        """Pin a new search contract without rewriting source documents or old tasks."""
+        if not enabled or not task.initial_state.get("documents"):
+            return task
+        return task.model_copy(
+            update={
+                "version": task.version + ("." if "+" in task.version else "+") + "id-search-v1",
+                "constraints": (
+                    *task.constraints,
+                    "文档搜索先按document_id完全匹配，否则只匹配标题/正文的字面片段，不做翻译或语义检索；"
+                    "已读正文中的文档ID可直接阅读，无须重新搜索。",
+                ),
+                "evaluator_config": {
+                    **task.evaluator_config,
+                    "document_search_protocol": "id-first-literal-v1",
+                    "source_search_task_version": task.version,
+                },
+            }
+        )
+
+    @staticmethod
+    def _with_call_mode(task: TaskSpec, mode: ToolCallMode | None) -> TaskSpec:
+        """Freeze explicit batch constraints without rewriting source task files."""
+        if mode != "serial":
+            return task
+        constraints = tuple(
+            c for c in task.constraints if not c.startswith("每轮只提出一个工具调用")
+        )
+        return task.model_copy(
+            update={
+                "version": task.version + ("." if "+" in task.version else "+") + "serial-v1",
+                "constraints": (
+                    *constraints,
+                    "每轮可提出1至8个已知参数的只读工具调用，平台按顺序执行；"
+                    "需要前项返回的调用须另起一轮；submit_answer及其他写工具必须单独调用。",
+                ),
+                "evaluator_config": {
+                    **task.evaluator_config,
+                    "source_task_version": task.version,
+                    "tool_call_protocol": "serial-read-batch-v1",
+                },
+            }
+        )
+
+    @staticmethod
+    def _agent_with_call_mode(agent: AgentSpec, mode: ToolCallMode | None) -> AgentSpec:
+        """Keep legacy model bytes when no new execution mode was requested."""
+        if mode is None:
+            return agent
+        return agent.model_copy(
+            update={
+                "model": agent.model.model_copy(
+                    update={"schema_version": "1.1", "tool_call_mode": mode}
+                )
+            }
+        )
+
+    @staticmethod
     def _with_fault_profile(task: TaskSpec, profile: FaultProfile) -> TaskSpec:
         """Create an explicit test-only task variant without changing catalog data."""
         if profile == "none":
@@ -383,6 +471,18 @@ class EpisodeService:
 
     def _task_tool_version(self, tasks: list[TaskSpec]) -> str:
         """Select the explicit task-scoped profile only for the new evidence protocol."""
+        if any(t.evaluator_config.get("planning_protocol") == "plan-update-v1" for t in tasks):
+            return "v1.6.0"
+        if any(
+            t.evaluator_config.get("document_search_protocol") == "id-first-literal-v1"
+            for t in tasks
+        ):
+            return "v1.5.0"
+        if any(
+            t.evaluator_config.get("document_reference_protocol") == "fact-unit-rule-v1"
+            for t in tasks
+        ):
+            return "v1.4.0"
         if any(
             t.evaluator_config.get("document_reference_protocol") == "direct-reference-v1"
             for t in tasks
@@ -471,6 +571,7 @@ class EpisodeService:
                 split=str(t.evaluator_config.get("split", "development")),
                 supports_mcp=bool(t.initial_state.get("documents"))
                 and {"search_documents", "read_document"}.issubset(t.expected_tools),
+                supports_planning=t.evaluator_config.get("planning_protocol") == "plan-update-v1",
             )
             for t in task_specs
         ]
@@ -513,6 +614,8 @@ class EpisodeService:
         on_event: Callable[[TraceEvent], None] | None = None,
     ) -> EpisodeArtifact:
         """Assemble the selected runtime and suite, execute, and persist the episode."""
+        if req.suite != "tool_lab_core" and req.tool_call_mode == "serial":
+            raise ValueError("BFCL single-call tasks require single tool call mode")
         # 1. Validate requested model/scenario against permissive free model catalog
         if req.provider == "aihubmix":
             if not is_model_permitted(req.model, self._configured_model_ids()):
@@ -547,6 +650,10 @@ class EpisodeService:
         else:
             loaded_task = self._get_task(req.task_id)
         task = self._with_token_budget(loaded_task, req.token_budget)
+        if bfcl_case is None:
+            task = self._with_document_search(task, req.schema_version == "1.5")
+            task = self._with_call_mode(task, req.tool_call_mode)
+        agent = self._agent_with_call_mode(agent, req.tool_call_mode)
         agent = self._agent_with_task_capacity(agent, [task])
         if req.max_steps is not None:
             agent = agent.model_copy(
@@ -569,7 +676,7 @@ class EpisodeService:
         agent = self._agent_with_token_budget(agent, req.token_budget)
         agent = agent.model_copy(
             update={
-                "schema_version": "1.1",
+                "schema_version": _backend_revision(req.runtime_backend),
                 "runtime_backend": req.runtime_backend,
                 "runtime_strategy": req.runtime_strategy,
             }
@@ -579,6 +686,15 @@ class EpisodeService:
             agent = agent.model_copy(
                 update={"schema_version": "1.2", "context_policy": req.context_policy}
             )
+
+        if req.planning is not None:
+            if task.evaluator_config.get("planning_protocol") != "plan-update-v1":
+                raise ValueError("Planning requires a planning task")
+            agent = agent.model_copy(update={"schema_version": "1.3", "planning": req.planning})
+
+        # Context and planning revisions are additive; the PydanticAI backend needs 1.4 last.
+        if req.runtime_backend == "pydantic_ai":
+            agent = agent.model_copy(update={"schema_version": "1.4"})
 
         # 3. Assemble components
         environment: Environment
@@ -646,6 +762,107 @@ class EpisodeService:
         if artifact.episode.episode_id != episode_id:
             raise ValueError("Episode file ID mismatch")
         return artifact
+
+    def _review_path(self, review_id: UUID) -> Path:
+        return self.artifacts_dir / "reviews" / f"{review_id}.json"
+
+    @staticmethod
+    def _fake_judge_provider(scenario: str) -> ModelProvider:
+        """Build one deterministic response; it demonstrates plumbing, not review quality."""
+        if scenario == "provider_error":
+            return FakeModelProvider("unparseable")
+        event_ids = [str(uuid4())] if scenario == "bad_reference" else []
+        text = (
+            "not-json"
+            if scenario == "invalid_json"
+            else json.dumps(
+                {
+                    "verdict": "uncertain",
+                    "answer_correctness": "unknown",
+                    "evidence_support": "unknown",
+                    "process_safety": "unknown",
+                    "rationale": "Fake Judge 仅验证评审链路，不代表质量判断。",
+                    "event_ids": event_ids,
+                },
+                ensure_ascii=False,
+            )
+        )
+        response = ModelResponse(
+            action=FinalAnswer(text=text),
+            token_usage=TokenUsage(prompt_tokens=30, completion_tokens=20, simulated=True),
+            estimated_cost=EstimatedCost(price_table_version="fake-zero-v1"),
+        )
+        return FakeModelProvider(custom_responses=[response])
+
+    async def create_episode_review(self, req: CreateEpisodeReviewRequest) -> EpisodeReviewArtifact:
+        """Create one explicit review and persist it separately from the Episode."""
+        episode = self.get_episode(req.episode_id)
+        if episode is None:
+            raise ValueError("Reviewed Episode does not exist")
+        if req.method == "human":
+            assert req.human is not None
+            artifact = create_human_review(
+                episode,
+                reviewer_label=req.human.reviewer_label,
+                verdict=req.human.verdict,
+                answer_correctness=req.human.answer_correctness,
+                evidence_support=req.human.evidence_support,
+                process_safety=req.human.process_safety,
+                rationale=req.human.rationale,
+                event_ids=req.human.event_ids,
+            )
+        elif req.schema_version == "1.1":
+            review_input = build_review_input(episode)
+            if len(review_input.model_dump_json().encode("utf-8")) > 65536:
+                raise ValueError("评审输入超过65536字节，本次未发送模型请求")
+            assert req.judge_model is not None
+            if not is_model_permitted(req.judge_model, self._configured_model_ids()):
+                raise ValueError("所选评审模型不在后端允许列表中")
+            await asyncio.to_thread(self._require_live_model, req.judge_model)
+            artifact = await create_judge_review(
+                episode,
+                AIHubMixModelProvider(
+                    timeout=30.0,
+                    min_request_interval=13.0,
+                    reasoning_split=True if "minimax" in req.judge_model.lower() else None,
+                ),
+                ModelConfig(
+                    provider="aihubmix", model=req.judge_model, temperature=0.0, max_tokens=800
+                ),
+            )
+        else:
+            scenario = req.judge_scenario or "success"
+            artifact = await create_judge_review(
+                episode,
+                self._fake_judge_provider(scenario),
+                ModelConfig(provider="fake", model="fake-judge-v1"),
+            )
+        write_review(artifact, self._review_path(artifact.review_id))
+        return artifact
+
+    def get_episode_review(self, review_id: UUID) -> EpisodeReviewArtifact | None:
+        """Read one review and verify its source Episode still matches."""
+        path = self._review_path(review_id)
+        if not path.is_file():
+            return None
+        review = read_review(path)
+        if review.review_id != review_id:
+            raise ValueError("Review file ID mismatch")
+        episode = self.get_episode(review.episode_id)
+        if episode is None or content_hash(episode) != review.episode_content_hash:
+            raise ValueError("Reviewed Episode source mismatch")
+        return review
+
+    def list_episode_reviews(self, episode_id: UUID) -> tuple[EpisodeReviewArtifact, ...]:
+        """List valid reviews for one saved Episode without running a provider."""
+        if self.get_episode(episode_id) is None:
+            raise FileNotFoundError("Reviewed Episode does not exist")
+        reviews: list[EpisodeReviewArtifact] = []
+        for path in (self.artifacts_dir / "reviews").glob("*.json"):
+            review = self.get_episode_review(UUID(path.stem))
+            if review is not None and review.episode_id == episode_id:
+                reviews.append(review)
+        return tuple(sorted(reviews, key=lambda item: (item.created_at, str(item.review_id))))
 
     def resumable_episode_ids(self) -> list[UUID]:
         """Show only unfinished checkpoints saved before this API instance started."""
@@ -847,8 +1064,12 @@ class EpisodeService:
 
         # 1. Load tasks
         tasks = [
-            self._with_fault_profile(
-                self._with_token_budget(self._get_task(tid), req.token_budget), req.fault_profile
+            self._with_document_search(
+                self._with_fault_profile(
+                    self._with_token_budget(self._get_task(tid), req.token_budget),
+                    req.fault_profile,
+                ),
+                req.schema_version == "1.8",
             )
             for tid in req.task_ids
         ]
@@ -916,6 +1137,8 @@ class EpisodeService:
         baseline_agent = self._agent_with_time_budget(baseline_agent, req.max_execution_time_ms)
         recovery_agent = self._agent_with_time_budget(recovery_agent, req.max_execution_time_ms)
         if req.comparison_axis == "runtime_backend":
+            # Older requests keep the fixed LangGraph target; 1.10 names it explicitly.
+            target: RuntimeBackend = req.runtime_target or "langgraph"
             baseline_agent = baseline_agent.model_copy(
                 update={
                     "schema_version": "1.1",
@@ -926,8 +1149,9 @@ class EpisodeService:
             recovery_agent = baseline_agent.model_copy(
                 update={
                     "id": uuid4(),
-                    "name": f"{baseline_agent.name}-langgraph",
-                    "runtime_backend": "langgraph",
+                    "name": f"{baseline_agent.name}-{target}",
+                    "schema_version": _backend_revision(target),
+                    "runtime_backend": target,
                 }
             )
         else:
@@ -986,6 +1210,26 @@ class EpisodeService:
                     recovery_agent = recovery_agent.model_copy(
                         update={"schema_version": "1.2", "context_policy": req.context_policy}
                     )
+        if req.comparison_axis == "planning":
+            if any(t.evaluator_config.get("planning_protocol") != "plan-update-v1" for t in tasks):
+                raise ValueError("Planning challenge requires planning tasks")
+            baseline_agent = baseline_agent.model_copy(
+                update={
+                    "schema_version": "1.3",
+                    "runtime_strategy": req.runtime_strategy,
+                    "context_policy": ContextPolicy(mode="full"),
+                }
+            )
+            recovery_agent = baseline_agent.model_copy(
+                update={
+                    "id": uuid4(),
+                    "name": f"{baseline_agent.name}-planning",
+                    "planning": PlanningConfig(),
+                }
+            )
+        tasks = [self._with_call_mode(t, req.tool_call_mode) for t in tasks]
+        baseline_agent = self._agent_with_call_mode(baseline_agent, req.tool_call_mode)
+        recovery_agent = self._agent_with_call_mode(recovery_agent, req.tool_call_mode)
         config_metadata = {
             "provider": req.provider,
             "requested_model": req.model,
@@ -1106,6 +1350,7 @@ class EpisodeService:
                         baseline_reference_cost=metrics.baseline_total_reference_cost,
                         recovery_reference_cost=metrics.recovery_total_reference_cost,
                         reference_price_version=config.get("reference_price_version"),
+                        recovery_backend=_recovery_backend(config),
                     )
                 )
             except (OSError, ValueError):

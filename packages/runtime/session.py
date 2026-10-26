@@ -1,23 +1,37 @@
 """Framework-independent episode operations shared by both runtime schedulers."""
 
 import asyncio
+import json
 from collections.abc import Callable
 from time import perf_counter
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from packages.domain.models import (
     AgentSpec,
+    ContextPolicy,
     EpisodeResult,
     EstimatedCost,
     EventType,
     FinalAnswer,
     Message,
+    PlanItem,
     TaskSpec,
     TerminationReason,
     TokenUsage,
     ToolCall,
+    ToolCallBatch,
+    ToolSchema,
+    validate_plan,
 )
 from packages.domain.ports import (
     Environment,
@@ -26,19 +40,22 @@ from packages.domain.ports import (
     ToolValidator,
     TraceRecorder,
 )
-from packages.runtime.context import ContextHistoryError, project_context
+from packages.runtime.context import ContextHistoryError, _json_bytes, project_context
 from packages.runtime.handwritten.budget import BudgetState, BudgetTracker
 from packages.tools.registry import DefaultToolValidator, ToolRegistry, ValidationResult
 
 NextNode = Literal["model", "validate", "execute", "end"]
+
+PLANNING_TOOL = "update_plan"
 
 
 class SessionState(BaseModel):
     """Portable state saved only at a model boundary or after termination."""
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
-    schema_version: Literal["1.0"] = "1.0"
-    next_node: Literal["model", "end"]
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
+    next_node: Literal["model", "execute", "end"]
+    pending_calls: tuple[ToolCall, ...] = ()
     messages: tuple[Message, ...]
     seen_call_ids: tuple[str, ...]
     retried: bool
@@ -47,6 +64,35 @@ class SessionState(BaseModel):
     termination_reason: TerminationReason
     detail: str
     elapsed_ms: int = Field(ge=0)
+    plan: tuple[PlanItem, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_pending(self) -> "SessionState":
+        """Bind batch and plan revisions to their additive safe points."""
+        if (self.pending_calls or self.next_node == "execute") and self.schema_version not in (
+            "1.1",
+            "1.2",
+        ):
+            raise ValueError("Pending batch requires SessionState schema 1.1")
+        if self.plan and self.schema_version != "1.2":
+            raise ValueError("Saved plan requires SessionState schema 1.2")
+        if self.plan:
+            validate_plan(self.plan)
+        if self.next_node == "execute" and not self.pending_calls:
+            raise ValueError("Execute checkpoint requires pending calls")
+        if self.next_node == "model" and self.pending_calls:
+            raise ValueError("Incomplete batch cannot call model")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_state(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        """Keep original single-action and batch safe points unchanged."""
+        result: dict[str, object] = handler(self)
+        if self.schema_version == "1.0":
+            result.pop("pending_calls", None)
+        if not self.plan:
+            result.pop("plan", None)
+        return result
 
 
 class CheckpointFailure(RuntimeError):
@@ -91,7 +137,11 @@ class EpisodeSession:
             price_table_version="fake-zero-v1" if simulated else "aihubmix-free-unverified",
         )
         self.messages: list[Message] = []
+        self.plan: tuple[PlanItem, ...] = ()
+        self.planning_enabled = agent.planning is not None
         self.action: ToolCall | None = None
+        self.batch_calls: tuple[ToolCall, ...] = ()
+        self.pending_calls: list[ToolCall] = []
         self.seen_call_ids: set[str] = set()
         self.retried = False
         self.last_state: dict[str, JsonValue] = {}
@@ -130,10 +180,15 @@ class EpisodeSession:
 
     def checkpoint(self, next_node: NextNode, save: Callable[[SessionState], None] | None) -> None:
         """Persist only after a complete observation or tool/model outcome."""
-        if save is None or next_node not in ("model", "end"):
+        if save is None or (
+            next_node not in ("model", "end")
+            and not (next_node == "execute" and self.pending_calls)
+        ):
             return
         state = SessionState(
+            schema_version="1.2" if self.plan else "1.1" if self.pending_calls else "1.0",
             next_node=next_node,
+            pending_calls=tuple(self.pending_calls),
             messages=tuple(self.messages),
             seen_call_ids=tuple(sorted(self.seen_call_ids)),
             retried=self.retried,
@@ -142,6 +197,7 @@ class EpisodeSession:
             termination_reason=self.termination_reason,
             detail=self.detail,
             elapsed_ms=int((perf_counter() - self.started) * 1000),
+            plan=self.plan,
         )
         try:
             save(state)
@@ -150,16 +206,23 @@ class EpisodeSession:
 
     def restore(self, state: SessionState) -> NextNode:
         """Restore the environment and counters before scheduling any new action."""
+        if state.plan and not self.planning_enabled:
+            raise ValueError("Saved plan requires a planning agent")
+        self._restore_plan(state)
         self.environment.reset(self.task, self.recorder.run_config.seed)
         self.environment.restore(state.last_state)
         if self.environment.snapshot() != state.last_state:
             raise ValueError("Environment checkpoint mismatch")
         self.budget.restore(state.budget)
         self.messages = list(state.messages)
+        self.plan = tuple(state.plan)
         self.seen_call_ids = set(state.seen_call_ids)
         if len(self.seen_call_ids) != len(state.seen_call_ids):
             raise ValueError("Duplicate tool call ID in checkpoint")
         self.retried = state.retried
+        self.pending_calls = list(state.pending_calls)
+        if self.pending_calls and state.next_node == "execute":
+            self._restore_batch(state)
         self.last_state = state.last_state
         self.termination_reason = state.termination_reason
         self.detail = state.detail
@@ -167,6 +230,124 @@ class EpisodeSession:
         events = self.recorder.events
         self.parent_event_id = events[-1].event_id if events else None
         return state.next_node
+
+    def _restore_plan(self, state: SessionState) -> None:
+        """Bind persisted declarations to earlier validated, successful tool feedback."""
+        latest: tuple[PlanItem, ...] = ()
+        proposals: dict[str, ToolCall] = {}
+        started: set[str] = set()
+        succeeded: dict[str, tuple[PlanItem, ...]] = {}
+        applied: set[str] = set()
+        for event in self.recorder.events:
+            call_id = str(event.payload.get("call_id", ""))
+            if event.event_type == EventType.TOOL_CALL_PROPOSED:
+                if event.payload.get("name") == PLANNING_TOOL:
+                    arguments = event.payload.get("arguments")
+                    if not isinstance(arguments, dict):
+                        raise ValueError("Saved plan arguments are malformed")
+                    proposals[call_id] = ToolCall(
+                        call_id=call_id,
+                        name=PLANNING_TOOL,
+                        arguments=arguments,
+                    )
+            elif event.event_type == EventType.TOOL_STARTED and call_id in proposals:
+                started.add(call_id)
+            elif event.event_type == EventType.TOOL_SUCCEEDED and call_id in proposals:
+                call = proposals[call_id]
+                if (
+                    not self.planning_enabled
+                    or call_id not in started
+                    or self._inspect(call).error_code
+                ):
+                    raise ValueError("Saved plan lacks a permitted source")
+                raw = call.arguments.get("plan")
+                if not isinstance(raw, list):
+                    raise ValueError("Saved plan source is malformed")
+                items = validate_plan(tuple(PlanItem.model_validate(entry) for entry in raw))
+                observation = event.payload.get("observation")
+                result = observation.get("result") if isinstance(observation, dict) else None
+                if not isinstance(result, dict) or result.get("items") != [
+                    i.model_dump(mode="json") for i in items
+                ]:
+                    raise ValueError("Saved plan feedback mismatch")
+                if not any(
+                    m.role == "tool" and m.tool_call_id == call_id and m.content == observation
+                    for m in state.messages
+                ):
+                    raise ValueError("Saved plan conversation mismatch")
+                if not any(
+                    call in (m.tool_calls or ()) for m in state.messages if m.role == "assistant"
+                ):
+                    raise ValueError("Saved plan proposal mismatch")
+                succeeded[call_id] = items
+            elif event.event_type == EventType.PLAN_UPDATED:
+                if call_id not in succeeded or call_id in applied:
+                    raise ValueError("Saved plan update lacks a successful source")
+                latest = succeeded[call_id]
+                if event.payload.get("items") != [i.model_dump(mode="json") for i in latest]:
+                    raise ValueError("Saved plan event mismatch")
+                applied.add(call_id)
+        if applied != set(succeeded) or state.plan != latest:
+            raise ValueError("Saved plan does not match recorded declarations")
+
+    def _restore_batch(self, state: SessionState) -> None:
+        """Bind pending work to the unmatched saved round before any tool can run."""
+        if self.agent.model.tool_call_mode != "serial":
+            raise ValueError("Pending batch requires saved serial mode")
+        start = max((i for i, m in enumerate(self.messages) if m.role == "assistant"), default=-1)
+        if start < 0:
+            raise ValueError("Missing pending batch source")
+        project_context(self.messages[:start], self.agent.context_policy or ContextPolicy())
+        source = self.messages[start]
+        feedback = self.messages[start + 1 :]
+        calls = source.tool_calls or ()
+        if (
+            not 2 <= len(calls) <= 8
+            or tuple(c.call_id for c in calls[: len(feedback)])
+            != tuple(m.tool_call_id for m in feedback)
+            or any(m.role != "tool" for m in feedback)
+            or tuple(self.pending_calls) != calls[len(feedback) :]
+            or any(c.call_id not in self.seen_call_ids for c in calls)
+            or len({c.call_id for c in calls}) != len(calls)
+        ):
+            raise ValueError("Pending batch conversation mismatch")
+        executed = {
+            e.payload.get("call_id")
+            for e in self.recorder.events
+            if e.event_type == EventType.TOOL_STARTED
+        }
+        proposals = {
+            e.payload.get("call_id"): e.payload
+            for e in self.recorder.events
+            if e.event_type == EventType.TOOL_CALL_PROPOSED
+        }
+        returns = {
+            e.payload.get("call_id"): e.payload.get("observation")
+            for e in self.recorder.events
+            if e.event_type == EventType.TOOL_SUCCEEDED
+        }
+        if (
+            sum(e.event_type == EventType.TOOL_STARTED for e in self.recorder.events)
+            != state.budget.tool_call_count
+            or any(
+                proposals.get(call.call_id, {}).get("name") != call.name
+                or proposals.get(call.call_id, {}).get("arguments") != call.arguments
+                for call in calls
+            )
+            or any(returns.get(m.tool_call_id) != m.content for m in feedback)
+        ):
+            raise ValueError("Pending batch Trace mismatch")
+        schemas = {t.name: t for t in self._available_tools()}
+        for call in self.pending_calls:
+            if (
+                call.call_id in executed
+                or self._inspect(call).error_code is not None
+                or call.name not in schemas
+                or schemas[call.name].risk_level != "READ_ONLY"
+            ):
+                raise ValueError("Unsafe pending batch")
+        self.batch_calls = calls
+        self.action = self.pending_calls[0]
 
     def stop(self, reason: TerminationReason, detail: str) -> NextNode:
         """Retain usage and the last valid environment state on every stop."""
@@ -230,6 +411,42 @@ class EpisodeSession:
             payload = {"messages_count": len(model_messages), "context": projection.diagnostics}
         else:
             model_messages = [message.model_copy(deep=True) for message in self.messages]
+        if self.planning_enabled and self.plan:
+            # A declared plan is a claim; only real tool results count toward completion.
+            overlay: dict[str, JsonValue] = {
+                "_agentlabyrinth_plan": {
+                    "schema_version": "1.0",
+                    "notice": "Your declared plan; a claim, not verified execution.",
+                    "items": [item.model_dump(mode="json") for item in self.plan],
+                }
+            }
+            model_messages = [*model_messages, Message(role="user", content=overlay)]
+        if self.planning_enabled:
+            source = next(
+                (
+                    e
+                    for e in reversed(self.recorder.events)
+                    if e.event_type == EventType.PLAN_UPDATED
+                ),
+                None,
+            )
+            payload["messages_count"] = len(model_messages)
+            payload["planning"] = {
+                "schema_version": "1.0",
+                "algorithm_version": "plan-update-v1",
+                "declaration_event_id": str(source.event_id) if source else None,
+                "items_count": len(self.plan),
+                "overlay_bytes": len(json.dumps(overlay, ensure_ascii=False).encode("utf-8"))
+                if self.plan
+                else 0,
+            }
+            diagnostics = payload.get("context")
+            if isinstance(diagnostics, dict):
+                diagnostics["planning_overlay_messages_count"] = int(bool(self.plan))
+                diagnostics["visible_messages_count"] = len(model_messages)
+                diagnostics["input_messages_bytes"] = _json_bytes(
+                    [m.model_dump(mode="json") for m in model_messages]
+                )
         if self.time_exceeded():
             return self.stop_for_time()
         self.budget.model_call_count += 1
@@ -239,13 +456,22 @@ class EpisodeSession:
         try:
             async with deadline:
                 response = await self.provider.generate(
-                    model_messages, self.environment.available_tools(), self.agent.model
+                    model_messages, self._available_tools(), self.agent.model
                 )
         except TimeoutError:
             if not deadline.expired():
                 return self.stop(TerminationReason.RUNTIME_ERROR, "provider_error")
             return self.stop_for_time(usage_unknown=True)
         except ModelProviderError as exc:
+            if exc.token_usage is not None:
+                cost = EstimatedCost(is_known=False, price_table_version="aihubmix-free-unverified")
+                self.budget.accrue_usage(exc.token_usage, cost)
+                self.record(
+                    EventType.MODEL_RESPONDED,
+                    {"action_kind": "rejected", "error_code": exc.code},
+                    token_usage=exc.token_usage,
+                    estimated_cost=cost,
+                )
             if self.time_exceeded():
                 return self.stop_for_time(usage_unknown=True)
             return self.stop(TerminationReason.RUNTIME_ERROR, f"provider_error: {exc.code}")
@@ -257,7 +483,14 @@ class EpisodeSession:
         )
         self.record(
             EventType.MODEL_RESPONDED,
-            {"action_kind": response.action.kind},
+            {
+                "action_kind": response.action.kind,
+                **(
+                    {"tool_calls_count": len(response.action.calls), "execution": "serial"}
+                    if isinstance(response.action, ToolCallBatch)
+                    else {}
+                ),
+            },
             token_usage=response.token_usage,
             estimated_cost=response.estimated_cost,
         )
@@ -269,11 +502,36 @@ class EpisodeSession:
             )
         if isinstance(response.action, FinalAnswer):
             return self.stop(TerminationReason.FAILED, "missing_submission")
+        if isinstance(response.action, ToolCallBatch):
+            if self.agent.model.tool_call_mode != "serial":
+                return self.stop(
+                    TerminationReason.RUNTIME_ERROR, "provider_error: MULTIPLE_TOOL_CALLS"
+                )
+            self.batch_calls = response.action.calls
+            return "validate"
         self.action = response.action
         return "validate"
 
-    def _inspect(self, action: ToolCall) -> ValidationResult:
+    def _available_tools(self) -> list[ToolSchema]:
+        """Expose the plan-declaration tool only to planning agents."""
+        tools = self.environment.available_tools()
+        if self.planning_enabled:
+            return tools
+        return [tool for tool in tools if tool.name != PLANNING_TOOL]
+
+    def available_tools(self) -> list[ToolSchema]:
+        """Expose the tools a model step may call so adapters mirror, never filter, this set."""
+        return self._available_tools()
+
+    def _allowed_tools(self) -> tuple[str, ...]:
+        """Mirror the exposed set; the plan tool is a component, never a task requirement."""
         allowed = tuple(t for t in self.task.expected_tools if t not in self.task.forbidden_tools)
+        if PLANNING_TOOL in self.task.forbidden_tools or not self.planning_enabled:
+            return tuple(name for name in allowed if name != PLANNING_TOOL)
+        return allowed if PLANNING_TOOL in allowed else (*allowed, PLANNING_TOOL)
+
+    def _inspect(self, action: ToolCall) -> ValidationResult:
+        allowed = self._allowed_tools()
         if self.validator is None:
             raise RuntimeError("Tool validator is required")
         if isinstance(self.validator, DefaultToolValidator):
@@ -290,6 +548,8 @@ class EpisodeSession:
         """Reject unsafe actions; only one permitted argument error can re-enter model."""
         if self.time_exceeded():
             return self.stop_for_time()
+        if self.batch_calls:
+            return self._validate_batch()
         action = self.action
         if action is None:
             raise RuntimeError("No tool action to validate")
@@ -323,9 +583,7 @@ class EpisodeSession:
                 and not self.retried
             ):
                 self.retried = True
-                schema = next(
-                    (t for t in self.environment.available_tools() if t.name == action.name), None
-                )
+                schema = next((t for t in self._available_tools() if t.name == action.name), None)
                 feedback: dict[str, JsonValue] = {
                     "error": "INVALID_ARGUMENTS",
                     "message": (
@@ -348,6 +606,80 @@ class EpisodeSession:
             return self.stop(TerminationReason.FAILED, "tool_validation_failed")
         return "execute"
 
+    def _validate_batch(self) -> NextNode:
+        """Inspect the complete read batch before any tool starts."""
+        schemas = {tool.name: tool for tool in self._available_tools()}
+        ids: set[str] = set()
+        invalid: list[ToolCall] = []
+        fatal: str | None = None
+        for index, call in enumerate(self.batch_calls):
+            self.record(
+                EventType.TOOL_CALL_PROPOSED,
+                {
+                    "call_id": call.call_id,
+                    "name": call.name,
+                    "arguments": call.arguments,
+                    "batch_id": self.batch_calls[0].call_id,
+                    "batch_index": index + 1,
+                    "batch_size": len(self.batch_calls),
+                },
+            )
+            check = self._inspect(call)
+            duplicate = call.call_id in ids or call.call_id in self.seen_call_ids
+            ids.add(call.call_id)
+            schema = schemas.get(call.name)
+            code = "DUPLICATE_CALL_ID" if duplicate else check.error_code
+            if code is None and (not check.arguments_valid or not check.permitted):
+                code = "TOOL_VALIDATION_FAILED"
+            if (
+                code in (None, "INVALID_ARGUMENTS")
+                and schema is not None
+                and schema.risk_level != "READ_ONLY"
+            ):
+                code = "BATCH_REQUIRES_READ_ONLY"
+            self.record(
+                EventType.TOOL_CALL_VALIDATED,
+                {
+                    "call_id": call.call_id,
+                    "name": call.name,
+                    "arguments_valid": check.arguments_valid,
+                    "permitted": check.permitted,
+                    "error_code": code,
+                },
+            )
+            if code == "INVALID_ARGUMENTS":
+                invalid.append(call)
+            elif code is not None:
+                fatal = fatal or code
+        self.seen_call_ids.update(ids)
+        if fatal:
+            return self.stop(TerminationReason.FAILED, f"batch_rejected: {fatal}")
+        if invalid:
+            if self.agent.recovery_policy != "invalid_arguments_once" or self.retried:
+                return self.stop(TerminationReason.FAILED, "invalid_arguments: INVALID_ARGUMENTS")
+            self.retried = True
+            self.messages.append(Message(role="assistant", tool_calls=self.batch_calls))
+            for call in self.batch_calls:
+                self.messages.append(
+                    Message(
+                        role="tool",
+                        tool_call_id=call.call_id,
+                        content={
+                            "error": "INVALID_ARGUMENTS" if call in invalid else "BATCH_CANCELLED",
+                            "message": "No tools executed. Correct calls and use new call IDs.",
+                            "parameters_schema": schemas[call.name].parameters,
+                        },
+                    )
+                )
+            self.batch_calls = ()
+            return "model"
+        if self.budget.tool_call_count + len(self.batch_calls) > self.budget.max_tool_calls:
+            return self.stop(TerminationReason.MAX_STEPS, "max_tool_calls_reached")
+        self.pending_calls = list(self.batch_calls)
+        self.action = self.pending_calls[0]
+        self.messages.append(Message(role="assistant", tool_calls=self.batch_calls))
+        return "execute"
+
     async def execute(self) -> NextNode:
         """Run one validated tool through Environment/Executor, then append its feedback."""
         if self.time_exceeded():
@@ -362,6 +694,8 @@ class EpisodeSession:
             )
         self.budget.tool_call_count += 1
         started_payload: dict[str, JsonValue] = {"call_id": action.call_id, "name": action.name}
+        if self.planning_enabled and action.name == PLANNING_TOOL:
+            started_payload["transport"] = "local"
         transport = getattr(self.environment, "tool_transport", None)
         if isinstance(transport, str) and action.name in getattr(
             self.environment, "remote_tools", ()
@@ -392,16 +726,41 @@ class EpisodeSession:
             EventType.TOOL_SUCCEEDED,
             {"call_id": action.call_id, "observation": step.observation.content},
         )
-        self.record(EventType.ENVIRONMENT_UPDATED, {"done": step.done, "state": self.last_state})
-        self.messages.append(Message(role="assistant", content=None, tool_calls=(action,)))
+        self.record(
+            EventType.ENVIRONMENT_UPDATED,
+            {
+                "done": step.done,
+                "state": self.last_state,
+                **({"call_id": action.call_id} if self.pending_calls else {}),
+            },
+        )
+        if self.planning_enabled and action.name == PLANNING_TOOL:
+            raw = action.arguments.get("plan")
+            items = (
+                tuple(PlanItem.model_validate(entry) for entry in raw)
+                if isinstance(raw, list)
+                else ()
+            )
+            self.plan = items
+            self.record(
+                EventType.PLAN_UPDATED,
+                {"call_id": action.call_id, "items": [i.model_dump(mode="json") for i in items]},
+            )
+        if not self.pending_calls:
+            self.messages.append(Message(role="assistant", content=None, tool_calls=(action,)))
         self.messages.append(
             Message(role="tool", content=step.observation.content, tool_call_id=action.call_id)
         )
+        if self.pending_calls:
+            self.pending_calls.pop(0)
+            self.action = self.pending_calls[0] if self.pending_calls else None
+            if not self.pending_calls:
+                self.batch_calls = ()
         if self.time_exceeded():
             return self.stop_for_time()
         if step.done:
             return self.stop(TerminationReason.SUCCESS, "submitted")
-        return "model"
+        return "execute" if self.pending_calls else "model"
 
     def result(self) -> EpisodeResult:
         """Build the portable outcome; Runner remains the sole final-event owner."""
