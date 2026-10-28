@@ -1,7 +1,11 @@
 """Unit tests for AIHubMixModelProvider with mocked HTTP responses."""
 
 import asyncio
+import errno
+import http.client
 import io
+import socket
+import ssl
 import urllib.error
 from unittest.mock import MagicMock, patch
 
@@ -9,7 +13,108 @@ import pytest
 
 from packages.domain.models import FinalAnswer, Message, ModelConfig, ToolCall, ToolSchema
 from packages.domain.ports import ModelProviderError
-from packages.providers.aihubmix import AIHubMixModelProvider
+from packages.providers.aihubmix import AIHubMixModelProvider, list_available_model_ids
+
+
+@pytest.mark.parametrize("operation", ["catalog", "completion"])
+@pytest.mark.parametrize(
+    "error,category,code,reading",
+    [
+        (
+            urllib.error.URLError(socket.gaierror(1, "private")),
+            "DNS_LOOKUP_FAILED",
+            "NETWORK_CONNECTION_FAILED",
+            False,
+        ),
+        (
+            urllib.error.URLError(ssl.SSLCertVerificationError(1, "private")),
+            "TLS_CERTIFICATE_ERROR",
+            "NETWORK_CONNECTION_FAILED",
+            False,
+        ),
+        (
+            urllib.error.URLError(ssl.SSLError(1, "private")),
+            "TLS_ERROR",
+            "NETWORK_CONNECTION_FAILED",
+            False,
+        ),
+        (
+            urllib.error.URLError(TimeoutError("private")),
+            "REQUEST_TIMEOUT",
+            "REQUEST_TIMEOUT",
+            False,
+        ),
+        (TimeoutError("private"), "REQUEST_TIMEOUT", "REQUEST_TIMEOUT", True),
+        (
+            urllib.error.URLError(ConnectionRefusedError("private")),
+            "CONNECTION_REFUSED",
+            "NETWORK_CONNECTION_FAILED",
+            False,
+        ),
+        (
+            urllib.error.URLError(OSError(errno.ENETUNREACH, "private")),
+            "NETWORK_UNREACHABLE",
+            "NETWORK_CONNECTION_FAILED",
+            False,
+        ),
+        (
+            ConnectionResetError("private"),
+            "CONNECTION_INTERRUPTED",
+            "NETWORK_CONNECTION_FAILED",
+            True,
+        ),
+        (
+            http.client.IncompleteRead(b"private", 8),
+            "CONNECTION_INTERRUPTED",
+            "NETWORK_CONNECTION_FAILED",
+            True,
+        ),
+        (
+            http.client.BadStatusLine("private"),
+            "HTTP_PROTOCOL_ERROR",
+            "NETWORK_CONNECTION_FAILED",
+            True,
+        ),
+        (
+            urllib.error.URLError("private https://user:secret@example.test/?key=secret"),
+            "NETWORK_UNKNOWN",
+            "NETWORK_CONNECTION_FAILED",
+            False,
+        ),
+    ],
+)
+def test_network_failures_keep_safe_diagnostics_without_retry_or_fake_usage(
+    operation: str,
+    error: OSError | http.client.HTTPException,
+    category: str,
+    code: str,
+    reading: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Both discovery and inference handle connection and response-read failures consistently."""
+    with (
+        patch("packages.providers.aihubmix.get_aihubmix_api_key", return_value="secret"),
+        patch("urllib.request.urlopen") as opened,
+    ):
+        if reading:
+            opened.return_value.__enter__.return_value.read.side_effect = error
+        else:
+            opened.side_effect = error
+        with pytest.raises(ModelProviderError) as caught:
+            if operation == "catalog":
+                list_available_model_ids()
+            else:
+                AIHubMixModelProvider()._send_http_request({"messages": ["private"]}, "secret")
+    assert str(caught.value) == code
+    assert caught.value.token_usage is None
+    assert caught.value.__suppress_context__
+    assert opened.call_count == 1
+    assert len(caplog.records) == 1
+    record = caplog.records[0]
+    assert record.__dict__["operation"] == operation
+    assert record.__dict__["network_category"] == category
+    assert record.exc_info is None
+    assert "private" not in caplog.text and "secret" not in caplog.text
 
 
 @pytest.mark.parametrize("split", [None, True])
@@ -312,6 +417,19 @@ def test_aihubmix_http_errors_are_sanitized() -> None:
             provider._send_http_request({}, "secret_test_key_12345")
         assert "UPSTREAM_GATEWAY_ERROR" in str(exc_info.value)
         assert "sensitive" not in str(exc_info.value)
+
+
+def test_interrupted_http_error_body_preserves_known_status() -> None:
+    """A truncated error body cannot hide the received gateway status or expose partial bytes."""
+    body = MagicMock()
+    body.read.side_effect = http.client.IncompleteRead(b"private secret", 8)
+    error = urllib.error.HTTPError("https://example.test", 503, "private", MagicMock(), body)
+    with patch("urllib.request.urlopen", side_effect=error) as opened:
+        with pytest.raises(ModelProviderError) as caught:
+            AIHubMixModelProvider()._send_http_request({}, "secret")
+    assert str(caught.value) == "UPSTREAM_GATEWAY_ERROR"
+    assert caught.value.token_usage is None
+    assert opened.call_count == 1
 
 
 def test_missing_api_key_raises() -> None:

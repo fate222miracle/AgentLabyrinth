@@ -5,15 +5,20 @@ Ensures strict parameter validation, response mapping, and sanitized error repor
 """
 
 import asyncio
+import errno
+import http.client
 import json
+import logging
 import os
+import socket
+import ssl
 import threading
 import time
 import urllib.error
 import urllib.request
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, Literal, NoReturn
 
 from packages.domain.models import (
     EstimatedCost,
@@ -34,6 +39,40 @@ DEFAULT_MODEL = "coding-glm-5.3-free"
 # ponytail: one local process/account; use an account-scoped limiter for multi-user deployment.
 _request_lock = threading.Lock()
 _next_request_at = 0.0
+
+
+def _transport_failure(
+    error: OSError | http.client.HTTPException, operation: Literal["catalog", "completion"]
+) -> ModelProviderError:
+    """Log fixed local categories, keeping raw errors out of logs and public artifacts."""
+    reason = error.reason if isinstance(error, urllib.error.URLError) else error
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        category = "TLS_CERTIFICATE_ERROR"
+    elif isinstance(reason, ssl.SSLError):
+        category = "TLS_ERROR"
+    elif isinstance(reason, socket.gaierror):
+        category = "DNS_LOOKUP_FAILED"
+    elif isinstance(reason, TimeoutError):
+        category = "REQUEST_TIMEOUT"
+    elif isinstance(reason, ConnectionRefusedError):
+        category = "CONNECTION_REFUSED"
+    elif isinstance(reason, (ConnectionError, http.client.IncompleteRead)):
+        category = "CONNECTION_INTERRUPTED"
+    elif isinstance(reason, http.client.HTTPException):
+        category = "HTTP_PROTOCOL_ERROR"
+    elif isinstance(reason, OSError) and reason.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+        category = "NETWORK_UNREACHABLE"
+    else:
+        category = "NETWORK_UNKNOWN"
+    logging.getLogger(__name__).warning(
+        "provider_network_failure provider=aihubmix operation=%s category=%s",
+        operation,
+        category,
+        extra={"provider": "aihubmix", "operation": operation, "network_category": category},
+    )
+    return ModelProviderError(
+        "REQUEST_TIMEOUT" if category == "REQUEST_TIMEOUT" else "NETWORK_CONNECTION_FAILED"
+    )
 
 
 def get_aihubmix_api_key() -> str:
@@ -88,10 +127,8 @@ def list_available_model_ids(timeout: float = 4.0) -> set[str]:
         else:
             code = "CLIENT_REQUEST_FAILED"
         raise ModelProviderError(code) from None
-    except TimeoutError:
-        raise ModelProviderError("REQUEST_TIMEOUT") from None
-    except urllib.error.URLError:
-        raise ModelProviderError("NETWORK_CONNECTION_FAILED") from None
+    except (OSError, http.client.HTTPException) as err:
+        raise _transport_failure(err, "catalog") from None
     except (ValueError, UnicodeError):
         raise ModelProviderError("INVALID_MODEL_RESPONSE") from None
 
@@ -246,7 +283,7 @@ class AIHubMixModelProvider(ModelProvider):
                 error = body.get("error", {})
                 if isinstance(error, dict):
                     upstream_code = error.get("code")
-            except (ValueError, AttributeError, OSError):
+            except (ValueError, AttributeError, OSError, http.client.HTTPException):
                 pass
             # Inspect only known codes, including when upstream wraps them in 5xx.
             if err.code == 401:
@@ -264,10 +301,8 @@ class AIHubMixModelProvider(ModelProvider):
             else:
                 code = "CLIENT_REQUEST_FAILED"
             raise ModelProviderError(code) from None
-        except urllib.error.URLError:
-            raise ModelProviderError("NETWORK_CONNECTION_FAILED") from None
-        except TimeoutError:
-            raise ModelProviderError("REQUEST_TIMEOUT") from None
+        except (OSError, http.client.HTTPException) as err:
+            raise _transport_failure(err, "completion") from None
         except (ValueError, UnicodeError):
             raise ModelProviderError("INVALID_MODEL_RESPONSE") from None
 

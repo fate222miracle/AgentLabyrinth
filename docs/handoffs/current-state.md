@@ -1,6 +1,46 @@
 # Current state
 
-更新：2026-10-26。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+更新：2026-10-28。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+
+## 2026-10-28 Provider连接诊断与截止时间回归修复
+
+负责人要求修存量问题，本轮先修AIHubMix目录/推理的连接可观测性：共用安全本地日志分类，包装超时沿已有REQUEST_TIMEOUT，读取重置/HTTP截断转原安全失败码；已收到HTTP状态的错误正文截断保留原状态映射。公开Schema/Trace/评分/CSV及无重试/未知用量规则不改，旧原因不回填。实际仅一次目录GET成功（1047ms、4可见型号、HTTPS代理已配置），不是推理稳定性证明；没有真实推理/Judge/恢复。源码、日志读法和全部失败证据见[本轮交接](../learning/V0.3-network-diagnostics-20261028.md)。
+
+首次完整门禁Python阶段701通过/1失败，定位为既有80ms取消测试假定框架已进入请求；生产系统其实在初始化期间正确零调用超时。仅修测试隔离计时并新增三Runtime初始化耗尽边界，保留真实asyncio取消与所有原断言，64项专项通过；首次失败日志quality.log保留。
+
+最终完整`scripts.check`退出0、**Quality gate passed**：Python **705/119.66秒**、Ruff/Mypy **116文件**、旧四套 **22格零退化**、上下文消融、Web类型/构建、Node **48**、audit **0漏洞**、Edge **73/3.4分钟**。最终证据`artifacts/quality/9097a93e-85ca-4f79-84a7-547ed8e93faa/`、`artifacts/playwright/9c802ca1-9b2e-40e7-96b3-3720d40ac88c/`，日志`artifacts/network-diagnostics-20261028/quality-final.log`。21题及原失败Episode共22份SHA保持；API8000/Web5173恢复，页面GET200、代理回读原368937f4…仍NETWORK_CONNECTION_FAILED/报告3364，没有倒填分类。MCP本轮未启动/未使用；Starlette弃用与大chunk提示保留，无依赖升级。
+
+分支codex/fix-provider-network-diagnostics保留全部dirty/untracked，无Git提交/推送或新真实推理/Judge/恢复。新增分类只进本地日志，目前仍没有Episode/API request_id级关联，若需公开/持久化须先具体方案；这是剩余诊断边界。下一步先根据实际失败日志定位链路，研究收益仍需明确范围与授权的真实对照，不自动重试旧失败。暂停新增机制，A1与真实收益缺口保持。
+
+## 2026-10-26 暂停新增功能，先修明显硬伤
+
+负责人要求先处理存量问题。当前执行交接为[硬伤修复](../learning/V0.3-hardening-20261026.md)：保存Episode按请求/返回/计数及输入输出对账，不完整显示已报告Token与总用量未知，无报告不补零；实验汇总/折线只标已报告值，不能冒称完整节省。Web首次默认Fake、一个普通ToolLab任务/两侧2次、整场16000Token边界预算；无Fake显示空选项，显式选择真实模型后目录刷新保留草稿。工具选择标签澄清为允许工具命中比例，评分/字段/CSV不改。Copilot入口删除旧V0.2任务与有Key就自动真实试跑要求，改读当前SSOT/交接和当次授权。窄屏长错误码实际截图发现越卡后补原生换行，增加卡片自身溢出断言。UI规范1.13。
+
+最终代码完整`scripts.check`退出0、**Quality gate passed**：Python **679/102.15秒**、Ruff/Mypy **116文件**、旧四套 **22格零退化**、上下文消融、Web类型/构建、Node **48**、audit **0漏洞**、Edge **73/2.9分钟**。证据`artifacts/quality/0afe957a-935d-40aa-b971-3d90ecf8148e/`、`artifacts/playwright/acf2e50e-c50b-4cf0-be5b-5b4c7ba02ce9/`，日志`artifacts/hardening-20261026/quality-final.log`；已查看最终1440/390并自动检查1280/720、减少动效、页面及卡片不溢出。早期专项末尾误比较动态request_id而失败已纠正，不隐藏记录；首次完整门禁后截图发现的换行修复已由最终完整门禁覆盖。现存Starlette弃用与构建大chunk提示仍有，不是本轮新增。
+
+21份任务及原真实网络失败Episode共22份SHA前后保持；共享检查对368937f4…实际返回不完整/报告3364，未追加推理或重跑。API8000/Web5173已恢复，页面及代理只读回读该原Episode成功；MCP本轮未启动/未使用。分支 **codex/fix-reporting-and-run-defaults**，全部先前dirty/untracked保留，无Git提交/推送。下一步继续排查网络失败与已有功能的证据/维护问题，不自动进入Reflection/新机制、数据库或多Agent；真实调用仍需具体新授权。完整回归不是规划收益、网络稳定性或整版研究效果证明。
+
+## 2026-10-26 ADR-041只读保存进度与中文诊断交付
+
+负责人确认具体方案后实现GET `/api/v1/experiments/{id}/progress`：以冻结计划和uuid5定位两臂，复用保存结果/安全点与来源hash核查，区分completed/checkpoint/no_saved_record/invalid。缺计划404、坏计划409且不回显内容；坏结果不借安全点冒充完成。Web在Job/待恢复区显式查看，可进入校验通过的Episode；切换/关闭取消旧请求，全部只GET，不自动恢复或推理。原执行/恢复/评分不改，部分执行不生成总体成绩；共享中文诊断明确网络错误不等于配额耗尽。UI规范1.12和源码/失败交接同步。
+
+原真实计划61bd5e1e…只读核对：左368937f4…为completed/false/网络失败，右no_saved_record/null，源字节保持。没有新增真实模型/恢复/Judge。实际新完整`scripts.check`退出0、**Quality gate passed**：Python **679/103.98秒**、Ruff/Mypy **116文件**、旧22格零退化/消融、Web类型/构建、Node **47**、audit **0漏洞**、Edge **70/2.9分钟**。产物`artifacts/quality/c925b5e2-d0ec-46ad-9691-0c47d9ce7aae/`、最终浏览器`artifacts/playwright/1b58ce46-8f5a-411b-a830-c9ad6de6843a/`；专项11Edge及1440/390截图另已核查。API8000/Web5173恢复，MCP未用于本轮。源码顺序/调用链/边界见[学习交接](../learning/V0.3-experiment-progress-20261026.md)。分支仍codex/planning-serial-validation，原规划/规范dirty全部保留，无Git提交/推送；下一真实请求仍需单独授权。
+
+## 2026-10-26 serial规划对照未完成与组件采用提示
+
+负责人另批一对serial，其他条件保持；已创建codex/planning-serial-validation分支，原规划UI与Git规范改动全部保留、未提交。离线正式Fake预检两侧通过。真实POST的左侧首轮执行2个检索，第二模型请求NETWORK_CONNECTION_FAILED，报告Token3280/84仅部分用量；未知用量保护阻止右侧。计划 **61bd5e1e-2d57-4fbb-b955-9a5bb7ebd025**、左Episode **368937f4-84bc-523c-a5f3-9c685578cd72**保存，右侧未启动、完整Experiment未生成；不得将其写成双方失败或完整对照。HTTP400不意味着零模型执行，授权已消费，没有重试/恢复/换模型/Judge。只读核查计划/安全点/Trace与21题SHA通过。
+
+沿ADR-035在PlanningPairReview区分组件启用与实际未声明；缺Trace仍未知。实际typecheck/build、Edge规划专项 **6/6、28.4秒**通过，未重跑全套/Node45，不沿用旧数字。API8000/Web5173恢复，MCP本轮未使用/未启动。下一步先定位网络与未完成实验可观测性，不扩机制；源码/调用链/产物和边界见[学习交接](../learning/V0.3-planning-serial-validation-20261026.md)。本轮不Git同步，Reflection暂缓、A1保留。
+
+## 2026-10-26 Git协作规范落地
+
+负责人要求GitHub协作对齐企业开发。复用需求§28和现有quality工作流，补根CONTRIBUTING.md、Issue/PR模板及README入口；明确任务分支、原子提交、PR实际证据、负责人合并和revert原则。Codex使用codex/前缀，不引入长期develop或新工具依赖。既有254eac0保留，不重写公开历史；后续规划UI与规范应分组提交，共同文件按段核对。远端分支保护未核实/配置、CI本轮未执行；只做文档差异与模板入口检查，不用此前测试数字背书。本轮不提交/推送/创建PR，原规划代码与交接全部保留。
+
+## 2026-10-26 规划执行证据展示与唯一真实对照
+
+负责人接续开发并另行批准MiniMax M2.7×planning-route-002唯一一对（handwritten/single/full/无纠错，各10步/20000Token/300秒、全局40000）。已运行并保存实验 **39164f38-2e4f-4845-beb5-776bdb829315**：左MULTIPLE_TOOL_CALLS/21489报告Token，右累计输入预算终止/23793Token；均6模型/5工具、4成功读/0重复、无计划声明、无实际提交。核查固定变量/安全点/Trace与21题哈希通过；不重试、不换模型、不追加Judge，授权已消费。这不是规划收益证据，也不能把右侧失败归因于未发生的额外规划调用。
+
+沿ADR-035/036完善PlanningPairReview：并列展示实际提交/证据、成功阅读与引用、模型/工具次数、已报告输入输出Token/耗时/终止说明；复用已有派生工具与中文字段组件，不改Schema/评分或任务。缺Trace保留未知，缺提交明确提示；刷新/快速切换只GET。实际typecheck/build、Node **45**及Edge规划专项 **6/6、28.7秒**通过，已查看1440/390截图，服务恢复。没有Python业务改动，未重跑全套668/68，不把旧数字冒充新门禁。源码/失败/全部真实结果及下一候选见[学习交接](../learning/V0.3-planning-evidence-20261026.md)。本轮不自动Git同步，Reflection暂缓、A1保留，下一真实实验仍须单独授权。
 
 ## 2026-10-26 阶段回顾与本次GitHub同步授权
 
