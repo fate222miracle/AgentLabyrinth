@@ -83,3 +83,28 @@ export function keyFields(
   return (selected.length ? selected : Object.keys(source).slice(0, 4))
     .map((key) => [key, source[key]]);
 }
+
+/** Explain saved failures without inferring quota exhaustion or retrying. */
+export function explainFailure(detail: string): string {
+  const explanations: Record<string, string> = {
+    RATE_LIMIT_EXCEEDED: '供应商限流：稍后再试，并检查账号当日配额。',
+    AUTHENTICATION_FAILED: '后端 API Key 缺失、失效或认证失败。',
+    MODEL_NOT_FOUND: '供应商返回 404：模型不存在或当前账号不可访问。',
+    MODEL_RETIRED: '供应商已下线该模型，请选择其他模型。',
+    UPSTREAM_CHANNEL_UNAVAILABLE: '供应商暂无可用通道，请稍后重试或手动换模型。',
+    UPSTREAM_GATEWAY_ERROR: '供应商网关错误，请稍后再试。',
+    NETWORK_CONNECTION_FAILED: '后端未能完成与模型网关的连接；仅凭此错误不能判断每日额度是否耗尽。已保存进度保留，不会自动重试。',
+    EXPERIMENT_TOKEN_USAGE_UNKNOWN: '部分模型请求的用量未知，已停止后续运行；未执行侧不能按失败或零用量统计。',
+    MULTIPLE_TOOL_CALLS: '模型在单工具模式返回了多个调用，已按保存协议停止，未擅自选取其中一个。',
+    REQUEST_TIMEOUT: '模型请求超时。',
+    OUTPUT_TRUNCATED: '模型输出达到单次上限，未形成完整行动。',
+    INVALID_ARGUMENTS: '工具参数不符合 schema；Baseline 会终止，Recovery 最多纠错一次。',
+    task_token_budget_exceeded: '累计输入与输出超出任务 Token 预算，可在运行前显式调整。',
+    max_execution_time_exceeded: '本次运行已达到总时限，停止后续调用并保留已完成状态。',
+    upstream_usage_unknown: '本次运行已达到总时限；在途模型请求的最终用量未知，不会自动重试。',
+    missing_submission: '模型只返回文本，未调用工具完成提交。',
+  };
+  const parts = detail.split(': ');
+  const code = parts[parts.length - 1] ?? detail;
+  return explanations[code] ? `${explanations[code]} (${code})` : detail;
+}

@@ -18,6 +18,7 @@ from packages.domain.models import (
     PlanningConfig,
     RuntimeBackend,
     RuntimeStrategy,
+    TerminationReason,
     ToolCallMode,
 )
 
@@ -340,6 +341,41 @@ class ExperimentResponse(BaseModel):
     schema_version: Literal["1.0"] = "1.0"
     request_id: UUID
     experiment: ExperimentArtifact
+
+
+class ExperimentProgressArm(BaseModel):
+    """One saved arm; absence is neither failure nor evidence that it never started."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    episode_id: UUID
+    task_name: str
+    seed: int
+    repeat_index: int
+    arm: Literal["baseline", "recovery"]
+    state: Literal["completed", "checkpoint", "no_saved_record", "invalid"]
+    success: bool | None = None
+    termination_reason: TerminationReason | None = None
+    detail: str | None = None
+
+    @model_validator(mode="after")
+    def validate_saved_state(self) -> "ExperimentProgressArm":
+        """Only a saved final artifact may contribute a verdict."""
+        if self.state == "completed":
+            if self.success is None or self.termination_reason is None:
+                raise ValueError("Completed arm requires saved outcome")
+        elif self.success is not None or self.termination_reason is not None:
+            raise ValueError("Unfinished arm cannot supply an outcome")
+        return self
+
+
+class ExperimentProgressResponse(BaseModel):
+    """Read-only plan progress, deliberately separate from scored Experiment results."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    schema_version: Literal["1.0"] = "1.0"
+    experiment_id: UUID
+    comparison_axis: ComparisonAxis
+    arms: list[ExperimentProgressArm]
 
 
 class ExperimentJobState(BaseModel):

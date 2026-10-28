@@ -287,4 +287,19 @@ export type EpisodeReview = z.infer<typeof episodeReviewSchema>;
 export type ExperimentArtifact = z.infer<typeof experimentArtifactSchema>;
 export type PairComparison = z.infer<typeof pairSchema>;
 export type ExperimentJobState = z.infer<typeof jobSchema>;
+
+const progressArmSchema = z.object({
+  episode_id: uuid, task_name: z.string(), seed: z.int(), repeat_index: z.int().check(z.minimum(1)),
+  arm: z.enum(['baseline', 'recovery']), state: z.enum(['completed', 'checkpoint', 'no_saved_record', 'invalid']),
+  success: z.nullable(z.boolean()), termination_reason: z.nullable(termination), detail: z.nullable(z.string()),
+}).check(z.refine(value => value.state === 'completed'
+  ? value.success !== null && value.termination_reason !== null
+  : value.success === null && value.termination_reason === null, 'progress outcome mismatch'));
+export const experimentProgressSchema = z.object({
+  schema_version: z.literal('1.0'), experiment_id: uuid,
+  comparison_axis: z.enum(['recovery_policy', 'runtime_backend', 'context_policy', 'memory_ablation', 'planning']),
+  arms: z.array(progressArmSchema),
+}).check(z.refine(value => new Set(value.arms.map(arm => arm.episode_id)).size === value.arms.length,
+  'duplicate progress ownership'));
+export type ExperimentProgress = z.infer<typeof experimentProgressSchema>;
 export type ExperimentDashboardItem = z.infer<typeof dashboardItemSchema>;

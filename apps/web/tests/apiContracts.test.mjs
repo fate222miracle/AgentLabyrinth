@@ -5,7 +5,18 @@ import { dashboardSchema, episodeResponseSchema, experimentArtifactSchema, jobSc
   episodeReviewListResponseSchema, episodeReviewResponseSchema, parseApi, requireIdentity,
   resumableIdsSchema, traceEventSchema } from '../src/apiContracts.ts';
 import { readApi, readEpisode } from '../src/apiClient.ts';
+import { experimentProgressSchema } from '../src/apiContracts.ts';
 import { episodeId, episodeResponse, job, trace } from './apiFixtures.mjs';
+
+test('partial progress keeps absent outcomes unknown and rejects duplicate or invented outcomes', () => {
+  const arm = { episode_id: episodeId, task_name: 'task', seed: 1, repeat_index: 1, arm: 'baseline',
+    state: 'no_saved_record', success: null, termination_reason: null, detail: null };
+  const response = { schema_version: '1.0', experiment_id: episodeId, comparison_axis: 'planning', arms: [arm] };
+  assert.equal(parseApi(experimentProgressSchema, response).arms[0].success, null);
+  for (const arms of [[arm, arm], [{ ...arm, success: false }], [{ ...arm, state: 'completed' }]]) {
+    assert.throws(() => parseApi(experimentProgressSchema, { ...response, arms }), /校验失败/);
+  }
+});
 
 test('legacy unknown metrics stay unknown and extra provenance survives export', () => {
   const legacy = JSON.parse(readFileSync(new URL('../../../tests/fixtures/legacy_experiment.json', import.meta.url)));

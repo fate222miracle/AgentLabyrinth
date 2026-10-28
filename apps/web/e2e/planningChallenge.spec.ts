@@ -168,11 +168,18 @@ test('planning challenge runs from Web and shows the declared plan apart from ex
   // The declaration is a claim, so it must be shown separately from the tools that actually ran.
   await expect(left).toContainText('计划声明：0 次（本侧未声明计划）');
   await expect(right).toContainText('计划声明：1 次');
-  await expect(right.locator('ul.memory-read-documents').first().locator('li')).toHaveCount(2);
-  await expect(right.locator('ul.memory-read-documents').first()).toContainText('facts');
+  await expect(left).toContainText('规划组件：未启用');
+  await expect(right).toContainText('规划组件：已启用');
+  await expect(right).not.toContainText('本次未声明计划，不能按实际使用规划解读。');
+  await expect(right.locator('ul.memory-read-documents').filter({ hasText: 'facts' }).locator('li')).toHaveCount(2);
+  await expect(left).toContainText('已报告 Token（模拟）');
+  await expect(right).toContainText('实际提交');
+  await expect(right.locator('.story-fields')).toContainText('ineligible');
+  await right.getByText('成功读取的资料与提交引用', { exact: true }).click();
+  await expect(right.getByText('成功读取的资料与提交引用', { exact: true }).locator('..')).toContainText('提交引用');
   await right.getByText('已实际执行的工具', { exact: true }).click();
-  await expect(right.locator('details.chart-data')).toContainText('update_plan');
-  await expect(left.locator('details.chart-data')).not.toContainText('update_plan');
+  await expect(right.getByText('已实际执行的工具', { exact: true }).locator('..')).toContainText('update_plan');
+  await expect(left.getByText('已实际执行的工具', { exact: true }).locator('..')).not.toContainText('update_plan');
   const downloadEvent = page.waitForEvent('download');
   await page.locator('#btn-export-experiment-csv').click();
   const download = await downloadEvent;
@@ -235,6 +242,32 @@ test('planning review isolates failed reads and empty traces without rerunning t
   await review.getByRole('button', { name: '重新读取两侧执行记录', exact: true }).click();
   const right = review.getByRole('region', { name: '声明计划执行记录', exact: true });
   await expect(right).toContainText('未保存完整起止 Trace，计划声明未知，不按零处理。');
+  await expect(right).not.toContainText('本次未声明计划，不能按实际使用规划解读。');
+  await expect(right).toContainText('成功阅读 / 重复未知');
+  await expect(right).toContainText('实际提交');
+  await page.unroute(`**/api/v1/episodes/${first.recovery_episode_id}`);
+
+  // Model non-adoption as a UI boundary fixture: reuse the plain arm's complete
+  // execution, assign the requested identity and retain the enabled component.
+  const plainBody = await (await request.get(`/api/v1/episodes/${first.baseline_episode_id}`)).json();
+  const unused = { ...plainBody.artifact, agent: rightBody.artifact.agent,
+    episode: { ...plainBody.artifact.episode, episode_id: first.recovery_episode_id },
+    events: plainBody.artifact.events.map((event: { episode_id: string }) => ({ ...event, episode_id: first.recovery_episode_id })),
+  };
+  await page.route(`**/api/v1/episodes/${first.recovery_episode_id}`, route => route.fulfill({ json: {
+    ...rightBody, artifact: unused,
+  } }));
+  await review.getByRole('button', { name: '重新读取两侧执行记录', exact: true }).click();
+  await expect(right).toContainText('规划组件：已启用');
+  await expect(right).toContainText('本次未声明计划，不能按实际使用规划解读。');
+  await page.unroute(`**/api/v1/episodes/${first.recovery_episode_id}`);
+  await page.route(`**/api/v1/episodes/${first.recovery_episode_id}`, route => route.fulfill({ json: {
+    ...rightBody, artifact: { ...rightBody.artifact, episode: { ...rightBody.artifact.episode,
+      final_state: { ...rightBody.artifact.episode.final_state, submission: null },
+    } },
+  } }));
+  await review.getByRole('button', { name: '重新读取两侧执行记录', exact: true }).click();
+  await expect(right).toContainText('此侧未保存已提交的答案；计划自称完成不代表实际提交。');
   await page.unroute(`**/api/v1/episodes/${first.recovery_episode_id}`);
 
   let release!: () => void;

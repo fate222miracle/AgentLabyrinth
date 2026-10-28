@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { EpisodeArtifact, PairComparison, TraceEvent } from './apiContracts';
 import { readEpisode } from './apiClient';
+import { savedDocumentReads } from './flowFrames';
+import { ReadableFields } from './ReadableFields';
+import { explainFailure } from './traceSteps';
+import { savedUsage } from './historySummary';
 
 type PlanItemView = { id: string; goal: string; status: string; depends_on: unknown };
 
@@ -84,15 +88,43 @@ function SavedPlanningDetails({ pair, labels }: { pair: PairComparison; labels: 
     {results && <div className="memory-review-arms">{results.map((result, index) => {
       const id = index === 0 ? pair.baseline_episode_id : pair.recovery_episode_id;
       const artifact = result.status === 'fulfilled' ? result.value : null;
+      const usage = artifact ? savedUsage(artifact) : null;
       const complete = artifact ? hasCompleteTrace(artifact.events) : false;
       const plan = artifact && complete ? declaredPlan(artifact.events) : null;
       const tools = artifact && complete ? executedTools(artifact.events) : null;
+      const reads = artifact ? savedDocumentReads(artifact.events) : null;
+      const submission = artifact?.episode.final_state.submission;
+      const submitted = typeof submission === 'object' && submission !== null && !Array.isArray(submission)
+        ? submission as Record<string, unknown> : null;
       return <section key={id} className="memory-review-arm" aria-label={`${labels[index]}执行记录`}>
         <h4><i className={`chart-key arm-${index}`} />{labels[index]}</h4>
         <p className="memory-review-id">Episode：{id}</p>
         {artifact ? <>
+          <p className="chart-note">规划组件：{artifact.agent.planning ? '已启用' : '未启用'}。
+            {artifact.agent.planning && plan && plan.declarations === 0
+              ? '本次未声明计划，不能按实际使用规划解读。' : ''}</p>
           <p><span className={`badge ${artifact.evaluation.success ? 'badge-green' : 'badge-red'}`}>
             {artifact.evaluation.success ? '评测通过' : '评测未通过'}</span> · {artifact.episode.termination_reason}</p>
+          {artifact.episode.detail && <p className="chart-note">终止说明：{explainFailure(artifact.episode.detail)}</p>}
+          <dl className="memory-review-counts">
+            <div><dt>模型请求</dt><dd>{artifact.episode.model_call_count}<small> 次</small></dd></div>
+            <div><dt>工具调用</dt><dd>{artifact.episode.tool_call_count}<small> 次</small></dd></div>
+            <div><dt>成功阅读 / 重复</dt><dd>{reads ? `${reads.total} / ${reads.repeated}` : '未知'}<small>{reads ? ' 次' : ''}</small></dd></div>
+          </dl>
+          <p className="chart-note">已报告 Token{artifact.episode.token_usage.simulated ? '（模拟）' : ''}：{usage?.reportedTotal === null
+            ? '未知（未报告）' : `输入 ${artifact.episode.token_usage.prompt_tokens} / 输出 ${artifact.episode.token_usage.completion_tokens}`}；保存耗时 {artifact.episode.duration_ms} ms。规划声明的开销计入本侧；未报告用量不据此补齐。</p>
+          {!usage?.complete && <p className="chart-note">总用量未知，不能据已报告值计算完整节省比例。</p>}
+          <h5>实际提交</h5>
+          {submitted && typeof submitted.answer === 'string' ? <ReadableFields entries={['answer', 'evidence'].filter(key => key in submitted)
+            .map(key => [key, submitted[key]])} /> : <p className="chart-note">此侧未保存已提交的答案；计划自称完成不代表实际提交。</p>}
+          {reads && reads.documents.length > 0 && <details className="chart-data">
+            <summary>成功读取的资料与提交引用</summary>
+            <ul className="memory-read-documents">{reads.documents.map(doc => <li key={doc.id}>
+              <span>{doc.title}<small>{doc.id}{doc.evidenceId ? ` · ${doc.evidenceId}` : ''}</small></span>
+              <strong>{doc.readCount} 次{doc.cited ? ' · 提交引用' : ''}</strong>
+            </li>)}</ul>
+            <p className="chart-note">引用标记来自成功提交事件，不表示证据适用或答案正确；结论仍以原评测为准。</p>
+          </details>}
           {complete && plan ? <>
             <p className="chart-note">计划声明：{plan.declarations} 次{plan.items.length ? '' : '（本侧未声明计划）'}</p>
             {plan.items.length > 0 && <ul className="memory-read-documents">{plan.items.map(item => <li key={item.id}>
