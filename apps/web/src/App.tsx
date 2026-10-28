@@ -329,7 +329,7 @@ export default function App() {
   const [expRepeatCount, setExpRepeatCount] = useState<number>(1);
   const [expTokenBudget, setExpTokenBudget] = useState<number | null>(8000);
   const [expReferenceBudget, setExpReferenceBudget] = useState<string>('');
-  const [expGlobalTokenBudget, setExpGlobalTokenBudget] = useState<string>('');
+  const [expGlobalTokenBudget, setExpGlobalTokenBudget] = useState<string>('16000');
   const [singleTokenBudget, setSingleTokenBudget] = useState<number | null>(8000);
   const [executionSeconds, setExecutionSeconds] = useState(300);
   const [expExecutionSeconds, setExpExecutionSeconds] = useState(300);
@@ -492,14 +492,17 @@ export default function App() {
       const data = await readApi(await fetch('/api/v1/meta'), metaSchema);
       if (!metadataRequests.current.isCurrent(metadataRequestId)) return;
       setMeta(data);
-      setSelectedModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : data.default_model);
-      setExpModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : data.default_model);
+      const initialModel = data.models.find(model => model.provider === 'fake')?.id ?? '';
+      setSelectedModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : initialModel);
+      setExpModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : initialModel);
       if (initializeDefaults && data.tasks.length > 0) {
         const initialTask = data.tasks.find((task) => task.id === data.default_task)
           ?? data.tasks.find((task) => task.suite === 'tool_lab_core') ?? data.tasks[0];
         setSelectedSuite(initialTask.suite);
         setSelectedSingleTask(initialTask.id);
-        setExpTasks(data.tasks.filter((task) => task.suite === 'tool_lab_core' && task.category !== 'evidence_chain').map((task) => task.id));
+        const initialExperimentTask = initialTask.suite === 'tool_lab_core' && initialTask.category !== 'evidence_chain'
+          ? initialTask : data.tasks.find(task => task.suite === 'tool_lab_core' && task.category !== 'evidence_chain');
+        setExpTasks(initialExperimentTask ? [initialExperimentTask.id] : []);
       }
     } catch (err: unknown) {
       if (metadataRequests.current.isCurrent(metadataRequestId)) setMetadataError(err instanceof Error ? err.message : '目录读取失败');
@@ -1374,6 +1377,7 @@ export default function App() {
           onChange={(e) => setExpModel(e.target.value)}
           disabled={isLoading}
         >
+          {!expModel && <option value="" disabled>请选择评测模型</option>}
           {meta?.models.map((m) => (
             <option key={m.id} value={m.id}>
               {m.name} {m.is_default ? '· 目录默认' : ''} {m.is_experimental ? '· 实验性' : ''}
@@ -2410,6 +2414,7 @@ export default function App() {
                     onChange={(e) => setSelectedModel(e.target.value)}
                     disabled={isLoading}
                   >
+                    {!selectedModel && <option value="" disabled>请选择评测模型</option>}
                     {meta?.models.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.name} {m.is_default ? '· 目录默认' : ''} {m.is_experimental ? '· 实验性' : ''}
