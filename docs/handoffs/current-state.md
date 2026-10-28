@@ -22,6 +22,10 @@
 
 同步期间发现账号下另有同head、base为main的[PR#4](https://github.com/fate222miracle/AgentLabyrinth/pull/4)，创建时间2026-10-28T03:08:44Z；不是本轮上述三次创建的回执，保留不修改/关闭，不假定已授权合并。该PR与#3共用分支，因此后续分支修复会同时反映。
 
+最终交付业务代码为2c1952f：实际完整本机门禁再次通过，**706Python/99.57秒、Ruff/Mypy116文件、48Node、73Edge/2.9分钟、旧22格零退化/上下文消融/构建/audit0漏洞**，Quality gate passed。证据`artifacts/quality/0e04084e-2374-4ee8-a6c7-c8570f39e7ee/`、`artifacts/playwright/ac7220f0-cfc4-42c4-876b-a0be0e0da456/`、日志quality-delivery-final.log。22份来源SHA保持；API8000/Web5173恢复，MCP未使用，无真实推理/Judge/恢复。
+
+实际远端CI成功回执（保留旧失败/取消，不以重试挑结果）：Git规范8f450ce的[quality](https://github.com/fate222miracle/AgentLabyrinth/actions/runs/40626168216/job/122611484271)、实验可靠性f697692的[quality](https://github.com/fate222miracle/AgentLabyrinth/actions/runs/40626173655/job/122611505477)、最终业务2c1952f的[quality](https://github.com/fate222miracle/AgentLabyrinth/actions/runs/40626168488/job/122611485426)均completed/success。同源其它触发的检查按各PR实时Checks为准；最终交付回执文档另有新提交，不把这些业务代码CI冒称新文档HEAD也已检查完成。main未由Codex合并或改写。
+
 ## 2026-10-28 Provider连接诊断与截止时间回归修复
 
 负责人要求修存量问题，本轮先修AIHubMix目录/推理的连接可观测性：共用安全本地日志分类，包装超时沿已有REQUEST_TIMEOUT，读取重置/HTTP截断转原安全失败码；已收到HTTP状态的错误正文截断保留原状态映射。公开Schema/Trace/评分/CSV及无重试/未知用量规则不改，旧原因不回填。实际仅一次目录GET成功（1047ms、4可见型号、HTTPS代理已配置），不是推理稳定性证明；没有真实推理/Judge/恢复。源码、日志读法和全部失败证据见[本轮交接](../learning/V0.3-network-diagnostics-20261028.md)。
