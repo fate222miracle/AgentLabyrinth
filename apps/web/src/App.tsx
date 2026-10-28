@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { changedStateFields, groupTraceByStep, keyFields, toolFeedbackFields, stepOutcome, stepTitle } from './traceSteps';
+import { explainFailure, changedStateFields, groupTraceByStep, keyFields, toolFeedbackFields, stepOutcome, stepTitle } from './traceSteps';
 import { ReadableFields, fieldLabels } from './ReadableFields';
 import { McpFlowReplay } from './McpFlowReplay';
 import { summarizeEpisode, type EpisodeHistorySummary, type ExperimentDashboardItem } from './historySummary';
@@ -15,6 +15,7 @@ import { ExperimentCharts } from './ExperimentCharts';
 import { ExperimentReviewSummary } from './ExperimentReviewSummary';
 import { MemoryPairReview } from './MemoryPairReview';
 import { PlanningPairReview } from './PlanningPairReview';
+import { ExperimentProgressReader } from './ExperimentProgressReader';
 import { ContextSettings, contextInput, contextLabel, type ContextChoice } from './ContextSettings';
 import { metaSchema, dashboardSchema, resumableIdsSchema,
   type TaskOption, type MetaResponse, type TraceEvent, type EpisodeArtifact,
@@ -55,27 +56,6 @@ const experimentJobLabels: Record<ExperimentJobState['status'], string> = {
   completed: '已完成', failed: '运行失败', interrupted: '进程中断',
 };
 
-function explainFailure(detail: string): string {
-  const explanations: Record<string, string> = {
-    RATE_LIMIT_EXCEEDED: '供应商限流：稍后再试，并检查账号当日配额。',
-    AUTHENTICATION_FAILED: '后端 API Key 缺失、失效或认证失败。',
-    MODEL_NOT_FOUND: '供应商返回 404：模型不存在或当前账号不可访问。',
-    MODEL_RETIRED: '供应商已下线该模型，请选择其他模型。',
-    UPSTREAM_CHANNEL_UNAVAILABLE: '供应商暂无可用通道，请稍后重试或手动换模型。',
-    UPSTREAM_GATEWAY_ERROR: '供应商网关错误，请稍后再试。',
-    NETWORK_CONNECTION_FAILED: '后端无法连接模型网关，请检查网络。',
-    REQUEST_TIMEOUT: '模型请求超时。',
-    OUTPUT_TRUNCATED: '模型输出达到单次上限，未形成完整行动。',
-    INVALID_ARGUMENTS: '工具参数不符合 schema；Baseline 会终止，Recovery 最多纠错一次。',
-    task_token_budget_exceeded: '累计输入与输出超出任务 Token 预算，可在运行前显式调整。',
-    max_execution_time_exceeded: '本次运行已达到总时限，停止后续调用并保留已完成状态。',
-    upstream_usage_unknown: '本次运行已达到总时限；在途模型请求的最终用量未知，不会自动重试。',
-    missing_submission: '模型只返回文本，未调用工具完成提交。',
-  };
-  const parts = detail.split(': ');
-  const code = parts[parts.length - 1] ?? detail;
-  return explanations[code] ? `${explanations[code]} (${code})` : detail;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -329,7 +309,7 @@ export default function App() {
   const [expRepeatCount, setExpRepeatCount] = useState<number>(1);
   const [expTokenBudget, setExpTokenBudget] = useState<number | null>(8000);
   const [expReferenceBudget, setExpReferenceBudget] = useState<string>('');
-  const [expGlobalTokenBudget, setExpGlobalTokenBudget] = useState<string>('');
+  const [expGlobalTokenBudget, setExpGlobalTokenBudget] = useState<string>('16000');
   const [singleTokenBudget, setSingleTokenBudget] = useState<number | null>(8000);
   const [executionSeconds, setExecutionSeconds] = useState(300);
   const [expExecutionSeconds, setExpExecutionSeconds] = useState(300);
@@ -337,6 +317,7 @@ export default function App() {
   const [experiment, setExperiment] = useState<ExperimentArtifact | null>(null);
   const [recentExpIds, setRecentExpIds] = useState<string[]>([]);
   const [resumableExpIds, setResumableExpIds] = useState<string[]>([]);
+  const [progressId, setProgressId] = useState<string | null>(null);
   const [resumableJobIds, setResumableJobIds] = useState<string[]>([]);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [experimentJob, setExperimentJob] = useState<ExperimentJobState | null>(null);
@@ -492,14 +473,17 @@ export default function App() {
       const data = await readApi(await fetch('/api/v1/meta'), metaSchema);
       if (!metadataRequests.current.isCurrent(metadataRequestId)) return;
       setMeta(data);
-      setSelectedModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : data.default_model);
-      setExpModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : data.default_model);
+      const initialModel = data.models.find(model => model.provider === 'fake')?.id ?? '';
+      setSelectedModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : initialModel);
+      setExpModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : initialModel);
       if (initializeDefaults && data.tasks.length > 0) {
         const initialTask = data.tasks.find((task) => task.id === data.default_task)
           ?? data.tasks.find((task) => task.suite === 'tool_lab_core') ?? data.tasks[0];
         setSelectedSuite(initialTask.suite);
         setSelectedSingleTask(initialTask.id);
-        setExpTasks(data.tasks.filter((task) => task.suite === 'tool_lab_core' && task.category !== 'evidence_chain').map((task) => task.id));
+        const initialExperimentTask = initialTask.suite === 'tool_lab_core' && initialTask.category !== 'evidence_chain'
+          ? initialTask : data.tasks.find(task => task.suite === 'tool_lab_core' && task.category !== 'evidence_chain');
+        setExpTasks(initialExperimentTask ? [initialExperimentTask.id] : []);
       }
     } catch (err: unknown) {
       if (metadataRequests.current.isCurrent(metadataRequestId)) setMetadataError(err instanceof Error ? err.message : '目录读取失败');
@@ -1374,6 +1358,7 @@ export default function App() {
           onChange={(e) => setExpModel(e.target.value)}
           disabled={isLoading}
         >
+          {!expModel && <option value="" disabled>请选择评测模型</option>}
           {meta?.models.map((m) => (
             <option key={m.id} value={m.id}>
               {m.name} {m.is_default ? '· 目录默认' : ''} {m.is_experimental ? '· 实验性' : ''}
@@ -1595,6 +1580,7 @@ export default function App() {
           <div className="card-title">实验任务：{experimentJobLabels[experimentJob.status]}</div>
           <p className="card-desc"><code>{activeJobId}</code> · 控制请求在当前 Episode 结束后生效。</p>
           <div className="resumable-list">
+            <button type="button" className="btn-secondary" onClick={() => setProgressId(activeJobId)}>查看保存进度</button>
             {['queued', 'running'].includes(experimentJob.status) && !experimentJob.requested_action && (
               <>
                 <button className="btn-secondary" onClick={() => handleControlExperimentJob('pause')}>暂停</button>
@@ -1618,10 +1604,13 @@ export default function App() {
           <p className="card-desc">原计划和已完成 Episode 均保留；继续运行可能重新发送中断中的模型请求。</p>
           <div className="resumable-list">
             {resumableJobIds.filter((id) => id !== activeJobId).map((id) => (
-              <button key={id} className="btn-secondary" disabled={isLoading}
+              <span className="resumable-list" key={id}>
+              <button type="button" className="btn-secondary" aria-label={`查看 Job 保存进度 ${id}`} onClick={() => setProgressId(id)}>查看保存进度</button>
+              <button className="btn-secondary" disabled={isLoading}
                 onClick={() => handleControlExperimentJob('resume', id)}>
                 恢复 Job <code>{id}</code>
               </button>
+              </span>
             ))}
           </div>
         </section>
@@ -1633,14 +1622,19 @@ export default function App() {
           <p className="card-desc">继续原实验并复用已完成结果；中断中的模型请求可能重新发送。</p>
           <div className="resumable-list">
             {resumableExpIds.map((id) => (
-              <button key={id} className="btn-secondary" disabled={isLoading}
+              <span className="resumable-list" key={id}>
+              <button type="button" className="btn-secondary" aria-label={`查看 Experiment 保存进度 ${id}`} onClick={() => setProgressId(id)}>查看保存进度</button>
+              <button className="btn-secondary" disabled={isLoading}
                 onClick={() => handleResumeExperiment(id)}>
                 恢复 Experiment <code>{id}</code>
               </button>
+              </span>
             ))}
           </div>
         </section>
       )}
+
+      {progressId && <ExperimentProgressReader key={progressId} id={progressId} onClose={() => setProgressId(null)} />}
 
       {/* Recent Experiments History */}
       {recentExpIds.length > 0 && (
@@ -1948,13 +1942,14 @@ export default function App() {
                         <div className="metrics-grid">
                         {/* Total Tokens & Delta */}
                         <div className="metric-box">
-                          <div className="metric-label">Token 总消耗 ({armLeftLabel} / {armRightLabel})</div>
+                          <div className="metric-label">已报告 Token ({armLeftLabel} / {armRightLabel})</div>
                           <div className="metric-value" style={{ fontSize: '1.05rem' }}>
                             {experiment.metrics.baseline_total_tokens} / {experiment.metrics.recovery_total_tokens}
                           </div>
                           <div className="metric-sub">
-                            增量 Delta: {formatSigned(experiment.metrics.recovery_total_tokens - experiment.metrics.baseline_total_tokens)} tokens
+                            已报告差值: {formatSigned(experiment.metrics.recovery_total_tokens - experiment.metrics.baseline_total_tokens)} tokens
                           </div>
+                          <div className="metric-sub">汇总值不能确认总用量完整；请结合各次运行的保存轨迹核查，不能直接当作完整节省量。</div>
                         </div>
 
                         {/* Average Steps */}
@@ -1994,7 +1989,8 @@ export default function App() {
 
                         {/* Tool Selection & Argument Validity Rates */}
                         <div className="metric-box">
-                          <div className="metric-label">工具选择 / 参数合法率 ({armLeftLabel} / {armRightLabel})</div>
+                          <div className="metric-label">允许工具命中比例 ({armLeftLabel} / {armRightLabel})</div>
+                          <div className="metric-sub">所提议工具属于任务预期且非禁止集合的比例；不表示当前步骤最优或任务正确率。</div>
                           <div className="metric-value" style={{ fontSize: '1.05rem' }}>
                             {experiment.metrics.baseline_tool_selection_accuracy !== null && experiment.metrics.baseline_tool_selection_accuracy !== undefined
                               ? (experiment.metrics.baseline_tool_selection_accuracy * 100).toFixed(0) + '%'
@@ -2408,6 +2404,7 @@ export default function App() {
                     onChange={(e) => setSelectedModel(e.target.value)}
                     disabled={isLoading}
                   >
+                    {!selectedModel && <option value="" disabled>请选择评测模型</option>}
                     {meta?.models.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.name} {m.is_default ? '· 目录默认' : ''} {m.is_experimental ? '· 实验性' : ''}

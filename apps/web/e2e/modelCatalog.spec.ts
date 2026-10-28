@@ -1,5 +1,39 @@
 import { expect, test } from '@playwright/test';
 
+for (const hasFake of [true, false]) {
+  test(`first use requires deliberate real model selection (Fake available: ${hasFake})`, async ({ page, request }) => {
+    const original = await (await request.get('/api/v1/meta')).json();
+    const fake = original.models.find((model: { provider: string }) => model.provider === 'fake');
+    const real = { ...fake, id: 'real-test-entry', name: 'Real catalog fixture', provider: 'aihubmix', scenarios: [] };
+    await page.route('**/api/v1/meta', route => route.fulfill({ json: { ...original,
+      model_catalog_status: 'unavailable', default_model: real.id, models: [...(hasFake ? [fake] : []), real],
+    } }));
+    const mutations: string[] = [];
+    page.on('request', r => { if (r.url().includes('/api/') && r.method() !== 'GET') mutations.push(r.url()); });
+    await page.goto('/?mode=single');
+    await expect(page.locator('#model-select')).toHaveValue(hasFake ? 'fake' : '');
+    if (!hasFake) {
+      await expect(page.locator('#model-select option:checked')).toHaveText('请选择评测模型');
+      await expect(page.locator('#run-button')).toBeDisabled();
+    }
+    await page.locator('#model-select').selectOption(real.id);
+    await page.getByRole('button', { name: '重新读取模型目录', exact: true }).click();
+    await expect(page.locator('#model-select')).toHaveValue(real.id);
+    await page.locator('#tab-experiment').click();
+    await expect(page.locator('#exp-model-select')).toHaveValue(hasFake ? 'fake' : '');
+    await expect(page.locator('.experiment-launch-summary')).toContainText('1 个任务');
+    await expect(page.locator('#run-exp-button')).toContainText('2 次执行');
+    await page.locator('.experiment-settings > summary').click();
+    await expect(page.locator('#exp-global-token-budget')).toHaveValue('16000');
+    await page.locator('#exp-global-token-budget').fill('12345');
+    await page.locator('#exp-model-select').selectOption(real.id);
+    await page.getByRole('button', { name: '重新读取模型目录', exact: true }).click();
+    await expect(page.locator('#exp-model-select')).toHaveValue(real.id);
+    await expect(page.locator('#exp-global-token-budget')).toHaveValue('12345');
+    expect(mutations).toEqual([]);
+  });
+}
+
 test('an explicit tested candidate stays selectable during discovery failure without claiming health', async ({ page, request }) => {
   const original = await (await request.get('/api/v1/meta')).json();
   const fake = original.models.find((model: { provider: string }) => model.provider === 'fake');
@@ -58,7 +92,7 @@ for (const failure of ['catalog', 'http']) {
       await expect(page.locator('#model-select')).toHaveValue('fake');
       await expect(page.getByLabel('步数上限 (Max Steps)')).toHaveValue('4');
     } else {
-      await expect(page.locator('#model-select')).toHaveValue(restored.default_model);
+      await expect(page.locator('#model-select')).toHaveValue('fake');
       await expect(page.locator('#run-button')).toBeEnabled();
     }
     const oldResponse = page.waitForResponse((reply) => reply.url().endsWith('/api/v1/meta'));

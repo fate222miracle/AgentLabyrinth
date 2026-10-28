@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { explainFailure } from '../src/traceSteps.ts';
+
+test('network failure does not assert exhausted quota and unknown usage stops further admission', () => {
+  assert.match(explainFailure('provider_error: NETWORK_CONNECTION_FAILED'), /不能判断每日额度/);
+  assert.match(explainFailure('EXPERIMENT_TOKEN_USAGE_UNKNOWN'), /未执行侧不能按失败或零用量/);
+  assert.equal(explainFailure('unknown saved code'), 'unknown saved code');
+});
 import { changedStateFields, groupTraceByStep, keyFields, stepOutcome, stepTitle, toolFeedbackFields, latestDeclaredPlan } from '../src/traceSteps.ts';
 
 test('A declaration follows the arrived prefix and never uses a proposed or future plan', () => {

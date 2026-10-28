@@ -20,6 +20,7 @@ from apps.api.schemas import (
     ErrorResponse,
     ExperimentDashboardResponse,
     ExperimentJobState,
+    ExperimentProgressResponse,
     ExperimentResponse,
     MetaResponse,
 )
@@ -580,3 +581,19 @@ async def get_experiment(
         request_id=uuid4(),
         experiment=artifact,
     )
+
+
+@app.get("/api/v1/experiments/{experiment_id}/progress", response_model=ExperimentProgressResponse)
+async def get_experiment_progress(
+    experiment_id: UUID,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> ExperimentProgressResponse:
+    """Read saved progress without resuming a model or tool."""
+    try:
+        return await asyncio.to_thread(service.experiment_progress, experiment_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Experiment plan not found.") from exc
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409, detail="Experiment plan is invalid or unavailable."
+        ) from exc

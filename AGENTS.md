@@ -2,6 +2,26 @@
 
 唯一权威需求是 `docs/product/requirements.md`，已核对版本 **V0.6**。本文件和任务卡只指导执行，不替代需求。
 
+负责人2026-10-28明确要求提交GitHub，授权本次提交/推送全部已验证源码、测试和文档并按CONTRIBUTING创建关联PR；覆盖此前本地保留约束，仅限本次交付。密钥、本机配置、实验产物和缓存不入库，不授权真实模型请求或自动合并。按Git规范、实验可靠性、网络诊断分组，实际提交/PR/CI状态见current-state，不能把本地Edge门禁冒称远端CI通过。
+
+本次实际已推送并创建关联PR #1/#2/#3（Git规范/实验可靠性/网络诊断），保持未合并；main仍254eac0。合并时先#1到main，再依次将#2/#3的base改为main并审查，不误合入功能基分支。源码提交至891677f，交付回执文档随后追加；链接与分支见current-state。旧“不提交”是各开发阶段当时约束，不再阻止本次已授权交付，也不授权未来自动推送/模型调用/合并。
+
+实际远端CI首次暴露course_demo的Windows常量在Linux Mypy不可见；已用两行getattr回退修复，保留os中断演练，并把已验证时限测试修复前移至共同基分支。共享提交80e79f5、两次正常merge保留历史，三个PR修复均已推送；实际30专项及Linux Mypy最终116文件通过。705/48/73完整本机门禁发生在两行兼容补丁前，远端重跑结果须查PR Checks，不冒称已通过。当前仍不合并main，详情current-state。
+
+负责人2026-10-28要求继续修存量问题。当前交接docs/learning/V0.3-network-diagnostics-20261028.md：AIHubMix目录/推理共用安全连接分类日志，补响应读取中断及包装超时处理，沿用原公开错误码/未知用量/无重试。一次只读目录GET已成功，不代表模型推理稳定或旧失败原因已找回；无真实推理/Judge/恢复/Git同步。分支codex/fix-provider-network-diagnostics保留全部既有dirty/untracked，最终验证以current-state为准。仍暂停新增机制，效果实证与A1等缺口保留。
+
+负责人2026-10-26要求暂停下一步功能开发，先修明显硬伤。当前任务为docs/learning/V0.3-hardening-20261026.md：保存用量对账与未知提示、首次Fake/单题/整场16000Token边界默认、工具指标名称澄清、过期协作入口修正；不改公开契约/评分/CSV，不新增真实模型调用或Git同步。分支codex/fix-reporting-and-run-defaults保留所有既有dirty/untracked。完整门禁结果以current-state实际记录为准，不能把本轮修复外推为网络已恢复或规划收益已证。后续先处理存量问题，不自动恢复新机制开发。
+
+负责人2026-10-26确认按ADR-041实施只读实验保存进度。已接GET /experiments/{id}/progress、来源核对与四状态、显式Web查看及原Episode跳转；缺记录不作失败或零用量，坏结束文件不借安全点冒充完成，读取/切换/刷新无POST。共享中文失败解释，不凭网络错误断定配额。实际完整679Python/47Node/70Edge、116文件Ruff/Mypy、旧22格零退化/消融/构建/审计0漏洞通过；详情docs/learning/V0.3-experiment-progress-20261026.md。原真实失败计划只读核对、源字节不变；没有新增模型推理/恢复/Judge/Git同步，保护全部已有改动。下一步先分析失败可观测性和网络，新的真实调用另行授权；Reflection暂缓、A1保持。
+
+负责人2026-10-26另批唯一serial规划对：MiniMax M2.7×planning-route-002，原handwritten/无纠错/full/Seed1/Repeat1/每侧10步20000Token300秒/全局40000保持，两侧同serial，仅右侧规划。Fake预检通过后真实POST已执行左侧：首轮2个检索成功，第二模型请求NETWORK_CONNECTION_FAILED，用量未知阻止右侧，计划61bd5e1e…、左Episode368937f4…保留，完整Experiment未生成。授权已消费，不按400当零执行补跑；右侧未启动不计失败或零用量。分支codex/planning-serial-validation保留全部既有未提交成果。沿ADR-035补组件启用/实际未声明/Trace未知提示，实际typecheck/build和6Edge/28.4s通过；详情docs/learning/V0.3-planning-serial-validation-20261026.md。未跑新全套/真实重试/Judge/Git同步，后续先看网络与未完成实验可观测性。
+
+负责人2026-10-26要求Git协作对齐企业开发。执行需求§28及根CONTRIBUTING.md：短期任务分支、原子提交、PR实际验证/审查后合并，Codex分支前缀codex/；不重写已发布main、不制造提交数。Issue/PR模板已补，远端保护未读取/配置，不冒称强制生效。本次仅本地规范整理，原规划改动保留；提交/推送/建PR/合并仍需当次授权。
+
+负责人2026-10-26接续开发并明确授权唯一真实规划对：MiniMax M2.7×planning-route-002、handwritten/无纠错/single/full，Seed1/Repeat1，每侧10步/20000Token/300秒、全局40000Token，只有右侧规划。保留失败、无补跑/换模型/Judge；执行和实际结果见docs/learning/V0.3-planning-evidence-20261026.md。同时沿ADR-035/036完善规划保存对的实际提交/阅读/开销展示，不改契约或评分。本轮不自动Git同步，已完成的上轮提交为254eac0；旧668/45/68不冒充本轮门禁。
+
+该唯一对已完成、授权已消费：实验39164f38…两侧失败（single多调用拒绝/累计输入预算终止），双方均无计划声明、无提交，4成功读/0重复。不能据此宣称规划收益或额外规划开销致失败。展示改动实际typecheck/build、45Node和6Edge规划专项通过，未改Python业务/未跑新全套；21题保持、服务已恢复。下一候选双方serial仅方案，不自动再跑，详见上述学习交接/current-state。
+
 负责人2026-10-26明确要求提交GitHub并回顾阶段工作，授权本次提交/推送当前已验证源码、测试、任务与文档，覆盖此前本地保留限制，仅限本次同步。密钥、本机环境、实验产物与测试缓存不入库，不延伸为新真实模型调用或后续自动推送授权。阶段回顾见docs/handoffs/V0.3-stage-review-20261026.md；最新完整门禁为2026-10-25的668Python/45Node/68Edge，本轮文档整理不冒充新全套实跑。
 
 负责人2026-10-25明确确认ADR-040，要求真实大模型Judge，撤下正常页面人工/Fake创建与无价值空面板。现按Review请求1.1显式aihubmix/model接原Provider，一次无工具/无重试，65536字节冻结输入/800输出Token/30秒；1.0旧人工/Fake与历史/评分/完整CSV保持。UI只提供真实评审，展示理由/引用与规则分歧，人工/Fake仅历史归档。随后负责人授权“试一下我的免费模型”：允许Codex对一份已保存Episode用一个免费型号发一次真实Judge请求，不重跑任务/补跑/批量；具体源码/实际结果见docs/learning/V0.3-real-judge-entry-20261025.md和current-state。该最新授权覆盖旧“真实v2仅准备”的阶段限制；不提交Git，保护全部未提交成果与21题，Memory/Planning真实批量仍未授权。后续先验证组件差异再扩功能，不把Fake、测试数量或Judge同向当收益。

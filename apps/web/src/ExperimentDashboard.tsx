@@ -70,7 +70,7 @@ export function ExperimentDashboard({ items, loading, error, skipped, activeId, 
           <p><strong>最近一次相对上一次</strong> · {new Date(previous.created_at).toLocaleString()} → {new Date(latest.created_at).toLocaleString()}</p>
           <dl>
             <div><dt>成功率变化（百分点）</dt><dd>{signed((latest.baseline_success_rate - previous.baseline_success_rate) * 100)} / {signed((latest.recovery_success_rate - previous.recovery_success_rate) * 100)}</dd></div>
-            <div><dt>Token 变化</dt><dd>{signed(latest.baseline_total_tokens - previous.baseline_total_tokens)} / {signed(latest.recovery_total_tokens - previous.recovery_total_tokens)}</dd></div>
+            <div><dt>已报告 Token 变化</dt><dd>{signed(latest.baseline_total_tokens - previous.baseline_total_tokens)} / {signed(latest.recovery_total_tokens - previous.recovery_total_tokens)}</dd></div>
             <div><dt>平均耗时变化（ms）</dt><dd>{signed(latest.baseline_avg_duration_ms - previous.baseline_avg_duration_ms)} / {signed(latest.recovery_avg_duration_ms - previous.recovery_avg_duration_ms)}</dd></div>
           </dl>
           <p className="metric-sub">数值依次为两侧；单次变化仅供观察，不能据此判断统计显著性。</p>
@@ -93,7 +93,7 @@ export function ExperimentDashboard({ items, loading, error, skipped, activeId, 
                   </label>
                 ))}
               </div>
-              <p className="metric-sub">Token {item.baseline_total_tokens} / {item.recovery_total_tokens} · 平均耗时 {Math.round(item.baseline_avg_duration_ms)} / {Math.round(item.recovery_avg_duration_ms)} ms</p>
+              <p className="metric-sub">已报告 Token {item.baseline_total_tokens} / {item.recovery_total_tokens} · 平均耗时 {Math.round(item.baseline_avg_duration_ms)} / {Math.round(item.recovery_avg_duration_ms)} ms</p>
               <p className="metric-sub">{item.provider === 'fake' ? '模拟费用' : '网关估算费用'} {cost(item.baseline_total_cost)} / {cost(item.recovery_total_cost)} · 原厂参考成本 {cost(item.baseline_reference_cost)} / {cost(item.recovery_reference_cost)} USD</p>
               <details><summary>查看实验范围与来源</summary>
                 <p className="metric-sub">{item.environment_version} · {item.task_ids?.join('、') || '任务未记录'}</p>

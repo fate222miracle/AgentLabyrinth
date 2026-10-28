@@ -1,5 +1,11 @@
 # AgentLabyrinth
 
+开发协作请先阅读[贡献与Git规范](CONTRIBUTING.md)：任务分支、原子提交、PR验证与回滚；仓库已提供Issue/PR模板。
+
+当前暂停新增功能，优先[修复已确认的硬伤](docs/learning/V0.3-hardening-20261026.md)，接续[连接失败诊断修复](docs/learning/V0.3-network-diagnostics-20261028.md)。首次Web运行默认Fake、单题对照及整场Token边界预算；保存用量不完整时明确标未知。当前执行与授权以[交接入口](docs/handoffs/current-state.md)为准，下方日期记录均为历史阶段。
+
+未完成实验可在对照页点击“查看保存进度”，只读查看已结束记录、安全点或无保存状态，再进入已有运行；不会自动恢复或调用模型。见[进度与诊断交接](docs/learning/V0.3-experiment-progress-20261026.md)。
+
 2026-10-26 [V0.3阶段回顾与后续安排](docs/handoffs/V0.3-stage-review-20261026.md)：汇总记忆、多工具、规划、第三Runtime和真实Judge的交付与证据边界。负责人授权本次GitHub同步；下文“不提交”是各历史阶段的当时约束。
 
 2026-10-25 按负责人确认的[ADR-040](docs/adr/ADR-040-real-judge-product-entry.md)接入真实大模型Judge：选择型号、显式一次评审，显示理由/引用及规则分歧；撤下人工/Fake产品操作，旧记录保留。[源码/实测/效果证据交接](docs/learning/V0.3-real-judge-entry-20261025.md)，最新门禁与一次免费模型实测见current-state。Judge不改变任务成绩，Memory/Planning收益仍须真实对照。

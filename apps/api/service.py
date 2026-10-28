@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic, time_ns
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from apps.api.schemas import (
     ALLOWED_FAKE_SCENARIOS,
@@ -19,6 +19,8 @@ from apps.api.schemas import (
     ExperimentDashboardItem,
     ExperimentDashboardResponse,
     ExperimentJobState,
+    ExperimentProgressArm,
+    ExperimentProgressResponse,
     FaultProfile,
     MetaResponse,
     ModelOption,
@@ -1382,6 +1384,87 @@ class EpisodeService:
             except (ValueError, OSError):
                 continue
         return sorted(result)
+
+    def experiment_progress(self, experiment_id: UUID) -> ExperimentProgressResponse:
+        """Inspect frozen local sources without executing or repairing anything."""
+        plan = read_experiment_checkpoint(
+            experiment_checkpoint_path(self.artifacts_dir, experiment_id)
+        )
+        if plan.experiment_id != experiment_id:
+            raise ValueError("Experiment plan identity mismatch")
+        store = CheckpointStore(self.artifacts_dir / "checkpoints")
+        arms: list[ExperimentProgressArm] = []
+        runs = [
+            (task, seed, repeat)
+            for seed in plan.seeds
+            for repeat in range(1, plan.repeat_count + 1)
+            for task in plan.tasks
+        ]
+        for index, (task, seed, repeat) in enumerate(runs):
+            for arm, agent in (
+                ("baseline", plan.baseline_agent),
+                ("recovery", plan.recovery_agent),
+            ):
+                episode_id = uuid5(experiment_id, f"{index}:{arm}")
+                row = ExperimentProgressArm(
+                    episode_id=episode_id,
+                    task_name=task.name,
+                    seed=seed,
+                    repeat_index=repeat,
+                    arm=arm,
+                    state="no_saved_record",
+                )
+                try:
+                    if (self.artifacts_dir / f"{episode_id}.json").exists():
+                        artifact = read_completed_episode(episode_id, self.artifacts_dir)
+                        if artifact is None:
+                            raise ValueError("Invalid saved result")
+                        expected = {
+                            "agent": content_hash(agent),
+                            "task": content_hash(task),
+                            "run_config": content_hash(artifact.run_config),
+                        }
+                        if (
+                            artifact.agent != agent
+                            or artifact.task != task
+                            or artifact.run_config.seed != seed
+                            or artifact.run_config.environment_version != "tool-lab-m0-v1"
+                            or artifact.config_hashes != expected
+                            or len({event.event_id for event in artifact.events})
+                            != len(artifact.events)
+                        ):
+                            raise ValueError("Saved result conflicts with plan")
+                        row = row.model_copy(
+                            update={
+                                "state": "completed",
+                                "success": artifact.evaluation.success,
+                                "termination_reason": artifact.episode.termination_reason,
+                                "detail": artifact.episode.detail,
+                            }
+                        )
+                    elif store.path(episode_id).exists():
+                        saved = store.load(episode_id)
+                        if (
+                            saved.agent != agent
+                            or saved.task != task
+                            or saved.run_config.seed != seed
+                            or saved.run_config.environment_version != "tool-lab-m0-v1"
+                        ):
+                            raise ValueError("Saved checkpoint conflicts with plan")
+                        row = row.model_copy(update={"state": "checkpoint"})
+                except (OSError, ValueError):
+                    row = row.model_copy(
+                        update={
+                            "state": "invalid",
+                            "detail": "保存记录损坏或来源不匹配。",
+                        }
+                    )
+                arms.append(row)
+        return ExperimentProgressResponse(
+            experiment_id=experiment_id,
+            comparison_axis=plan.comparison_axis,
+            arms=arms,
+        )
 
     async def resume_experiment(self, experiment_id: UUID) -> ExperimentArtifact:
         """Continue the original paired matrix without rerunning completed arms."""

@@ -1,10 +1,10 @@
 # AgentLabyrinth Copilot instructions
 
-Read in this order before editing: full `docs/product/requirements.md` V0.6, `AGENTS.md`, relevant ADRs (currently ADR-010), `docs/handoffs/current-state.md`, then `docs/tasks/V0.2-m1-runtime-comparison-copilot.md`. Read `docs/product/ui-design-guidelines.md` when changing Web presentation.
+Read in this order before editing: full `docs/product/requirements.md` V0.6, `AGENTS.md`, relevant approved ADRs, `docs/handoffs/current-state.md`, then the current task card identified there. Read `docs/product/ui-design-guidelines.md` when changing Web presentation. Old task cards are historical evidence, not the current assignment.
 
-Current task: complete and review the V0.2 independent Runtime comparison handoff. Preserve existing user changes. Reuse the current React/Vite Web flow and CSS tokens in `apps/web/src/index.css`. Do not add a component framework, icon library, chart library, database, queue, authentication, multi-agent code, or dependency. Do not silently change public schemas or metric definitions; use ADR-010 as the contract.
+Preserve all existing user changes and untracked deliverables. Reuse the current React/Vite Web flow and CSS tokens in `apps/web/src/index.css`. Do not add infrastructure, dependencies or future-version features without authorization. Public schemas and metric definitions follow the SSOT and their approved ADRs; propose a concrete ADR before changing them.
 
-Run `scripts/check.ps1` and the frontend production build before reporting completion. Complete the Fake API and browser scenarios in the V0.2 task card, then try one small real-model comparison only if a local key and working model are available. Report changed files, exact commands and results, artifact IDs, remaining gaps, and update `docs/handoffs/current-state.md`. Never write API keys to source, tests, output, or frontend code.
+Run the applicable checks and the full quality gate required by the current task (`uv --cache-dir .uv-cache run --locked python -m scripts.check`). Record actual results, artifact IDs and remaining gaps in `docs/handoffs/current-state.md`; do not reuse old counts as new evidence. Real model/Judge calls, retries and GitHub synchronization require authorization for the current operation. An available key, free model or consumed historical authorization is not permission. Never write API keys to source, tests, output, or frontend code. Follow `CONTRIBUTING.md` for Git collaboration.
 
 ## UI 验收防错规则
 

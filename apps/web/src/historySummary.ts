@@ -6,8 +6,22 @@ export interface EpisodeHistorySummary {
   success?: boolean;
 }
 
-import type { ExperimentDashboardItem } from './apiContracts.ts';
+import type { EpisodeArtifact, ExperimentDashboardItem } from './apiContracts.ts';
 export type { ExperimentDashboardItem } from './apiContracts.ts';
+
+/** Reconcile saved reports; absent responses must never imply zero total usage. */
+export function savedUsage(artifact: EpisodeArtifact) {
+  const { events, episode } = artifact;
+  const requests = events.filter(event => event.event_type === 'MODEL_REQUESTED');
+  const responses = events.filter(event => event.event_type === 'MODEL_RESPONDED');
+  const total = episode.token_usage.prompt_tokens + episode.token_usage.completion_tokens;
+  const prompt = responses.reduce((sum, event) => sum + event.token_usage.prompt_tokens, 0);
+  const completion = responses.reduce((sum, event) => sum + event.token_usage.completion_tokens, 0);
+  const complete = events[0]?.event_type === 'EPISODE_STARTED' && events.at(-1)?.event_type === 'EPISODE_FINISHED'
+    && requests.length === episode.model_call_count && responses.length === requests.length
+    && prompt === episode.token_usage.prompt_tokens && completion === episode.token_usage.completion_tokens;
+  return { complete, reportedTotal: complete || responses.length > 0 || total > 0 ? total : null };
+}
 
 export function comparableHistory(items: ExperimentDashboardItem[], key: string): ExperimentDashboardItem[] {
   if (!key) return [];

@@ -1,5 +1,6 @@
 import type { EpisodeArtifact } from './apiContracts';
 import { contextLabel } from './ContextSettings';
+import { savedUsage } from './historySummary';
 
 interface Props { artifact: EpisodeArtifact; explanation: string }
 
@@ -11,6 +12,7 @@ export function EpisodeSummary({ artifact, explanation }: Props) {
   const cost = episode.estimated_cost;
   const costLabel = simulated ? '模拟费用' : '网关估算费用';
   const costValue = cost.is_known ? `$${cost.amount} USD` : '未知 (未验证)';
+  const usage = savedUsage(artifact);
   return (
     <div className="episode-summary">
       <div className="episode-provenance" aria-label="已保存运行来源">
@@ -41,9 +43,10 @@ export function EpisodeSummary({ artifact, explanation }: Props) {
           <div className="metric-sub">模型调用: {episode.model_call_count} 次</div>
         </div>
         <div className="metric-box">
-          <div className="metric-label">{episode.token_usage.simulated ? 'Token 消耗 · 模拟' : 'Token 消耗'}</div>
-          <div className="metric-value" id="metric-tokens">{episode.token_usage.prompt_tokens + episode.token_usage.completion_tokens}</div>
-          <div className="metric-sub">输入 {episode.token_usage.prompt_tokens} / 输出 {episode.token_usage.completion_tokens}</div>
+          <div className="metric-label">{usage.complete ? 'Token 消耗' : '已报告 Token'}{episode.token_usage.simulated ? ' · 模拟' : ''}</div>
+          <div className="metric-value" id="metric-tokens">{usage.reportedTotal ?? '未知'}</div>
+          {usage.reportedTotal !== null && <div className="metric-sub">输入 {episode.token_usage.prompt_tokens} / 输出 {episode.token_usage.completion_tokens}</div>}
+          {!usage.complete && <div className="metric-sub">请求或轨迹不完整，总用量未知。</div>}
         </div>
         <div className="metric-box">
           <div className="metric-label">耗时</div>
