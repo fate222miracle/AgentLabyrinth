@@ -8,11 +8,13 @@
 
 | PR | 内容 | 当前base → head |
 | --- | --- | --- |
-| [#1](https://github.com/fate222miracle/AgentLabyrinth/pull/1) | Git协作规范/模板/过期指引 | main → codex/git-collaboration-rules |
+| [#1](https://github.com/fate222miracle/AgentLabyrinth/pull/1) | Git规范/模板/过期指引与跨平台门禁修复 | main → codex/git-collaboration-rules |
 | [#2](https://github.com/fate222miracle/AgentLabyrinth/pull/2) | 已报告用量、安全默认值、只读保存进度与执行证据 | codex/git-collaboration-rules → codex/experiment-reliability-closeout |
 | [#3](https://github.com/fate222miracle/AgentLabyrinth/pull/3) | 网络诊断、截止时间测试与最终交接 | codex/experiment-reliability-closeout → codex/fix-provider-network-diagnostics |
 
-实际源码提交：c880507（Git规范）、d611ec1（报告用量）、34b4a51（安全默认）、f3617c8（只读保存与执行证据）、891677f（连接诊断/测试与集成交接）。App共享文件已按段暂存，40份交付文件检查无实际Key/产物；密钥、本机环境、实验文件与临时发布脚本保持忽略。最新业务源码仍对应10月28日本地705Python/48Node/73Edge、22格零退化与audit0的完整实跑，随后只补Git交付文档；不冒称每个中间提交都有单独完整门禁。远端CI须看各PR实际Checks，不用本地Edge结果替代；没有虚构独立审批、配置分支保护、发布Tag或自动合并。
+实际源码提交：c880507（Git规范）、d611ec1（报告用量）、34b4a51（安全默认）、f3617c8（只读保存与执行证据）、891677f（连接诊断/测试与集成交接），交付回执28113f4。App共享文件已按段暂存，40份交付文件检查无实际Key/产物；密钥、本机环境、实验文件与临时发布脚本保持忽略。原集成代码有10月28日本地705Python/48Node/73Edge、22格零退化与audit0的完整实跑，不冒称每个中间提交都有单独完整门禁。
+
+首次实际远端CI失败：PR#1/#2的Linux Mypy均在scripts/course_demo.py的55/301行报CREATE_NO_WINDOW不存在，未到Python/浏览器；可追溯失败Job 122603865284/122604000347。已补两行标准库getattr兼容回退到0，Windows保持隐藏窗口；保留os导入供受控中断演练使用。共享修复80e79f5还将已验证的截止时间测试修复放入共同基分支，以正常merge提交8eb1dd5/0c4b2f8传到依赖分支，没有强推。兼容补丁后实际30项课程/时限专项通过，Linux目标Mypy在基分支115文件/最终集成116文件均通过，Ruff通过；本机705完整门禁是该两行补丁之前，不能冒称补丁后已重跑全套。修正过程中一次误删仍需的os导入引发子进程失败，已恢复并复跑通过，未发布该错误版本。三个PR已推送修复并重新触发CI，最终远端结果查看各PR实时Checks；不把旧失败藏掉或假称已全绿。没有虚构独立审批、配置分支保护、发布Tag或自动合并。
 
 三个PR存在依赖，保持未合并：先审查/合并#1到main，再将#2的base改为main后审查合并，最后对#3重复；链式交付宜保留祖先关系。不要直接把#2/#3合入其当前功能base而误称已交付main。负责人尚未授权合并。本机当前主工作分支为codex/fix-provider-network-diagnostics；下一步仍处理已有可靠性/效果证据问题，真实调用须新具体授权。
 
