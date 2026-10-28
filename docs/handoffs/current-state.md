@@ -2,6 +2,20 @@
 
 更新：2026-10-28。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
 
+## 2026-10-28 GitHub分组交付回执
+
+负责人本轮明确要求提交GitHub，覆盖下文开发阶段当时的本地保留约束，仅限本次提交/推送及关联PR。已通过本机既有代理完成远端fetch并核对原main为254eac0，没有改全局代理、强推或重写main。GitHub创建与推送均实际成功：
+
+| PR | 内容 | 当前base → head |
+| --- | --- | --- |
+| [#1](https://github.com/fate222miracle/AgentLabyrinth/pull/1) | Git协作规范/模板/过期指引 | main → codex/git-collaboration-rules |
+| [#2](https://github.com/fate222miracle/AgentLabyrinth/pull/2) | 已报告用量、安全默认值、只读保存进度与执行证据 | codex/git-collaboration-rules → codex/experiment-reliability-closeout |
+| [#3](https://github.com/fate222miracle/AgentLabyrinth/pull/3) | 网络诊断、截止时间测试与最终交接 | codex/experiment-reliability-closeout → codex/fix-provider-network-diagnostics |
+
+实际源码提交：c880507（Git规范）、d611ec1（报告用量）、34b4a51（安全默认）、f3617c8（只读保存与执行证据）、891677f（连接诊断/测试与集成交接）。App共享文件已按段暂存，40份交付文件检查无实际Key/产物；密钥、本机环境、实验文件与临时发布脚本保持忽略。最新业务源码仍对应10月28日本地705Python/48Node/73Edge、22格零退化与audit0的完整实跑，随后只补Git交付文档；不冒称每个中间提交都有单独完整门禁。远端CI须看各PR实际Checks，不用本地Edge结果替代；没有虚构独立审批、配置分支保护、发布Tag或自动合并。
+
+三个PR存在依赖，保持未合并：先审查/合并#1到main，再将#2的base改为main后审查合并，最后对#3重复；链式交付宜保留祖先关系。不要直接把#2/#3合入其当前功能base而误称已交付main。负责人尚未授权合并。本机当前主工作分支为codex/fix-provider-network-diagnostics；下一步仍处理已有可靠性/效果证据问题，真实调用须新具体授权。
+
 ## 2026-10-28 Provider连接诊断与截止时间回归修复
 
 负责人要求修存量问题，本轮先修AIHubMix目录/推理的连接可观测性：共用安全本地日志分类，包装超时沿已有REQUEST_TIMEOUT，读取重置/HTTP截断转原安全失败码；已收到HTTP状态的错误正文截断保留原状态映射。公开Schema/Trace/评分/CSV及无重试/未知用量规则不改，旧原因不回填。实际仅一次目录GET成功（1047ms、4可见型号、HTTPS代理已配置），不是推理稳定性证明；没有真实推理/Judge/恢复。源码、日志读法和全部失败证据见[本轮交接](../learning/V0.3-network-diagnostics-20261028.md)。
