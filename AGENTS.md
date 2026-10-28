@@ -8,6 +8,8 @@
 
 实际远端CI首次暴露course_demo的Windows常量在Linux Mypy不可见；已用两行getattr回退修复，保留os中断演练，并把已验证时限测试修复前移至共同基分支。共享提交80e79f5、两次正常merge保留历史，三个PR修复均已推送；实际30专项及Linux Mypy最终116文件通过。705/48/73完整本机门禁发生在两行兼容补丁前，远端重跑结果须查PR Checks，不冒称已通过。当前仍不合并main，详情current-state。
 
+后续CI暴露课程40ms超时可能先于模型请求，旧演示把真实已知零误当必须未知；已按Trace区分两种停止，补强制启动超时回归，31项专项及Linux Mypy通过，未改生产时限/评分/协议，沿共同基分支正常merge同步。另发现同head→main的既有PR#4，保留不擅自关闭；不把其创建算本轮回执。最终门禁与PR状态继续见current-state。
+
 负责人2026-10-28要求继续修存量问题。当前交接docs/learning/V0.3-network-diagnostics-20261028.md：AIHubMix目录/推理共用安全连接分类日志，补响应读取中断及包装超时处理，沿用原公开错误码/未知用量/无重试。一次只读目录GET已成功，不代表模型推理稳定或旧失败原因已找回；无真实推理/Judge/恢复/Git同步。分支codex/fix-provider-network-diagnostics保留全部既有dirty/untracked，最终验证以current-state为准。仍暂停新增机制，效果实证与A1等缺口保留。
 
 负责人2026-10-26要求暂停下一步功能开发，先修明显硬伤。当前任务为docs/learning/V0.3-hardening-20261026.md：保存用量对账与未知提示、首次Fake/单题/整场16000Token边界默认、工具指标名称澄清、过期协作入口修正；不改公开契约/评分/CSV，不新增真实模型调用或Git同步。分支codex/fix-reporting-and-run-defaults保留所有既有dirty/untracked。完整门禁结果以current-state实际记录为准，不能把本轮修复外推为网络已恢复或规划收益已证。后续先处理存量问题，不自动恢复新机制开发。

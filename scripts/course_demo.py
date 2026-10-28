@@ -156,7 +156,7 @@ def interrupted_child(directory: Path) -> None:
 
 
 async def local_cases(service: EpisodeService) -> dict[str, str]:
-    """Create success, recovery comparison and an unanswered timed-out request."""
+    """Create success, recovery comparison and a truthful deadline stop."""
     clean = await service.execute_episode(request())
     verify(clean, TerminationReason.SUCCESS, True)
     comparison = await service.execute_experiment(
@@ -188,8 +188,21 @@ async def local_cases(service: EpisodeService) -> dict[str, str]:
     with patch.object(FakeModelProvider, "generate", slow):
         timeout = await service.execute_episode(request(max_execution_time_ms=40))
     verify(timeout, TerminationReason.TIME_BUDGET_EXCEEDED, False)
-    if timeout.episode.tool_call_count or timeout.episode.estimated_cost.is_known:
-        raise RuntimeError("Timeout must retain unknown usage and execute no tools")
+    requested = any(event.event_type == EventType.MODEL_REQUESTED for event in timeout.events)
+    # Setup expiry has known zero consumption; an unanswered request has unknown usage.
+    if (
+        timeout.episode.tool_call_count
+        or timeout.episode.model_call_count != int(requested)
+        or any(event.event_type == EventType.MODEL_RESPONDED for event in timeout.events)
+        or timeout.episode.estimated_cost.is_known == requested
+    ):
+        raise RuntimeError("Timeout accounting must match the recorded model request")
+    if not requested and (
+        timeout.episode.token_usage.prompt_tokens
+        or timeout.episode.token_usage.completion_tokens
+        or timeout.episode.estimated_cost.amount
+    ):
+        raise RuntimeError("A deadline before any request must not invent consumption")
     return {
         "success": str(clean.episode.episode_id),
         "argument_baseline": str(baseline.episode.episode_id),
