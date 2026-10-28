@@ -72,7 +72,7 @@ test('saved charts show exact metrics and compatible history only, with read-onl
   await expect(trend.locator('a')).toHaveCount(4);
   await expect(trend).not.toContainText('近期窗口');
   await trend.getByLabel('历史趋势指标').selectOption('tokens');
-  await expect(trend.getByRole('img')).toHaveAttribute('aria-label', /Token 总量：2 次/);
+  await expect(trend.getByRole('img')).toHaveAttribute('aria-label', /已报告 Token：2 次/);
   await trend.getByLabel('历史趋势指标').selectOption('duration');
   await expect(trend.getByRole('img')).toHaveAttribute('aria-label', /平均耗时：2 次/);
   for (const width of [1440, 1280, 768, 390]) {

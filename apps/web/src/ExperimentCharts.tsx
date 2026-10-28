@@ -35,6 +35,7 @@ export function ExperimentCharts({ labels, rates, tokens, durations, total, coun
             <div><span><i className={`chart-key arm-${index}`} />{labels[index]}</span><strong>{Number(value.toFixed(2)).toLocaleString()} <small>{unit}</small></strong></div>
             <div className="arm-bar-track" aria-hidden="true"><span className={`arm-${index}`} style={{ width: `${value / ceiling * 100}%` }} /></div>
           </div>)}</div>
+          {unit === 'tokens' && <p className="chart-note">仅汇总已报告用量；请求中断可能漏报，不能据此确认完整消耗或节省量。</p>}
         </section>;
       })}</div>
   </div>;
@@ -46,7 +47,7 @@ export function HistoryTrendChart({ items, onOpen }: { items: ExperimentDashboar
   const history = items.filter(item => item.total_pairs > 0).slice().reverse().slice(-30);
   const labels = comparisonLabels(history[0]?.comparison_axis ?? '', history[0]?.recovery_backend);
   const unit = metric === 'success' ? '%' : metric === 'tokens' ? 'tokens' : 'ms';
-  const title = metric === 'success' ? '成功率' : metric === 'tokens' ? 'Token 总量' : '平均耗时';
+  const title = metric === 'success' ? '成功率' : metric === 'tokens' ? '已报告 Token' : '平均耗时';
   const values = history.map(item => metric === 'success' ? [item.baseline_success_rate * 100, item.recovery_success_rate * 100]
     : metric === 'tokens' ? [item.baseline_total_tokens, item.recovery_total_tokens]
       : [item.baseline_avg_duration_ms, item.recovery_avg_duration_ms]);
@@ -56,10 +57,11 @@ export function HistoryTrendChart({ items, onOpen }: { items: ExperimentDashboar
   return <section className="chart-panel history-trend-chart" aria-label="同配置历史折线图">
     <div className="chart-heading"><div><span className="story-section-label">同条件 · 历史趋势</span><h3>{title}变化</h3></div>
       <label><span className="sr-only">历史趋势指标</span><select aria-label="历史趋势指标" value={metric} onChange={event => setMetric(event.target.value)}>
-        <option value="success">成功率</option><option value="tokens">Token 总量</option><option value="duration">平均耗时</option>
+        <option value="success">成功率</option><option value="tokens">已报告 Token</option><option value="duration">平均耗时</option>
       </select></label></div>
     <div className="chart-legend">{labels.map((label, i) => <span key={label}><i className={`chart-key arm-${i}`} />{label} · {i === 0 ? '实线' : '虚线'}</span>)}<span>单位：{unit}</span>
       {history.length >= 2 && values.every(value => value[0] === value[1]) && <span>两侧数值相同，曲线重合</span>}</div>
+    {metric === 'tokens' && <p className="chart-note">曲线只表示已报告用量，未报告部分未知；请核查保存的运行，不能直接当作完整节省趋势。</p>}
     {history.length >= 2 ? <>
       <svg viewBox="0 0 640 250" role="img" aria-label={`${title}：${history.length} 次同配置实验，按保存时间排序的运行序号`}>
         {[0, 0.5, 1].map(fraction => <g key={fraction}>

@@ -2129,7 +2129,7 @@ button:focus-visible,
 .episode-runtime { margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.875rem; }
 .episode-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 1rem; }
 .episode-metrics .metric-box { min-width: 0; }
-.episode-metrics .metric-label, .episode-metrics .metric-sub { font-size: 0.875rem; letter-spacing: normal; }
+.episode-metrics .metric-label, .episode-metrics .metric-sub { font-size: 0.875rem; letter-spacing: normal; overflow-wrap: anywhere; }
 .episode-metrics .metric-value { font-size: 1.125rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .episode-details { border-top: 1px solid var(--border-color); }
 .episode-details > summary { cursor: pointer; padding: 0.6rem 0; font-size: 0.875rem; font-weight: 600; }

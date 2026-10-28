@@ -1948,13 +1948,14 @@ export default function App() {
                         <div className="metrics-grid">
                         {/* Total Tokens & Delta */}
                         <div className="metric-box">
-                          <div className="metric-label">Token 总消耗 ({armLeftLabel} / {armRightLabel})</div>
+                          <div className="metric-label">已报告 Token ({armLeftLabel} / {armRightLabel})</div>
                           <div className="metric-value" style={{ fontSize: '1.05rem' }}>
                             {experiment.metrics.baseline_total_tokens} / {experiment.metrics.recovery_total_tokens}
                           </div>
                           <div className="metric-sub">
-                            增量 Delta: {formatSigned(experiment.metrics.recovery_total_tokens - experiment.metrics.baseline_total_tokens)} tokens
+                            已报告差值: {formatSigned(experiment.metrics.recovery_total_tokens - experiment.metrics.baseline_total_tokens)} tokens
                           </div>
+                          <div className="metric-sub">汇总值不能确认总用量完整；请结合各次运行的保存轨迹核查，不能直接当作完整节省量。</div>
                         </div>
 
                         {/* Average Steps */}
@@ -1994,7 +1995,8 @@ export default function App() {
 
                         {/* Tool Selection & Argument Validity Rates */}
                         <div className="metric-box">
-                          <div className="metric-label">工具选择 / 参数合法率 ({armLeftLabel} / {armRightLabel})</div>
+                          <div className="metric-label">允许工具命中比例 ({armLeftLabel} / {armRightLabel})</div>
+                          <div className="metric-sub">所提议工具属于任务预期且非禁止集合的比例；不表示当前步骤最优或任务正确率。</div>
                           <div className="metric-value" style={{ fontSize: '1.05rem' }}>
                             {experiment.metrics.baseline_tool_selection_accuracy !== null && experiment.metrics.baseline_tool_selection_accuracy !== undefined
                               ? (experiment.metrics.baseline_tool_selection_accuracy * 100).toFixed(0) + '%'
