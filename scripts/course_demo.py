@@ -52,7 +52,7 @@ def preview(directory: Path) -> None:
     if node is None or not vite.is_file():
         raise RuntimeError("Install Node.js and run npm.cmd --prefix apps/web ci first")
     processes: list[subprocess.Popen[bytes]] = []
-    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     with (
         (directory / "preview-api.log").open("ab") as api_log,
         (directory / "preview-web.log").open("ab") as web_log,
@@ -298,7 +298,7 @@ def generate(directory: Path, skip_mcp: bool) -> None:
                 cwd=ROOT,
                 stdout=log,
                 stderr=log,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             try:
                 asyncio.run(ready())

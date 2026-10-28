@@ -19,6 +19,7 @@ from packages.domain.models import (
     Message,
     ModelConfig,
     ModelResponse,
+    Observation,
     RunConfig,
     RuntimeBackend,
     StepResult,
@@ -108,12 +109,38 @@ def test_model_deadline_cancels_wait(backend: RuntimeBackend) -> None:
         update={"budget": Budget(schema_version="1.1", max_execution_time_ms=80)}
     )
     provider = SlowProvider("success")
-    artifact = run(agent, task, provider)
+    # Isolate the in-flight deadline from framework setup time; asyncio's timer stays real.
+    with patch("packages.runtime.session.perf_counter", return_value=0.0):
+        artifact = run(agent, task, provider)
     assert_stopped(artifact, 1, 0)
     assert provider.cancelled
     assert "upstream_usage_unknown" in artifact.episode.detail
     assert not artifact.episode.estimated_cost.is_known
     assert not any(e.event_type == EventType.MODEL_RESPONDED for e in artifact.events)
+
+
+@pytest.mark.parametrize("backend", ["handwritten", "langgraph", "pydantic_ai"])
+def test_setup_deadline_stops_before_any_model_request(backend: RuntimeBackend) -> None:
+    """Setup time counts toward the budget and must not masquerade as an in-flight request."""
+    agent, task = inputs(backend)
+    clock = [0.0]
+
+    class ExpiringSetup(ToolLabEnvironment):
+        def reset(self, task: TaskSpec, seed: int) -> Observation:
+            observation = super().reset(task, seed)
+            clock[0] = 2.0
+            return observation
+
+    provider = FakeModelProvider("success")
+    with (
+        patch("packages.runtime.session.perf_counter", side_effect=lambda: clock[0]),
+        patch.object(provider, "generate", wraps=provider.generate) as generate,
+    ):
+        artifact = run(agent, task, provider, ExpiringSetup())
+    assert_stopped(artifact, 0, 0)
+    generate.assert_not_called()
+    assert "upstream_usage_unknown" not in artifact.episode.detail
+    assert not any(e.event_type == EventType.MODEL_REQUESTED for e in artifact.events)
 
 
 @pytest.mark.parametrize("backend", ["handwritten", "langgraph", "pydantic_ai"])
