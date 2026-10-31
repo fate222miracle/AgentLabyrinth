@@ -1,6 +1,106 @@
 # Current state
 
-更新：2026-10-28。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+更新：2026-10-31。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+
+## 2026-10-31 ADR-044有界Reflection成品闭环
+
+负责人明确确认按ADR-044实施，并要求开发结束后提交GitHub。新 `no-progress-revision-v1` 只在连续两次完全相同的成功只读调用且无证据增长后触发；复用同 Provider，不提供工具，只接受 `diagnosis/revised_goal` 两个不超过200字的严格JSON字段。每Episode最多一次，请求/Token/费用/时延计入原预算；格式错误、Provider错误、超时或预算不足都保留原失败语义并禁止重试。
+
+产品闭环包括 AgentSpec1.5/SessionState1.3、Episode请求1.8、Experiment请求1.11/计划1.6/结果1.8、`REFLECTION_PRODUCED/REJECTED`、Handwritten/LangGraph/PydanticAI共用Session边界、SQLite安全点与跨进程恢复、单次/实时/历史/正式对照、Replay、两侧行为审查和CSV。新公开任务`reflection-stale-alias-001`中，Fake基线保留停滞失败，开启侧只使用任务公开的规范ID完成。反思输入不含私有`goal_conditions`；串行批次显式拒绝，防止与安全点语义冲突。源码阅读、主链路、状态和失败见[Reflection学习交接](../learning/V0.3-reflection-challenge-20261031.md)。
+
+首次完整门禁在Python/Node/回归/audit已通过后，旧规划Edge用例因假设“规划算法永远是CSV最后一列”而失败（75/76）；改为按表头定位，没有回退新列或改生产数据。最终`scripts.check` 退出0：**749 Python**、Ruff/Mypy **126文件**、固定**22格零退化**、上下文消融、Web typecheck/build、**50 Node**、**76 Edge**、npm audit **0漏洞**。证据`artifacts/quality/f10ae5a2-9a87-448c-8359-9e20029b6752/`及最新`artifacts/playwright/`。无真实模型/Judge、无真实历史迁移/删除。Fake成功只证机制，不声称真实收益；V0.3工程功能齐备不等于整版体验或研究效果已签收。
+
+## 2026-10-30 SQLite新数据全链路与V0.3续接
+
+负责人要求借鉴Pi设计思想但不引入依赖，并全力推进V0.3剩余功能。对账确认Planning、Memory、Recovery、Context、PydanticAI、消融和真实Judge已有产品闭环；唯一未实施核心项为Reflection，现有ADR-037只批准证据门槛，尚无可直接编码的算法/任务/公开契约。PydanticAI A1为已接受并披露的边界，不重写Runtime凑“纯框架驱动”。
+
+本轮先完成Accepted ADR-043阶段2剩余成品：Alembic `0002_experiment_records`及同一SQLite Store保存新Experiment计划/结果、Job和Review，成对Episode也走数据库。计划+初始Job、结果+计划退役分别同事务提交；模型/工具在事务外。旧JSON只读回退，同ID冲突失败，无独立双写。新进程可回读实验/评审/Job并从冻结计划继续Fake成对运行；在线备份自动包含新表。源码阅读、主链路、失败与边界见[学习交接](../learning/V0.3-sqlite-experiment-persistence-20261030.md)。
+
+首次完整门禁暴露Dashboard在损坏文件名处提前抛错（732通过/1失败），修复逐文件隔离计数后最终完整门禁通过：**733 Python**、Ruff/Mypy **124文件**、固定**22格零退化**、上下文消融、Web typecheck/build、**48 Node**、**74 Edge**、audit 0漏洞。证据`artifacts/quality/18961e47-e430-420c-84f4-07a662e46157/`及最新`artifacts/playwright/`。定向回归还修正无关丢失源Review阻挡目标列表的问题。无真实模型、Judge、真实历史迁移或Git提交/推送。
+
+Reflection最小方案已收敛为[ADR-044 Proposed](../adr/ADR-044-no-progress-reflection-challenge.md)：针对重复成功但无进展的工具调用，仅允许一次计入原预算的结构化行动修正，并以公开旧别名题做单变量对照。该方案会新增配置、事件和任务，按需求§0.3须负责人确认后编码；当前尚未实现或调用模型。阶段3真实JSON迁移仍须停写、备份、隔离导入、逐项回读及负责人明确确认。
+
+## 2026-10-29 SQLite单Episode成品闭环
+
+负责人批准开始并要求完成当前整项工作后统一汇报。ADR-043现为Accepted，首个单Episode成品切片Implemented：新增Application `EpisodeStore` Port、Infrastructure SQLAlchemy Adapter和Alembic `0001_episode_records`；产品默认服务延迟创建`artifacts/agentlabyrinth.sqlite3`。新单次/实时Episode的安全点、完整Trace、Fake来源和最终结果由同一数据库行权威保存，短事务验证前缀后完成转换；模型/工具调用在事务外。结束记录不可由不同内容覆盖，读取核验摘要、身份、来源和Trace链；跨进程退出可从数据库原生恢复。旧JSON只读回退且同ID冲突失败，不自动迁移、删除或改写真实历史。在线备份入口`scripts.backup_sqlite`拒绝覆盖并验证完整性。早期标准库候选和重复准入测试已删除，正式实现见`packages/infrastructure/sqlite_episode_store.py`。
+
+实际完整验证：**732 Python**、Ruff/Mypy **123文件**、固定**22格0退化**、上下文消融24格、Web typecheck/build、**48 Node**、npm audit **0漏洞**。完整脚本默认Chromium阶段因本机缺少Playwright Chromium可执行文件非产品失败而退出；随后使用仓库支持的系统Microsoft Edge实测 **74/74** 通过。证据`artifacts/quality/4211b89c-e9e2-4bce-a295-9fc8e0b79280/`及最新`artifacts/playwright/`；专项覆盖迁移版本、重复升级、拒绝破坏性降级、正常/重启读取、跨进程恢复、旧历史兼容、冲突/篡改和在线备份恢复。无真实模型、Judge、真实数据迁移或Git提交/推送。
+
+Experiment计划/Job/成对Episode及Review仍以原JSON为权威，是ADR-043后续独立切片；不能把本轮描述成所有对象已数据库化。实际迁移真实历史、删除旧文件或切换其权威仍需负责人另行明确确认，先停写和恢复验证备份。完整交接见[SQLite单Episode成品交接](../learning/V0.3-sqlite-episode-persistence-20261029.md)。
+
+## 2026-10-29 Episode数据库迁移版本起步
+
+负责人要求推进SQLite持久化。新增`packages/infrastructure/migrations/`中首个Alembic版本`0001_episode_records`及显式连接入口，仅在独立临时库测试：首次升级、重复升级、版本记录和拒绝破坏性降级并保留数据；连同SQLAlchemy/标准库SQLite隔离准入6项通过，Ruff/格式/Linux目标Mypy四文件通过。本轮没有调用真实模型、迁移真实历史、提交或推送；未重跑完整门禁。
+
+**本轮尚未完成正式SQLite接入**：存储Port、SQLAlchemy Adapter、单次/实时运行与数据库原生Checkpoint恢复、历史迁移/切换均未实现；现有系统仍使用原JSON。首迁移版本仅为开发期隔离切片，未批准直接对现有数据运行；必须继续完成ADR-043的来源/原子性/兼容与完整门禁，不将独立建表当成产品能力。
+
+## 2026-10-29 正式技术栈准入
+
+负责人要求开始按需求基线实施SQLite。已在pyproject/uv.lock加入SQLAlchemy `>=2.0,<2.1`及Alembic `>=1.13,<2`，本机锁定SQLAlchemy 2.0.55、Alembic 1.20.1及其新增依赖；未见原包锁项目删除。隔离Fake测试`tests/integration/test_sqlalchemy_sqlite_admission.py`用Alembic Operations建表、SQLAlchemy事务写入、重复ID失败回滚、引擎重开回读并核对原JSON；与原SQLite准入共5项通过，Ruff/格式及Linux目标Mypy通过。此测试不是正式Alembic版本迁移，也未把数据库接入产品或运行真实模型；未重跑完整门禁、未提交/推送Git。
+
+ADR-043新增首个切片方向：Application存储Port、Infrastructure SQLAlchemy Adapter及Alembic版本迁移，单Episode覆盖实时Trace、Checkpoint、完成和数据库原生恢复；继续保护文件历史和禁止独立双写。当前尚未实现上述成品及历史迁移，先前标准库候选仅为隔离验证，不能称SQLite接入已完成。
+
+## 2026-10-28 SQLite Episode候选组件
+
+负责人要求继续。新增`packages/application/sqlite_episode_candidate.py`，仅隔离候选，不接产品API、Runtime或真实历史。SQLite中同一行保存一个完整安全点或完成产物；安全点校验身份/来源和前缀，拒绝旧状态及已结束覆盖；完成转换在短事务中核验安全点、来源及Trace前缀，读取检查摘要、身份、配置哈希和Trace链。新增候选测试覆盖进程退出后安全点读回、Fake通过既有JSON恢复生成的结果转入候选、来源/轨迹冲突、重复完成和篡改摘要。SQLite准入与原跨进程恢复共10项通过；Ruff/格式及Linux目标Mypy两文件通过。尚未运行完整门禁、真实模型或Git同步。
+
+此组件为标准库SQLite的内部候选，不是需求§16 SQLAlchemy/Alembic成品实现；未接正常单次/实时/Experiment/MCP/BFCL、数据库原生恢复、迁移或用户入口，不能声称成品完成。尚需针对并发写入、磁盘故障、SQLite版本/锁参数、迁移和真实历史兼容补验证；需要落实正式存储选择和不混合双写，再按ADR-043推进完整链路。
+
+## 2026-10-28 SQLite准入与关联核查续接
+
+负责人要求继续。只读核查56个Experiment及396条Episode引用：已有读取器核验下未发现缺失Episode、重复成员或Pair/ID集合不一致；5个Job的已完成结果/未结束计划基本关联未发现缺失。此为有限关系核查，不代表完整来源核验、所有历史可恢复或实际性能合格。另15份顶层非UUID JSON已逐份复制并核对SHA到`artifacts/api-error-disclosure-20261028/other-json-backup-5a72debe-9d97-42ce-b72a-7eb7ea04d85c/`；与此前663份分开且在同设备，不包含其他子目录、不等同异地完整备份。
+
+隔离SQLite测试增加子进程在未提交事务中退出、SQLite `max_page_count`模拟容量耗尽：此前提交数据仍可读，完整性检查通过。连同Fake读取/安全点导出恢复、锁/只读/关联错误共4项通过；Ruff及Linux目标Mypy通过。容量限制不等同真实磁盘满或意外断电。尚未接入产品SQLite或迁移历史，未重跑完整门禁、未真实模型/Git操作；下一步沿ADR-043推进具体成品切片，保持JSON/现有数据与故障边界。
+
+## 2026-10-28 SQLite隔离准入起步
+
+负责人要求开始执行ADR-043路线。只读盘点`artifacts/`下UUID命名JSON：Episode 594、Experiment 56、计划4、Job 5、Review 4；语法可解析共663，另15个非UUID顶层JSON未纳入，Episode安全点目录无UUID JSON。663份也通过各自既有读取器的Schema及身份核验（Review含来源哈希、Experiment含配置哈希）；并非完整关联或孤立记录审核。清单和分类结果在被忽略的`artifacts/api-error-disclosure-20261028/`，不含正文。663份范围内历史复制到`artifacts/api-error-disclosure-20261028/history-backup-454b206e-3689-4da4-b129-60f1701bc118/`，逐份比较备份与盘点时及复制后原件SHA，一份Episode从备份解析与源对象一致；15个非UUID JSON及其他资产不在此备份范围，备份在同一设备不等于异地备份。历史没有迁移或改写。
+
+新增隔离Fake准入测试`tests/integration/test_sqlite_persistence_admission.py`，使用临时SQLite WAL/FULL、外键、版本号，验证单Episode原始字节与事件ID顺序、新Python进程回读、重复ID回滚、写事务中读取未提交隔离、在线备份恢复和无效JSON校验；另验证Fake进程中断后产生的安全点经SQLite存取、导出为现有JSON后完成恢复，源安全点不变；锁竞争、只读写入和外键失败不会改变已提交记录。实际3项通过、Ruff与Linux目标Mypy通过。该夹具使用Python标准库、非正式数据库实现；不等于从数据库直接恢复，未覆盖磁盘满/崩溃、迁移、非UUID文件备份或Web接入，阶段0/1尚未完整通过，不能称数据库成品或替换JSON。上轮727/48/74不是本轮全套门禁。本轮不调用真实模型、不提交Git。下一步补实际历史关联只读核验、非UUID资产备份策略与数据库故障注入，再做具体成品设计，按负责人要求最小验证后继续成品开发。
+
+## 2026-10-28 持久化优化路线规划
+
+负责人要求规划数据持久化优化。新增[ADR-043 Proposed](../adr/ADR-043-sqlite-persistence-roadmap.md)，对照需求§16及现有JSON/Checkpoint/Job/Review实际情况，规划SQLite隔离验证→现有功能成品闭环→无损历史迁移与验证→切换、备份和回滚，列明单一权威、事务、未知值、来源哈希、故障注入及单进程边界。首切片、具体表结构、存储位置及真实历史切换仍待确定；本轮只有文档规划，没有新增数据库/依赖、真实模型调用、数据迁移或Git同步。727/48/74为上轮代码实跑，非本轮新测试。
+
+## 2026-10-28 持久化存量问题收口
+
+负责人要求连续处理已知问题并统一汇报。依[ADR-042](../adr/ADR-042-partial-review-history.md)增加显式1.1部分评审读取：旧1.0遇损坏仍失败；新页面保留核验通过的评审并说明无法核验记录的归属可能未知，禁用完整CSV；实验评审不完整时不计算覆盖/一致性。损坏的恢复列表返回明确失败；新增直接恢复Experiment Job时已有最终结果的保护，执行前和最终写入前均拒绝覆盖。存在正常最终结果且残留计划时也保守停止，须先查看既有结果；本地单进程不等于多进程原子排他。
+
+最终完整`scripts.check`退出0：**727Python/102.94秒、Ruff/Mypy116文件、48Node、74Edge/2.9分钟、固定22格零退化、上下文消融、Web构建、audit0漏洞**。证据`artifacts/quality/11287605-1d7e-44cf-b5fa-6beaaac1a6f2/`、`artifacts/playwright/c9f680fb-846a-45cc-b632-c995a398277d/`、日志`artifacts/api-error-disclosure-20261028/quality-result-guard.log`。此前门禁5项失败为旧恢复测试依赖损坏文件覆盖；已补保留原件/拒绝调用断言及正常恢复测试，初次浏览器夹具未匹配新查询造成1项失败后已修复并重新通过。原21题与原真实失败Episode共22份SHA保持；没有真实推理、Judge、恢复或Git同步。
+
+目前恢复列表遇单项损坏整体不可用，错误可见但仍不能同时展示其他可恢复项；评审完整性是全目录不确定计数而非目标Episode归属判断。大目录性能未测，跨文件事务、多进程调度、备份和自由文本脱敏仍是持久化设计边界。下一步以具体ADR设计SQLite及非破坏性迁移，不声称所有潜在问题已消除。
+
+## 2026-10-28 恢复列表损坏提示
+
+负责人要求先完成存量修复再优化持久化。Episode、Experiment及Job恢复列表遇到无法校验或读取的记录不再静默返回不完整列表，而是走现有安全错误响应；原Web已有列表读取失败提示。Experiment计划额外校验完整性和身份；损坏结束文件不再冒充可恢复。正常跨进程恢复与损坏保护并测，相关83项通过，Ruff/格式及Linux目标Mypy三文件通过；初次回归发现旧测试依赖覆盖损坏结果，已调整为先验证保留和报错，再只删除隔离测试夹具以验证正常恢复。未重跑完整门禁、未调用真实模型或Git同步。
+
+完全无法解析的评审归属未知，现仍返回409，不能声称该问题已完成。要同时显示有效记录和明确提示不完整，需设计可兼容的公开响应及前端处理；SQLite优化待存量问题完成后再做。
+
+## 2026-10-28 评审历史隔离
+
+负责人要求继续修复存量问题。已复现并修复：评审文件可解析且身份可核对，但其所属Episode丢失时，不再阻挡其他Episode的评审列表；目标Episode仍逐条核对来源，直接读取受损评审仍409。相关评审/历史/Job 63项通过，Ruff/格式及Linux目标Mypy两文件通过。本轮未跑完整门禁、真实模型或Git同步。完全无法解析或身份不可信的评审仍会阻挡列表，不能静默跳过；可恢复列表异常可见性也未完成，需要明确不完整提示方案和兼容处理；SQLite尚未实施。
+
+## 2026-10-28 损坏结果保护
+
+负责人要求先解决已有问题，再优化持久化。隔离测试复现损坏Episode结果被当作不存在，可能沿安全点覆盖原文件；已令单Episode和Experiment臂遇到损坏结果直接停止，不触发恢复覆盖。原结果和安全点字节保持；修复前定向1项失败，修复后相关历史/Job/进度/预算64项通过，Ruff/格式及Linux目标Mypy三文件通过。未重跑完整门禁，未触碰真实历史、调用真实模型或Git同步。评审损坏隔离、可恢复列表错误可见性仍未完成；SQLite方案须在存量问题处理后具体设计，不能宣称本轮全部完成。
+
+## 2026-10-28 持久化检查
+
+负责人要求分析现有持久化问题及优化路线。证据与建议见[持久化检查](../learning/V0.3-persistence-review-20261028.md)：隔离Fake确认无关损坏评审会让另一Episode评审列表从200变409；目录发现跳过异常、跨文件缺少统一事务、损坏最终结果可能被恢复重写、全量扫描和单进程等边界分别标明证据等级。建议先修数据保护和错误可观测性，再经具体ADR评估SQLite与可验证迁移；本轮未迁移、未改核心协议或真实历史，未做负载测试/真实模型调用/Git同步。保留现有未提交改动。
+
+## 2026-10-28 API错误信息检查
+
+继续检查发现损坏的保存记录或任务目录经Pydantic校验失败后，部分接口将含原始输入的异常文本返回页面；复核源文件在读取时消失也可能暴露本机路径。普通HTTP错误统一屏蔽校验、文件及编码异常的原文，实时Episode错误流同步处理；保留状态码、错误码和一般业务提示。离线复现7项修复前失败，修复后历史、评审、Job、进度和API相关 **93项通过**；Ruff格式/检查及Linux目标Mypy两文件通过。首次测试夹具遗漏必填字段，以及一次pytest收集阶段MemoryError均保留日志，修正夹具后重新复现，不能把它们当产品缺陷。详细日志在`artifacts/api-error-disclosure-20261028/`，本轮未重跑完整门禁；下文713/48/73是上轮结果。
+
+本轮工作位于`codex/fix-api-error-disclosure`，基于5066436并保留上轮未提交修复与交接；没有真实模型调用或Git提交/推送。静态阅读还发现评审列表遍历所有评审并在任意一份损坏时整体失败，尚未复现或修复；需进一步确认如何提示不完整结果，不能静默跳过损坏记录。既有单进程调度、真实模型效果及网络稳定性边界仍在。
+
+## 2026-10-28 只读API响应性优化
+
+负责人要求继续处理存量问题。当前任务[源码/失败与交接](../learning/V0.3-readonly-api-responsiveness-20261028.md)：四个恢复列表/Job状态GET原来在async主循环同步读盘；复用线程读取，并保留Job请求开始时的活动事实。两端都不活动且读到运行快照时最多额外复核一次，避免任务在整个读取区间内启动又结束被误报中断。不改POST运行/控制临界段、公开协议、评分或CSV。修复前4失败/1对照通过；补充完整区间竞态在仅开始标记版本复现1失败/1通过，最终33项历史/Job/进度专项、两文件Linux Mypy与Ruff通过。
+
+最终完整门禁实际 **713Python/99.60秒、Ruff/Mypy116文件、48Node、73Edge/2.9分钟、旧22格零退化、上下文消融、Web类型/构建、audit0漏洞**，Quality gate passed。证据`artifacts/quality/6ffe8878-c6dc-4d5f-a895-51e1bfa75aab/`、`artifacts/playwright/de67be9c-b99e-43de-9a22-37218c5f8eeb/`及`artifacts/readonly-api-20261028/quality-final.log`；此前712项为补充竞态修复前的中间门禁，不作最终证明。21题及原368937f4…失败Episode共22份SHA保持；API8000/Web5173恢复，页面及代理回读原Episode均GET200。Starlette弃用及大chunk提示仍在，无依赖升级。
+
+分支codex/fix-readonly-api-responsiveness基于5066436，不退回较早main丢弃PR#3成果。没有新真实推理/Judge/恢复或Git提交/推送/合并；上轮一次性Git授权已消费。只读快照仍可能过期，不宣称事务一致性或所有同步I/O已解决；真实网络稳定性、研究收益、A1缺口与暂停新增机制安排保持。
 
 ## 2026-10-28 GitHub分组交付回执
 

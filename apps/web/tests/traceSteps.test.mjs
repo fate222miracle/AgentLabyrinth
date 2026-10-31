@@ -36,6 +36,15 @@ test('A model round with several calls has an explicit multi-tool title', () => 
   ]), '多工具调用 · 2 个');
 });
 
+test('Replay exposes bounded reflection without calling it tool success', () => {
+  const produced = [{ step_index: 2, event_type: 'REFLECTION_PRODUCED', payload: {
+    diagnosis: '重复使用旧别名', revised_goal: '改用 ORD-001', source_event_ids: ['a', 'b'],
+  } }];
+  assert.equal(stepTitle(produced), '生成行动修正');
+  assert.equal(stepOutcome(produced), '已修正下一步目标');
+  assert.equal(stepOutcome([{ step_index: 2, event_type: 'REFLECTION_REJECTED', payload: {} }]), '反思失败');
+});
+
 test('Replay groups saved actions and reports observed failures', () => {
   const events = [
     { step_index: 0, event_type: 'OBSERVATION_CREATED', payload: {} },

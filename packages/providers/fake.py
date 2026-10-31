@@ -1,5 +1,6 @@
 """Fake ModelProvider implementation for deterministic testing and M0 execution."""
 
+import json
 import re
 from decimal import Decimal
 from typing import Any
@@ -51,6 +52,36 @@ class FakeModelProvider(ModelProvider):
             price_table_version="fake-zero-v1",
             estimated=True,
         )
+
+        reflection = next(
+            (
+                message.content.get("_agentlabyrinth_reflection_request")
+                for message in messages
+                if message.role == "user"
+                and isinstance(message.content, dict)
+                and isinstance(message.content.get("_agentlabyrinth_reflection_request"), dict)
+            ),
+            None,
+        )
+        if isinstance(reflection, dict):
+            task = reflection.get("task")
+            match = (
+                re.search(r"规范订单\s*ID\s*([A-Z0-9-]+)", task) if isinstance(task, str) else None
+            )
+            canonical = match.group(1) if match else "ORD-001"
+            return ModelResponse(
+                action=FinalAnswer(
+                    text=json.dumps(
+                        {
+                            "diagnosis": "重复查询旧别名没有产生记录或新证据。",
+                            "revised_goal": f"改用任务公开的规范订单 ID {canonical} 查询。",
+                        },
+                        ensure_ascii=False,
+                    )
+                ),
+                token_usage=token_usage,
+                estimated_cost=estimated_cost,
+            )
 
         if self.scenario == "unparseable":
             raise ValueError("FakeModelProvider simulated unparseable model response")
@@ -632,6 +663,15 @@ class FakeModelProvider(ModelProvider):
 
     def _extract_target_order_id(self, messages: list[Message]) -> str:
         """Parse target order ID from public messages."""
+        for msg in reversed(messages):
+            if not isinstance(msg.content, dict):
+                continue
+            reflection = msg.content.get("_agentlabyrinth_reflection")
+            goal = reflection.get("revised_goal") if isinstance(reflection, dict) else None
+            if isinstance(goal, str):
+                identifiers = re.findall(r"[A-Z]{2,}-[A-Z0-9-]+", goal)
+                if identifiers:
+                    return str(identifiers[-1])
         for msg in messages:
             if isinstance(msg.content, dict):
                 target = msg.content.get("target_order_id")

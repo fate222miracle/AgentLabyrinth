@@ -127,6 +127,10 @@ class PydanticAIRuntimeAdapter:
             guard += 1
             if guard > 3 * session.budget.max_steps + session.budget.max_tool_calls + 3:
                 raise RuntimeError("adapter loop guard exceeded")
+            if node == "reflect":
+                node = await session.call_reflection()
+                session.checkpoint(node, save_checkpoint)
+                continue
             if node != "model":
                 # Restored or freshly validated batch: the Session owns the next effect.
                 node = session.validate() if node == "validate" else await session.execute()

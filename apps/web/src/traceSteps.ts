@@ -38,6 +38,8 @@ export function groupTraceByStep<T extends TraceStepEvent>(events: T[]): { step:
 
 /** Label a step from observed events, never from the task's expected answer. */
 export function stepTitle(events: TraceStepEvent[]): string {
+  if (events.some((event) => event.event_type === 'REFLECTION_PRODUCED')) return '生成行动修正';
+  if (events.some((event) => event.event_type === 'REFLECTION_REJECTED')) return '反思结果被拒绝';
   const calls = events.filter(event => event.event_type === 'TOOL_CALL_PROPOSED');
   if (calls.length > 1) return `多工具调用 · ${calls.length} 个`;
   const proposed = events.find((event) => event.event_type === 'TOOL_CALL_PROPOSED');
@@ -49,6 +51,8 @@ export function stepTitle(events: TraceStepEvent[]): string {
 /** Label the observed step outcome, prioritizing failures. */
 export function stepOutcome(events: TraceStepEvent[]): string {
   if (events.some((event) => event.event_type === 'TOOL_FAILED')) return '工具失败';
+  if (events.some((event) => event.event_type === 'REFLECTION_REJECTED')) return '反思失败';
+  if (events.some((event) => event.event_type === 'REFLECTION_PRODUCED')) return '已修正下一步目标';
   const rejected = events.find((event) => event.event_type === 'TOOL_CALL_VALIDATED'
     && (event.payload.error_code || event.payload.arguments_valid === false || event.payload.permitted === false));
   if (rejected) {

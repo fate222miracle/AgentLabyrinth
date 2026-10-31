@@ -4,7 +4,8 @@ import asyncio
 import json
 from collections.abc import Callable
 from time import perf_counter
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
+from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -25,12 +26,14 @@ from packages.domain.models import (
     FinalAnswer,
     Message,
     PlanItem,
+    ReflectionNote,
     TaskSpec,
     TerminationReason,
     TokenUsage,
     ToolCall,
     ToolCallBatch,
     ToolSchema,
+    TraceEvent,
     validate_plan,
 )
 from packages.domain.ports import (
@@ -44,17 +47,18 @@ from packages.runtime.context import ContextHistoryError, _json_bytes, project_c
 from packages.runtime.handwritten.budget import BudgetState, BudgetTracker
 from packages.tools.registry import DefaultToolValidator, ToolRegistry, ValidationResult
 
-NextNode = Literal["model", "validate", "execute", "end"]
+NextNode = Literal["model", "reflect", "validate", "execute", "end"]
 
 PLANNING_TOOL = "update_plan"
+REFLECTION_KEY = "_agentlabyrinth_reflection"
 
 
 class SessionState(BaseModel):
     """Portable state saved only at a model boundary or after termination."""
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
-    next_node: Literal["model", "execute", "end"]
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.0"
+    next_node: Literal["model", "reflect", "execute", "end"]
     pending_calls: tuple[ToolCall, ...] = ()
     messages: tuple[Message, ...]
     seen_call_ids: tuple[str, ...]
@@ -65,6 +69,10 @@ class SessionState(BaseModel):
     detail: str
     elapsed_ms: int = Field(ge=0)
     plan: tuple[PlanItem, ...] = ()
+    reflection_used: bool = False
+    reflection_sources: tuple[UUID, ...] = ()
+    reflection_note: ReflectionNote | None = None
+    reflection_overlay_pending: bool = False
 
     @model_validator(mode="after")
     def validate_pending(self) -> "SessionState":
@@ -74,7 +82,7 @@ class SessionState(BaseModel):
             "1.2",
         ):
             raise ValueError("Pending batch requires SessionState schema 1.1")
-        if self.plan and self.schema_version != "1.2":
+        if self.plan and self.schema_version not in ("1.2", "1.3"):
             raise ValueError("Saved plan requires SessionState schema 1.2")
         if self.plan:
             validate_plan(self.plan)
@@ -82,6 +90,21 @@ class SessionState(BaseModel):
             raise ValueError("Execute checkpoint requires pending calls")
         if self.next_node == "model" and self.pending_calls:
             raise ValueError("Incomplete batch cannot call model")
+        reflection_state = bool(
+            self.reflection_used
+            or self.reflection_sources
+            or self.reflection_note
+            or self.reflection_overlay_pending
+            or self.next_node == "reflect"
+        )
+        if reflection_state and self.schema_version != "1.3":
+            raise ValueError("Saved reflection requires SessionState schema 1.3")
+        if self.next_node == "reflect" and len(self.reflection_sources) != 2:
+            raise ValueError("Reflection checkpoint requires two source events")
+        if self.reflection_overlay_pending and self.reflection_note is None:
+            raise ValueError("Reflection overlay requires a validated note")
+        if self.reflection_note is not None and not self.reflection_used:
+            raise ValueError("Reflection note must be marked consumed")
         return self
 
     @model_serializer(mode="wrap")
@@ -92,6 +115,14 @@ class SessionState(BaseModel):
             result.pop("pending_calls", None)
         if not self.plan:
             result.pop("plan", None)
+        if self.schema_version != "1.3":
+            for key in (
+                "reflection_used",
+                "reflection_sources",
+                "reflection_note",
+                "reflection_overlay_pending",
+            ):
+                result.pop(key, None)
         return result
 
 
@@ -139,6 +170,12 @@ class EpisodeSession:
         self.messages: list[Message] = []
         self.plan: tuple[PlanItem, ...] = ()
         self.planning_enabled = agent.planning is not None
+        self.reflection_enabled = agent.reflection is not None
+        self.reflection_used = False
+        self.reflection_sources: tuple[UUID, ...] = ()
+        self.reflection_note: ReflectionNote | None = None
+        self.reflection_overlay_pending = False
+        self._last_success: tuple[str, str, tuple[str, ...], UUID] | None = None
         self.action: ToolCall | None = None
         self.batch_calls: tuple[ToolCall, ...] = ()
         self.pending_calls: list[ToolCall] = []
@@ -166,7 +203,7 @@ class EpisodeSession:
         *,
         token_usage: TokenUsage | None = None,
         estimated_cost: EstimatedCost | None = None,
-    ) -> None:
+    ) -> TraceEvent:
         """Append one canonical event linked to the preceding event."""
         event = self.recorder.record(
             event_type,
@@ -177,16 +214,26 @@ class EpisodeSession:
             estimated_cost=estimated_cost,
         )
         self.parent_event_id = event.event_id
+        return event
 
     def checkpoint(self, next_node: NextNode, save: Callable[[SessionState], None] | None) -> None:
         """Persist only after a complete observation or tool/model outcome."""
         if save is None or (
             next_node not in ("model", "end")
+            and next_node != "reflect"
             and not (next_node == "execute" and self.pending_calls)
         ):
             return
         state = SessionState(
-            schema_version="1.2" if self.plan else "1.1" if self.pending_calls else "1.0",
+            schema_version=(
+                "1.3"
+                if self.reflection_enabled
+                else "1.2"
+                if self.plan
+                else "1.1"
+                if self.pending_calls
+                else "1.0"
+            ),
             next_node=next_node,
             pending_calls=tuple(self.pending_calls),
             messages=tuple(self.messages),
@@ -198,6 +245,10 @@ class EpisodeSession:
             detail=self.detail,
             elapsed_ms=int((perf_counter() - self.started) * 1000),
             plan=self.plan,
+            reflection_used=self.reflection_used,
+            reflection_sources=self.reflection_sources,
+            reflection_note=self.reflection_note,
+            reflection_overlay_pending=self.reflection_overlay_pending,
         )
         try:
             save(state)
@@ -208,6 +259,8 @@ class EpisodeSession:
         """Restore the environment and counters before scheduling any new action."""
         if state.plan and not self.planning_enabled:
             raise ValueError("Saved plan requires a planning agent")
+        if state.schema_version == "1.3" and not self.reflection_enabled:
+            raise ValueError("Saved reflection requires a reflection agent")
         self._restore_plan(state)
         self.environment.reset(self.task, self.recorder.run_config.seed)
         self.environment.restore(state.last_state)
@@ -216,6 +269,10 @@ class EpisodeSession:
         self.budget.restore(state.budget)
         self.messages = list(state.messages)
         self.plan = tuple(state.plan)
+        self.reflection_used = state.reflection_used
+        self.reflection_sources = state.reflection_sources
+        self.reflection_note = state.reflection_note
+        self.reflection_overlay_pending = state.reflection_overlay_pending
         self.seen_call_ids = set(state.seen_call_ids)
         if len(self.seen_call_ids) != len(state.seen_call_ids):
             raise ValueError("Duplicate tool call ID in checkpoint")
@@ -229,7 +286,64 @@ class EpisodeSession:
         self.started = perf_counter() - state.elapsed_ms / 1000
         events = self.recorder.events
         self.parent_event_id = events[-1].event_id if events else None
+        self._restore_reflection()
         return state.next_node
+
+    def _restore_reflection(self) -> None:
+        """Validate saved reflection state and reconstruct the last progress candidate."""
+        reflection_events = [
+            event
+            for event in self.recorder.events
+            if event.event_type in (EventType.REFLECTION_PRODUCED, EventType.REFLECTION_REJECTED)
+        ]
+        produced = [
+            event
+            for event in reflection_events
+            if event.event_type == EventType.REFLECTION_PRODUCED
+        ]
+        if len(reflection_events) > 1:
+            raise ValueError("Reflection may be produced only once")
+        if self.reflection_used != bool(reflection_events):
+            raise ValueError("Saved reflection consumption does not match Trace")
+        if self.reflection_note is not None:
+            if len(produced) != 1:
+                raise ValueError("Saved reflection note lacks a Trace source")
+            payload = produced[0].payload
+            if (
+                payload.get("diagnosis") != self.reflection_note.diagnosis
+                or payload.get("revised_goal") != self.reflection_note.revised_goal
+            ):
+                raise ValueError("Saved reflection note does not match Trace")
+        event_ids = {event.event_id for event in self.recorder.events}
+        if any(source not in event_ids for source in self.reflection_sources):
+            raise ValueError("Saved reflection source is missing")
+        self._last_success = self._latest_success_candidate()
+
+    def _latest_success_candidate(self) -> tuple[str, str, tuple[str, ...], UUID] | None:
+        proposals: dict[str, dict[str, JsonValue]] = {}
+        latest: tuple[str, str, tuple[str, ...], UUID] | None = None
+        for event in self.recorder.events:
+            call_id = str(event.payload.get("call_id", ""))
+            if event.event_type == EventType.TOOL_CALL_PROPOSED:
+                proposals[call_id] = event.payload
+            elif event.event_type == EventType.TOOL_SUCCEEDED and call_id in proposals:
+                proposed = proposals[call_id]
+                observation = event.payload.get("observation")
+                if not isinstance(observation, dict):
+                    continue
+                result = observation.get("result")
+                evidence = result.get("acquired_evidence") if isinstance(result, dict) else None
+                latest = (
+                    json.dumps(
+                        {"name": proposed.get("name"), "arguments": proposed.get("arguments")},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    json.dumps(observation, sort_keys=True, separators=(",", ":")),
+                    tuple(str(item) for item in evidence) if isinstance(evidence, list) else (),
+                    event.event_id,
+                )
+        return latest
 
     def _restore_plan(self, state: SessionState) -> None:
         """Bind persisted declarations to earlier validated, successful tool feedback."""
@@ -394,6 +508,178 @@ class EpisodeSession:
         ]
         return "model"
 
+    def _reflection_messages(self) -> list[Message]:
+        """Build the bounded public request from exactly two recorded successful actions."""
+        proposals = {
+            str(event.payload.get("call_id", "")): event.payload
+            for event in self.recorder.events
+            if event.event_type == EventType.TOOL_CALL_PROPOSED
+        }
+        successes = {event.event_id: event for event in self.recorder.events}
+        actions: list[dict[str, JsonValue]] = []
+        signatures: set[str] = set()
+        for source in self.reflection_sources:
+            event = successes.get(source)
+            if event is None or event.event_type != EventType.TOOL_SUCCEEDED:
+                raise ValueError("Reflection source is not a successful tool event")
+            call_id = str(event.payload.get("call_id", ""))
+            proposed = proposals.get(call_id)
+            if proposed is None:
+                raise ValueError("Reflection source lacks a proposal")
+            item: dict[str, JsonValue] = {
+                "event_id": str(source),
+                "name": proposed.get("name"),
+                "arguments": proposed.get("arguments"),
+                "observation": event.payload.get("observation"),
+            }
+            actions.append(item)
+            signatures.add(
+                json.dumps(
+                    {
+                        "name": item["name"],
+                        "arguments": item["arguments"],
+                        "observation": item["observation"],
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+        if len(actions) != 2 or len(signatures) != 1:
+            raise ValueError("Reflection requires two identical successful actions")
+        return [
+            Message(
+                role="system",
+                content={
+                    "instruction": (
+                        "Return exactly one JSON object with non-empty diagnosis and revised_goal "
+                        "strings, each at most 200 characters. Do not use tools, markdown, hidden "
+                        "reasoning, or any additional keys."
+                    ),
+                    "schema": {
+                        "diagnosis": "string, 1..200 characters",
+                        "revised_goal": "string, 1..200 characters",
+                    },
+                },
+            ),
+            Message(
+                role="user",
+                content={
+                    "_agentlabyrinth_reflection_request": {
+                        "schema_version": "1.0",
+                        "task": self.task.description,
+                        "recent_actions": cast(JsonValue, actions),
+                    }
+                },
+            ),
+        ]
+
+    async def call_reflection(self) -> NextNode:
+        """Run the single no-tool revision call and charge it to the Episode budget."""
+        if not self.reflection_enabled or self.reflection_used or len(self.reflection_sources) != 2:
+            return self.stop(TerminationReason.RUNTIME_ERROR, "invalid_reflection_state")
+        if self.time_exceeded():
+            return self.stop_for_time()
+        allowed, reason, detail = self.budget.can_call_model()
+        if not allowed:
+            self._record_reflection_rejected(detail or "model_budget_exceeded")
+            return self.stop(reason or TerminationReason.MAX_STEPS, detail or "max_steps_exceeded")
+        try:
+            messages = self._reflection_messages()
+        except ValueError:
+            return self.stop(TerminationReason.RUNTIME_ERROR, "invalid_reflection_source")
+        self.budget.model_call_count += 1
+        self.budget.step_count += 1
+        self.record(
+            EventType.MODEL_REQUESTED,
+            {"messages_count": len(messages), "purpose": "reflection"},
+        )
+        deadline = asyncio.timeout(self.remaining_seconds())
+        try:
+            async with deadline:
+                response = await self.provider.generate(messages, [], self.agent.model)
+        except TimeoutError:
+            if not deadline.expired():
+                return self._reject_reflection(
+                    "provider_error", termination_reason=TerminationReason.RUNTIME_ERROR
+                )
+            self._record_reflection_rejected("request_timeout")
+            return self.stop_for_time(usage_unknown=True)
+        except ModelProviderError as exc:
+            if exc.token_usage is not None:
+                cost = EstimatedCost(is_known=False, price_table_version="aihubmix-free-unverified")
+                self.budget.accrue_usage(exc.token_usage, cost)
+                self.record(
+                    EventType.MODEL_RESPONDED,
+                    {"action_kind": "rejected", "error_code": exc.code, "purpose": "reflection"},
+                    token_usage=exc.token_usage,
+                    estimated_cost=cost,
+                )
+            return self._reject_reflection(
+                f"provider_error: {exc.code}",
+                termination_reason=TerminationReason.RUNTIME_ERROR,
+            )
+        except Exception:
+            return self._reject_reflection(
+                "provider_error", termination_reason=TerminationReason.RUNTIME_ERROR
+            )
+
+        allowed, reason, detail = self.budget.accrue_usage(
+            response.token_usage, response.estimated_cost
+        )
+        self.record(
+            EventType.MODEL_RESPONDED,
+            {"action_kind": response.action.kind, "purpose": "reflection"},
+            token_usage=response.token_usage,
+            estimated_cost=response.estimated_cost,
+        )
+        if self.time_exceeded():
+            return self.stop_for_time()
+        if not allowed:
+            self._record_reflection_rejected(detail or "token_budget_exceeded")
+            return self.stop(
+                reason or TerminationReason.TOKEN_BUDGET_EXCEEDED,
+                detail or "token_budget_exceeded",
+            )
+        if not isinstance(response.action, FinalAnswer):
+            return self._reject_reflection("invalid_reflection")
+        try:
+            note = ReflectionNote.model_validate_json(response.action.text)
+        except Exception:
+            return self._reject_reflection("invalid_reflection")
+        self.reflection_used = True
+        self.reflection_note = note
+        self.reflection_overlay_pending = True
+        self.record(
+            EventType.REFLECTION_PRODUCED,
+            {
+                "algorithm_version": "no-progress-revision-v1",
+                "source_event_ids": [str(source) for source in self.reflection_sources],
+                "diagnosis": note.diagnosis,
+                "revised_goal": note.revised_goal,
+            },
+        )
+        return "model"
+
+    def _record_reflection_rejected(self, detail: str) -> None:
+        self.reflection_used = True
+        self.record(
+            EventType.REFLECTION_REJECTED,
+            {
+                "algorithm_version": "no-progress-revision-v1",
+                "source_event_ids": [str(source) for source in self.reflection_sources],
+                "reason": detail,
+            },
+        )
+
+    def _reject_reflection(
+        self,
+        detail: str,
+        *,
+        termination_reason: TerminationReason = TerminationReason.FAILED,
+    ) -> NextNode:
+        self._record_reflection_rejected(detail)
+        return self.stop(termination_reason, detail)
+
     async def call_model(self) -> NextNode:
         """Check limits, call the provider once, and account for its full response."""
         if self.time_exceeded():
@@ -447,10 +733,34 @@ class EpisodeSession:
                 diagnostics["input_messages_bytes"] = _json_bytes(
                     [m.model_dump(mode="json") for m in model_messages]
                 )
+        if self.reflection_overlay_pending and self.reflection_note is not None:
+            model_messages = [
+                *model_messages,
+                Message(
+                    role="user",
+                    content={
+                        REFLECTION_KEY: {
+                            "schema_version": "1.0",
+                            "notice": "One bounded action revision; not verified execution.",
+                            **self.reflection_note.model_dump(
+                                mode="json", exclude={"schema_version"}
+                            ),
+                        }
+                    },
+                ),
+            ]
+            payload["messages_count"] = len(model_messages)
+            payload["reflection"] = {
+                "schema_version": "1.0",
+                "algorithm_version": "no-progress-revision-v1",
+                "source_event_ids": [str(source) for source in self.reflection_sources],
+                "overlay_bytes": _json_bytes(model_messages[-1].content),
+            }
         if self.time_exceeded():
             return self.stop_for_time()
         self.budget.model_call_count += 1
         self.budget.step_count += 1
+        self.reflection_overlay_pending = False
         self.record(EventType.MODEL_REQUESTED, payload)
         deadline = asyncio.timeout(self.remaining_seconds())
         try:
@@ -543,6 +853,39 @@ class EpisodeSession:
             error_code=err.code if err else None,
             error_info=err,
         )
+
+    def _detect_no_progress(
+        self, action: ToolCall, observation: dict[str, JsonValue], source: UUID
+    ) -> bool:
+        """Detect two identical successful read calls with identical public feedback."""
+        schema = next((tool for tool in self._available_tools() if tool.name == action.name), None)
+        if (
+            not self.reflection_enabled
+            or self.reflection_used
+            or self.reflection_sources
+            or self.batch_calls
+            or schema is None
+            or schema.risk_level != "READ_ONLY"
+        ):
+            return False
+        result = observation.get("result")
+        evidence = result.get("acquired_evidence") if isinstance(result, dict) else None
+        candidate = (
+            json.dumps(
+                {"name": action.name, "arguments": action.arguments},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            json.dumps(observation, sort_keys=True, separators=(",", ":")),
+            tuple(str(item) for item in evidence) if isinstance(evidence, list) else (),
+            source,
+        )
+        previous = self._last_success
+        self._last_success = candidate
+        if previous is not None and previous[:3] == candidate[:3]:
+            self.reflection_sources = (previous[3], source)
+            return True
+        return False
 
     def validate(self) -> NextNode:
         """Reject unsafe actions; only one permitted argument error can re-enter model."""
@@ -722,7 +1065,7 @@ class EpisodeSession:
             if self.time_exceeded():
                 return self.stop_for_time()
             return self.stop(TerminationReason.FAILED, f"tool_failed: {step.error.code}")
-        self.record(
+        success_event = self.record(
             EventType.TOOL_SUCCEEDED,
             {"call_id": action.call_id, "observation": step.observation.content},
         )
@@ -751,6 +1094,9 @@ class EpisodeSession:
         self.messages.append(
             Message(role="tool", content=step.observation.content, tool_call_id=action.call_id)
         )
+        should_reflect = self._detect_no_progress(
+            action, step.observation.content, success_event.event_id
+        )
         if self.pending_calls:
             self.pending_calls.pop(0)
             self.action = self.pending_calls[0] if self.pending_calls else None
@@ -760,6 +1106,8 @@ class EpisodeSession:
             return self.stop_for_time()
         if step.done:
             return self.stop(TerminationReason.SUCCESS, "submitted")
+        if should_reflect:
+            return "reflect"
         return "execute" if self.pending_calls else "model"
 
     def result(self) -> EpisodeResult:

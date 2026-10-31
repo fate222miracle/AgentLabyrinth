@@ -56,6 +56,11 @@ class LangGraphRuntimeAdapter:
             session.checkpoint(next_node, save_checkpoint)
             return {"next_node": next_node}
 
+        async def reflect(state: _GraphState) -> _GraphState:
+            next_node = await session.call_reflection()
+            session.checkpoint(next_node, save_checkpoint)
+            return {"next_node": next_node}
+
         async def validate(state: _GraphState) -> _GraphState:
             next_node = session.validate()
             session.checkpoint(next_node, save_checkpoint)
@@ -73,6 +78,7 @@ class LangGraphRuntimeAdapter:
         for name, node in (
             ("observe", observe),
             ("model", model),
+            ("reflect", reflect),
             ("validate", validate),
             ("execute", execute),
         ):
@@ -80,11 +86,14 @@ class LangGraphRuntimeAdapter:
         graph.add_edge(START, "observe" if resume_state is None else initial_node)
         graph.add_edge("observe", "model")
         graph.add_conditional_edges("model", route, {"validate": "validate", "end": END})
+        graph.add_conditional_edges("reflect", route, {"model": "model", "end": END})
         graph.add_conditional_edges(
             "validate", route, {"execute": "execute", "model": "model", "end": END}
         )
         graph.add_conditional_edges(
-            "execute", route, {"model": "model", "execute": "execute", "end": END}
+            "execute",
+            route,
+            {"model": "model", "reflect": "reflect", "execute": "execute", "end": END},
         )
         try:
             # One model step uses up to three graph nodes, plus observe and the stop check.
