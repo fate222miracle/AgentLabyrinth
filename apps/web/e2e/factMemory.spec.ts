@@ -35,8 +35,10 @@ test('empty literal search displays actual guidance without granting read eviden
 for (const task of ['memory-fact-reuse-001', 'memory-large-return-002', 'memory-policy-version-003']) {
   test(`public fact task ${task} streams an actual derived answer and preserves history`, async ({ page, request }, testInfo) => {
     await page.goto('/?mode=single');
+    await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
     await page.locator('#single-task-search').fill(task);
     await page.getByRole('button', { name: new RegExp(task) }).click();
+    await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
     await page.locator('.advanced-settings > summary').click();
     await page.locator('#single-context-mode').selectOption('memory');
     await page.locator('#single-context-window').fill('1');

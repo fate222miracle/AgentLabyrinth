@@ -13,7 +13,7 @@ test('saved usage shows partial and unknown totals without changing history or c
   const mutations: string[] = [];
   page.on('request', r => { if (r.url().includes('/api/') && r.method() !== 'GET') mutations.push(r.url()); });
   await page.route(`**/api/v1/episodes/${id}`, route => route.fulfill({ json: fixture }));
-  await page.goto(`/?episode_id=${id}`);
+  await page.goto(`/?episode_id=${id}&section=results`);
   const box = page.locator('.metric-box').filter({ has: page.locator('#metric-tokens') });
   await expect(box).toContainText('Token 消耗');
   await expect(box).not.toContainText('总用量未知');

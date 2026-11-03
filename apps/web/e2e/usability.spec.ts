@@ -1,6 +1,58 @@
 import { expect, test } from '@playwright/test';
 import { episodeResponseSchema, experimentResponseSchema, parseApi } from '../src/apiContracts';
 
+test('task goals and compact presets are readable without starting a run', async ({ page }, testInfo) => {
+  const mutations: string[] = [];
+  page.on('request', request => {
+    if (request.url().includes('/api/') && request.method() !== 'GET') mutations.push(request.url());
+  });
+  await page.goto('/?mode=single');
+  await expect(page.getByRole('heading', { name: '运行一个 Agent 任务', exact: true })).toBeVisible();
+  await expect(page.locator('#config-panel')).toBeHidden();
+  await expect(page.locator('#results-panel')).toBeHidden();
+  await expect(page.locator('.episode-review-card')).toHaveCount(0);
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
+  await expect(page.locator('#model-select')).toHaveValue('fake');
+  await expect(page.getByLabel('执行舞台准备状态')).toContainText('查询订单状态');
+  const stageBefore = await page.locator('.execution-stage').boundingBox();
+  await page.getByLabel('搜索任务', { exact: true }).fill('停滞行动');
+  const task = page.getByRole('button', { name: /reflection-stale-alias-001/ });
+  await expect(task).toContainText('修正停滞行动');
+  await task.click();
+  await expect(page.locator('#config-panel')).not.toHaveAttribute('open');
+  await expect(page.locator('#config-panel')).toBeHidden();
+  await expect(page.locator('#single-stage-controls')).toBeFocused();
+  await expect(page.getByLabel('执行舞台准备状态')).toContainText('订单查询 · 修正停滞行动');
+  const stageAfter = await page.locator('.execution-stage').boundingBox();
+  expect(Math.abs(stageAfter!.width - stageBefore!.width)).toBeLessThan(2);
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
+  await expect(task).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByLabel('搜索任务', { exact: true })).toHaveValue('停滞行动');
+  await page.getByLabel('搜索任务', { exact: true }).fill('');
+  await page.getByRole('button', { name: '配置退货审核实时演示', exact: true }).click();
+  await expect(page.locator('.classroom-scenario.selected')).toContainText('退货审核');
+  await expect(page.locator('#config-panel')).toBeHidden();
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
+  await page.getByLabel('搜索任务', { exact: true }).fill('order-status-001');
+  await expect(page.locator('.single-launch-summary')).toContainText('return-evidence-chain-001');
+  await expect(page.locator('.single-launch-summary')).toContainText('最多 10 步');
+  await page.getByLabel('搜索任务', { exact: true }).fill('');
+  await page.locator('#config-panel > summary').click();
+  for (const width of [1440, 1280, 768, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`workbench-${width}.png`), fullPage: true });
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  if (await page.locator('.classroom-scenarios').getAttribute('open') !== null) await page.locator('.classroom-scenarios > summary').click();
+  if (await page.locator('#config-panel').getAttribute('open') !== null) await page.locator('#config-panel > summary').click();
+  await expect.poll(() => page.locator('#config-panel').evaluate(node => node.getAnimations({ subtree: true }).length)).toBe(0);
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+  await page.screenshot({ path: testInfo.outputPath('stage-focused.png') });
+  expect(mutations).toEqual([]);
+});
+
 test('labelled history accepts Enter and keyboard navigation identifies the workspace', async ({ page, request }) => {
   const episodeResponse = await request.post('/api/v1/episodes', { data: {
     provider: 'fake', model: 'fake-model', scenario: 'success', task_id: 'order-status-001',
@@ -21,8 +73,9 @@ test('labelled history accepts Enter and keyboard navigation identifies the work
   await expect(page.getByRole('link', { name: '跳至工作区' })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page.locator('main')).toBeFocused();
-  await expect(page.getByRole('navigation', { name: '工作区模式' })
-    .getByRole('button', { name: '单次运行 Single Episode' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('navigation', { name: '工作区导航' })
+    .getByRole('button', { name: '执行工作台' })).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('#tab-runs').click();
   await page.getByLabel('历史 Episode ID', { exact: true }).fill(original.episode.episode_id);
   await page.getByLabel('历史 Episode ID', { exact: true }).press('Enter');
   await expect(page.getByText('评测通过 (SUCCESS)', { exact: true })).toBeVisible();
@@ -33,7 +86,7 @@ test('labelled history accepts Enter and keyboard navigation identifies the work
   await page.getByLabel('历史 Experiment ID', { exact: true }).press('Enter');
   await expect(page).toHaveURL(new RegExp(`experiment_id=${experiment.experiment_id}`));
   await expect(page.locator('#exp-metrics-panel')).toContainText('1 组任务对比');
-  await page.locator('#tab-single').click();
+  await page.locator('#tab-runs').click();
   await page.getByLabel('历史 Episode ID', { exact: true }).fill('00000000-0000-4000-8000-000000000000');
   await page.getByLabel('历史 Episode ID', { exact: true }).press('Enter');
   await expect(page.getByRole('alert')).toContainText('错误');
@@ -45,13 +98,13 @@ test('labelled history accepts Enter and keyboard navigation identifies the work
 
 test('configure before running, retain advanced settings, and explain a disabled action', async ({ page, request }) => {
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.getByLabel('搜索任务', { exact: true }).fill('order-status-007');
-  await page.getByRole('button', { name: /order-status-007 多步规划/ }).click();
+  await page.getByRole('button', { name: /order-status-007/ }).click();
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.getByRole('radio', { name: 'LangGraph 独立图节点调度' }).check();
-  const model = await page.getByLabel('评测模型', { exact: true }).boundingBox();
-  const run = await page.locator('#run-button').boundingBox();
-  expect(model).not.toBeNull(); expect(run).not.toBeNull();
-  expect(run!.y).toBeGreaterThan(model!.y + model!.height);
+  await expect(page.locator('#config-panel #run-button')).toHaveCount(0);
+  await expect(page.locator('.execution-stage #run-button')).toBeVisible();
   await expect(page.locator('.single-launch-summary')).toContainText('order-status-007');
   await expect(page.locator('.single-launch-summary')).toContainText('LangGraph');
   await page.locator('#run-button').click();
@@ -62,6 +115,7 @@ test('configure before running, retain advanced settings, and explain a disabled
   expect(saved.task.name).toBe('order-status-007');
   expect(saved.agent.runtime_backend).toBe('langgraph');
   await page.locator('#tab-experiment').click();
+  await page.getByRole('button', { name: '新建对照实验', exact: true }).click();
   const settings = page.locator('.experiment-settings');
   await settings.locator('summary').press('Enter');
   await page.getByLabel('随机种子集合 (Seeds)', { exact: true }).fill('1, 1');
@@ -95,9 +149,12 @@ test('saved results foreground provenance and replay, retaining detailed facts a
   await expect(page.getByLabel('已保存运行来源')).toContainText('Fake 离线模拟');
   await expect(page.locator('#metric-model')).toHaveText(original.agent.model.model);
   await expect(page.locator('#metric-tokens')).toHaveText(String(original.episode.token_usage.prompt_tokens + original.episode.token_usage.completion_tokens));
-  const result = await page.locator('#results-panel').boundingBox();
+  await page.getByRole('button', { name: '结果分析', exact: true }).click();
+  await expect(page.getByLabel('结果交付摘要', { exact: true })).toContainText('approved');
+  const result = await page.locator('.episode-metrics').boundingBox();
   expect(result!.height).toBeLessThan(380);
   await page.screenshot({ path: testInfo.outputPath('results-desktop.png') });
+  await page.getByRole('button', { name: '结果分析', exact: true }).click();
   const details = page.locator('.episode-details');
   await expect(details).not.toHaveAttribute('open');
   await expect(details.locator('summary')).toContainText('原厂参考：未知');
@@ -106,10 +163,11 @@ test('saved results foreground provenance and replay, retaining detailed facts a
   await expect(details).toContainText('非实付费用');
   await expect(details).toContainText(original.run_config.runtime_version!);
   await details.locator('summary').press('Enter');
-  const savedUrl = page.url();
+  const savedUrl = new URL(page.url());
+  savedUrl.searchParams.delete('section');
   await page.getByRole('link', { name: '查看调用过程', exact: true }).click();
   await expect(page.locator('#trace-panel')).toBeFocused();
-  await expect(page).toHaveURL(savedUrl);
+  await expect(page).toHaveURL(savedUrl.toString());
   await page.screenshot({ path: testInfo.outputPath('replay-desktop.png') });
   for (const width of [390, 768, 1280, 1440]) {
     await page.setViewportSize({ width, height: 900 });
@@ -145,6 +203,7 @@ test('unknown cost never reads as zero and failure stays visible outside details
   await expect(page.getByText('评测未通过 (FAILED)', { exact: true })).toBeVisible();
   await expect(page.locator('#metric-status')).toHaveText(original.episode.termination_reason);
   await expect(page.locator('.episode-metrics')).toContainText('INVALID_ARGUMENTS');
+  await page.getByRole('button', { name: '结果分析', exact: true }).click();
   const details = page.locator('.episode-details');
   await expect(details).not.toHaveAttribute('open');
   await expect(details.locator('summary')).toContainText('模拟费用：未知 (未验证)');

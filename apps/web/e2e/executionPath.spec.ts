@@ -24,10 +24,14 @@ test('incremental live events remain visible on completion without an automatic 
     };
   });
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.getByLabel('搜索任务',{exact:true}).fill('order-status-007');
-  await page.getByRole('button',{name:/order-status-007 多步规划/}).click();
+  await page.getByRole('button',{name:/order-status-007/}).click();
   await page.getByRole('button',{name:'开始运行 Episode',exact:true}).click();
   await expect.poll(() => page.evaluate(() => typeof (window as Window & {pushTrace?:unknown}).pushTrace)).toBe('function');
+  await expect(page.locator('#config-panel')).not.toHaveAttribute('open');
+  await expect(page.locator('#results-panel')).toBeHidden();
+  await expect(page.locator('.episode-review-card')).toHaveCount(0);
   const send = async (block: string, done = false) => page.evaluate(chunk => {
     (window as Window & {pushTrace?: (chunk:{block:string;done:boolean}) => void}).pushTrace!(chunk);
   },{block,done});
@@ -41,6 +45,7 @@ test('incremental live events remain visible on completion without an automatic 
   await expect(live.locator('.react-flow__node')).toHaveCount(2);
   await expect(live.getByLabel('当前阶段摘要')).toContainText('等待模型响应');
   await expect(live.getByLabel('最终输出')).toContainText('运行完成后显示评测结果');
+  await expect(live.getByLabel('最终输出')).not.toContainText('评测结论：');
   await expect(live.getByRole('slider',{name:'动画进度'})).toHaveCount(0);
   await expect(page.locator('#trace-panel')).toBeFocused();
   await through(artifact.events.findIndex(event => event.event_type === 'TOOL_CALL_PROPOSED'));
@@ -58,6 +63,9 @@ test('incremental live events remain visible on completion without an automatic 
   await expect(completed).toBeVisible();
   await expect(completed.locator('.flow-node.current').locator('..')).toHaveAttribute('data-id',nodeId!);
   await expect(completed.getByLabel('最终输出')).toContainText('approved');
+  await expect(completed.getByLabel('最终输出')).toBeFocused();
+  expect(await completed.evaluate(element => element.querySelector('.run-delivery')!.getBoundingClientRect().top
+    < element.querySelector('.flow-canvas')!.getBoundingClientRect().top)).toBe(true);
   await expect(completed.getByRole('slider',{name:'动画进度'})).toHaveCount(0);
   await expect(completed.getByRole('button',{name:'播放全过程',exact:true})).toHaveCount(0);
   await expect(completed.locator('animateMotion')).toHaveCount(0);
@@ -235,6 +243,7 @@ test('an interrupted real-event prefix only creates arrived nodes and preserves 
   await page.route('**/api/v1/episodes/stream', route => route.fulfill({contentType:'text/event-stream',
     body:prefix.map(event => `event: trace\ndata: ${JSON.stringify(event)}\n\n`).join('')}));
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.getByRole('button',{name:'开始运行 Episode',exact:true}).click();
   const live = page.getByRole('region',{name:'实时工具调用流程'});
   await expect(live).toBeVisible();

@@ -1,6 +1,7 @@
 import type { EpisodeArtifact } from './apiContracts';
 import { contextLabel } from './ContextSettings';
 import { savedUsage } from './historySummary';
+import { RunDelivery } from './RunDelivery';
 
 interface Props { artifact: EpisodeArtifact; explanation: string }
 
@@ -15,6 +16,9 @@ export function EpisodeSummary({ artifact, explanation }: Props) {
   const usage = savedUsage(artifact);
   return (
     <div className="episode-summary">
+      <RunDelivery state={episode.final_state} environmentVersion={config.environment_version ?? ''}
+        termination={episode.termination_reason} detail={episode.detail} evaluation={artifact.evaluation} provider={agent.model.provider} label="结果交付摘要" />
+      <h3 className="episode-cost-heading">这次运行用了多少资源</h3>
       <div className="episode-provenance" aria-label="已保存运行来源">
         <span className={`badge ${simulated ? 'badge-blue' : 'badge-yellow'}`}>
           {simulated ? 'Fake 离线模拟' : agent.model.provider === 'aihubmix' ? '真实 API · 探索性结果' : `来源：${agent.model.provider}`}

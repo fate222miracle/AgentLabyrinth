@@ -31,7 +31,7 @@ function renderReview(review: EpisodeReview, artifact: EpisodeArtifact) {
         <div><dt>工具使用是否合规</dt><dd>{review.process_safety ? ratingLabels[review.process_safety] : '未知（未记录）'}</dd></div></dl>
     </> : <>
       <p className="review-failure">复核失败：{review.failure_code}</p>
-      <p>{review.failure_code === 'INVALID_JUDGE_OUTPUT' ? '模型回复不符合约定的评审格式，未产生有效判断。'
+        <p>{review.failure_code === 'INVALID_JUDGE_OUTPUT' ? '模型回复不完整或不符合评审格式，可能达到输出上限，未产生有效判断。'
         : review.failure_code === 'INVALID_EVENT_REFERENCE' ? '模型引用了本次运行以外的事件，评审未被接受。'
           : '评审服务请求失败，没有获得模型判断。'}规则评分保持不变。</p>
     </>}
@@ -188,7 +188,7 @@ export function EpisodeReviewPanel({ artifact, models }: Props) {
         <button className="btn-primary" type="button" disabled={loading || saving || !hasSubmission || !modelAvailable}
           onClick={runJudge}>{saving ? '正在评审…' : '评审本次结果'}</button>
       </div>
-      <p className="metric-sub">点击后发起一次真实模型请求，评审用量单独记录；不自动重试，不改变 Agent 的执行结果。</p>
+      <p className="metric-sub">点击后发起一次真实模型请求，最多输出 4096 Token，实际用量单独记录；不自动重试，不改变 Agent 的执行结果。</p>
       {!hasSubmission && <p className="metric-sub">本次没有已保存的最终提交，暂不能进行模型评审。</p>}
       {judgeModels.length === 0 && <p className="metric-sub">暂无可选的真实模型，请先恢复模型目录。</p>}
       {(loading || saving) && <p role="status">{saving ? '正在等待模型评审结果，不会额外重试…' : '正在读取已保存的模型评审…'}</p>}

@@ -2,7 +2,9 @@
 
 开发协作请先阅读[贡献与Git规范](CONTRIBUTING.md)：任务分支、原子提交、PR验证与回滚；仓库已提供Issue/PR模板。
 
-当前暂停新增功能，优先[修复已确认的硬伤](docs/learning/V0.3-hardening-20261026.md)，接续[连接失败诊断修复](docs/learning/V0.3-network-diagnostics-20261028.md)。首次Web运行默认Fake、单题对照及整场Token边界预算；保存用量不完整时明确标未知。当前执行与授权以[交接入口](docs/handoffs/current-state.md)为准，下方日期记录均为历史阶段。
+当前进行已有能力的UI重编排：任务库`/tasks`、执行工作台`/workbench`、运行记录`/runs`、实验中心`/experiments`。运行详情默认看执行过程，结果分析与模型评审按需切换；任务配置与历史结果隔离。运行记录目前为本机最近访问5条，不是全部数据库历史。[源码与验收交接](docs/learning/ui-workspace-navigation-20261102.md)。首次Web运行仍默认Fake，未知用量不补零；当前执行与授权以[交接入口](docs/handoffs/current-state.md)为准，下方日期记录均为历史阶段。
+
+第二批已补任务列表/完整详情分栏、窄屏阅读与焦点、紧凑未运行舞台，以及实验看板前置。[本批验证与交接](docs/learning/ui-workspace-polish-20261102.md)。
 
 未完成实验可在对照页点击“查看保存进度”，只读查看已结束记录、安全点或无保存状态，再进入已有运行；不会自动恢复或调用模型。见[进度与诊断交接](docs/learning/V0.3-experiment-progress-20261026.md)。
 

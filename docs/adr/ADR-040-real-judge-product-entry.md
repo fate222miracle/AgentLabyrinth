@@ -44,3 +44,11 @@ Memory/Planning 是否有效必须另用同任务、同模型、同预算的有/
 [MiniMax官方OpenAI兼容文档](https://platform.minimax.io/docs/api-reference/text-openai-api)说明M2.x不能关闭思考，并提供`reasoning_split`分开返回推理与正文。修复仅为1.1 MiniMax Judge创建Provider时传`reasoning_split=True`；其它Judge和所有普通Runtime默认None，HTTP载荷不加新键。没有改ModelConfig/领域Port/量表/Prompt v2，不读写或剥离推理正文；上游忽略参数时仍严格失败，无自动回落。此为已批准入口的Provider适配修复，不另建模型协议或新模块。
 
 修复后正常API实测Review`b6303391…`已completed/pass，三维度均pass、理由中文、5条事件引用合法，报告Token2827/264、网关费用未知；输入/源哈希及Episode606/Experiment55数量保持。只证明此样本链路可用，不证明Judge准确率或所有网关/型号支持。失败、诊断和成功均保留，授权各已消费；后续不自动扩大请求。详见[实现与实测交接](../learning/V0.3-real-judge-entry-20261025.md)。
+
+## 7. 输出截断修复（2026-11-02）
+
+负责人在四模型各一次诊断后明确要求立即修复截断。本节取代§3第3项的800输出上限：新真实Judge统一最多4096输出Token，为模型推理与完整JSON留出空间；30秒超时、13秒间隔、一次无工具、无重试和严格输出/引用校验保持。4096是上限，不是固定消耗，不保证任何输出均能完成。
+
+仅Judge内部配置显式使用已有ModelConfig1.1/single，以保留Provider已报告的失败用量；普通Runtime及旧Fake请求不变。不改Review字段/版本、Prompt v2、评分或CSV列，不改写旧失败。OUTPUT_TRUNCATED归入已有INVALID_JUDGE_OUTPUT（输出无效），安全日志记录原固定原因码，界面提示可能输出不完整；没有保存原始回复或推理。
+
+本轮开发与离线响应夹具验证，不复用此前已消费的四次真实授权；修复后真实成功与否须通过新的显式评审确认。不提交Git。
