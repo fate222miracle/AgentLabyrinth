@@ -5,12 +5,15 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
+from uuid import UUID
 
 import pytest
 
 from apps.api.schemas import CreateEpisodeRequest
 from packages.domain.models import EpisodeArtifact, EventType, TerminationReason
-from scripts.course_demo import DemoService, generate, preview
+from packages.runtime.session import EpisodeSession
+from scripts.course_demo import DemoService, generate, local_cases, preview
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -47,7 +50,10 @@ def test_local_pack_preserves_identity_and_truthful_timeout(tmp_path: Path) -> N
     assert episode("argument_recovery").evaluation.success is True
     timed_out = episode("time_limit")
     assert timed_out.episode.termination_reason == TerminationReason.TIME_BUDGET_EXCEEDED
-    assert not timed_out.episode.estimated_cost.is_known
+    requested = timed_out.episode.model_call_count == 1
+    assert timed_out.episode.estimated_cost.is_known is (not requested)
+    assert any(e.event_type == EventType.MODEL_REQUESTED for e in timed_out.events) is requested
+    assert not any(e.event_type == EventType.MODEL_RESPONDED for e in timed_out.events)
     assert timed_out.episode.tool_call_count == 0
     resumed = episode("resumed")
     assert str(resumed.episode.episode_id) == report["cases"]["resumed"]
@@ -56,6 +62,36 @@ def test_local_pack_preserves_identity_and_truthful_timeout(tmp_path: Path) -> N
     assert [event.payload["name"] for event in starts] == ["query_records", "submit_answer"]
     assert any(event.event_type == EventType.EPISODE_RESUMED for event in resumed.events)
     assert not list((directory / "checkpoints").glob("*.json"))
+
+
+def test_course_timeout_before_request_keeps_known_zero(tmp_path: Path) -> None:
+    """A slow setup is a valid deadline stop, not an unanswered or billable model request."""
+    clock = [0.0]
+    original = EpisodeSession.observe
+
+    def expire_setup(session: EpisodeSession) -> str:
+        node = original(session)
+        if session.agent.budget.max_execution_time_ms == 40:
+            clock[0] = 1.0
+        return node
+
+    service = DemoService(artifacts_dir=tmp_path)
+    with (
+        patch("packages.runtime.session.perf_counter", side_effect=lambda: clock[0]),
+        patch.object(EpisodeSession, "observe", expire_setup),
+    ):
+        cases = asyncio.run(local_cases(service))
+    artifact = service.get_episode(UUID(cases["time_limit"]))
+    assert artifact is not None
+    assert artifact.episode.termination_reason == TerminationReason.TIME_BUDGET_EXCEEDED
+    assert artifact.episode.model_call_count == artifact.episode.tool_call_count == 0
+    assert artifact.episode.estimated_cost.is_known
+    assert artifact.episode.estimated_cost.amount == 0
+    assert (
+        artifact.episode.token_usage.prompt_tokens
+        == artifact.episode.token_usage.completion_tokens
+        == 0
+    )
 
 
 def test_existing_pack_is_never_overwritten(tmp_path: Path) -> None:
