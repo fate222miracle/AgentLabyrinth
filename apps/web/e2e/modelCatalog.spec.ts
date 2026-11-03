@@ -11,6 +11,7 @@ for (const hasFake of [true, false]) {
     const mutations: string[] = [];
     page.on('request', r => { if (r.url().includes('/api/') && r.method() !== 'GET') mutations.push(r.url()); });
     await page.goto('/?mode=single');
+    await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
     await expect(page.locator('#model-select')).toHaveValue(hasFake ? 'fake' : '');
     if (!hasFake) {
       await expect(page.locator('#model-select option:checked')).toHaveText('请选择评测模型');
@@ -20,6 +21,7 @@ for (const hasFake of [true, false]) {
     await page.getByRole('button', { name: '重新读取模型目录', exact: true }).click();
     await expect(page.locator('#model-select')).toHaveValue(real.id);
     await page.locator('#tab-experiment').click();
+    await page.getByRole('button', { name: '新建对照实验', exact: true }).click();
     await expect(page.locator('#exp-model-select')).toHaveValue(hasFake ? 'fake' : '');
     await expect(page.locator('.experiment-launch-summary')).toContainText('1 个任务');
     await expect(page.locator('#run-exp-button')).toContainText('2 次执行');
@@ -46,6 +48,7 @@ test('an explicit tested candidate stays selectable during discovery failure wit
   const mutations: string[] = [];
   page.on('request', (reply) => { if (reply.url().includes('/api/') && reply.method() !== 'GET') mutations.push(reply.url()); });
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await expect(page.getByText('模型目录暂不可用', { exact: true })).toBeVisible();
   await page.locator('#model-select').selectOption('coding-glm-5.3-flash-free');
   await page.locator('.model-note-disclosure > summary').click();
@@ -77,6 +80,7 @@ for (const failure of ['catalog', 'http']) {
     const mutations: string[] = [];
     page.on('request', (reply) => { if (reply.url().includes('/api/') && reply.method() !== 'GET') mutations.push(reply.url()); });
     await page.goto('/?mode=single');
+    await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
     const retry = page.getByRole('button', { name: '重新读取模型目录', exact: true });
     await expect(retry).toBeVisible();
     if (failure === 'catalog') {

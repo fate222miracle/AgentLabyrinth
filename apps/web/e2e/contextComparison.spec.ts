@@ -4,7 +4,7 @@ import { experimentResponseSchema, episodeResponseSchema, parseApi } from '../sr
 import { flowFrames } from '../src/flowFrames';
 
 test('context comparison runs from Web and preserves history, CSV and request diagnostics', async ({ page, request }, testInfo) => {
-  await page.goto('/');
+  await page.goto('/experiments/new');
   await page.getByLabel('对照变量', { exact: true }).selectOption('context_policy');
   await page.getByLabel('评测模型', { exact: true }).selectOption('fake');
   await page.locator('#exp-scenario-select').selectOption('clean');
@@ -26,8 +26,10 @@ test('context comparison runs from Web and preserves history, CSV and request di
   const savedContext = page.getByLabel('已保存上下文对照');
   await expect(savedContext).toContainText('最近 1 轮');
   await expect(page.getByText('仅完整历史通过', { exact: true })).toBeVisible();
-  await page.locator('.experiment-draft > summary').click();
+  await page.getByRole('button', { name: '配置下一次实验', exact: true }).click();
+  await page.getByLabel('对照变量', { exact: true }).selectOption('context_policy');
   await page.getByLabel('右侧保留完整工具轮次').fill('2');
+  await page.goBack();
   await expect(savedContext).toContainText('最近 1 轮');
   const mutations: string[] = [];
   page.on('request', (r) => { if (r.url().includes('/api/') && r.method() !== 'GET') mutations.push(r.url()); });

@@ -11,8 +11,10 @@ for (const [task, prefix, answer] of [
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto('/?mode=single');
+    await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
     await page.locator('#single-task-search').fill(task);
     await page.getByRole('button', { name: new RegExp(task) }).click();
+    await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
     await page.locator('.single-advanced-settings > summary').click();
     await page.getByLabel('启用声明计划', { exact: true }).check();
     await page.locator('#run-button').focus();
@@ -91,8 +93,10 @@ test('conditional planning pair uses the normal Web matrix and downloads all fou
 
 test('single planning has an explicit draft, an arrived declaration and read-only history', async ({ page, request }, testInfo) => {
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('#single-task-search').fill('planning-branch-001');
   await page.getByRole('button', { name: /planning-branch-001/ }).click();
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('.single-advanced-settings > summary').click();
   await page.getByLabel('启用声明计划', { exact: true }).check();
   await page.locator('#run-button').click();
@@ -122,7 +126,7 @@ test('single planning has an explicit draft, an arrived declaration and read-onl
 });
 
 test('planning challenge runs from Web and shows the declared plan apart from executed tools', async ({ page, request }, testInfo) => {
-  await page.goto('/');
+  await page.goto('/experiments/new');
   await page.getByLabel('对照变量', { exact: true }).selectOption('planning');
   await page.getByLabel('评测模型', { exact: true }).selectOption('fake');
   await page.locator('#exp-scenario-select').selectOption('clean');
@@ -145,8 +149,10 @@ test('planning challenge runs from Web and shows the declared plan apart from ex
   const savedNote = page.getByLabel('已保存规划对照');
   await expect(savedNote).toContainText('plan-update-v1');
   await expect(page.getByText('有无声明均通过', { exact: true })).toBeVisible();
-  await page.locator('.experiment-draft > summary').click();
+  await page.getByRole('button', { name: '配置下一次实验', exact: true }).click();
+  await page.getByLabel('对照变量', { exact: true }).selectOption('planning');
   await page.locator('#planning-recovery').selectOption('handwritten_recovery');
+  await page.goBack();
   await expect(savedNote).toContainText('plan-update-v1');
   const mutations: string[] = [];
   page.on('request', (r) => { if (r.url().includes('/api/') && r.method() !== 'GET') mutations.push(r.url()); });

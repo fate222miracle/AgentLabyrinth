@@ -4,8 +4,10 @@ import { episodeResponseSchema, experimentResponseSchema, parseApi } from '../sr
 
 test('single run exposes the bounded reflection toggle and saved Trace', async ({ page, request }) => {
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('#single-task-search').fill('reflection-stale-alias-001');
   await page.getByRole('button', { name: /reflection-stale-alias-001/ }).click();
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('.single-advanced-settings > summary').click();
   await page.getByLabel('启用停滞后一次行动修正', { exact: true }).check();
   await expect(page.locator('#single-call-mode')).toBeDisabled();

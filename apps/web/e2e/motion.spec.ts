@@ -57,7 +57,7 @@ test.describe('continuous desktop motion', () => {
     await expect(page.getByLabel('最终输出')).toContainText('approved');
 
     const config = page.locator('#config-panel');
-    await config.locator(':scope > summary').click();
+    await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
     const search = page.locator('#single-task-search');
     await search.fill('order-status-007');
     const advanced = config.locator('.advanced-settings');
@@ -67,7 +67,7 @@ test.describe('continuous desktop motion', () => {
     await expect(advanced).not.toHaveAttribute('open');
     await expect(advanced.locator(':scope > summary')).toBeFocused();
     await config.locator(':scope > summary').click();
-    await config.locator(':scope > summary').click();
+    await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
     await expect(search).toHaveValue('order-status-007');
 
     // Change the accessibility preference while content animation is in flight.
@@ -77,7 +77,7 @@ test.describe('continuous desktop motion', () => {
     });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await expect.poll(() => page.locator('main').evaluate((node) => node.getAnimations().length)).toBe(0);
-    await page.locator('#tab-single').click();
+    await page.goBack();
     await expect(page).toHaveURL(new RegExp(`episode_id=${id}`));
     await expect(page.getByText('评测通过 (SUCCESS)', { exact: true })).toBeVisible();
     await expect.poll(() => page.locator('main').evaluate((node) => node.getAnimations().length)).toBe(0);
@@ -107,7 +107,7 @@ for (const support of ['missing', 'throws'] as const) {
       await page.getByRole('button', { name, exact: true }).click();
     }
     await page.locator('#tab-experiment').click();
-    await page.locator('#tab-single').click();
+    await page.goBack();
     await expect(page.getByLabel('最终输出')).toContainText('approved');
     expect(errors).toEqual([]);
   });
