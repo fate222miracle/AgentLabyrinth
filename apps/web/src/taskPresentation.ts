@@ -58,4 +58,3 @@ export const taskTitles: Record<string, string> = {
 export function taskTitle(task: TaskOption): string {
   return taskTitles[task.name] ?? bfclDescriptions[task.id] ?? task.name;
 }
-

@@ -8,6 +8,8 @@
 
 本轮完整scripts.check实际退出0：761Python、126文件Ruff/Mypy、53Node、86系统Edge（4.6分钟）、22格零退化、上下文消融、typecheck/build与audit0全部通过。执行日志artifacts/github-delivery-20261103-quality.log，证据artifacts/quality/cfaba8f3-ef41-4f5c-9597-8b28104a02db；最终集成源码的门禁不冒称每个中间分支独立实跑，也不冒称远端CI。GitHub CLI未安装，使用Git已有凭据在内存中调用本仓库API创建PR，未打印/保存凭据；PR均关联当前聊天。
 
+实际远端交付：持久化/反思c304ae6→PR#5，Judge add700b→PR#6，UI de65652→[#7](https://github.com/fate222miracle/AgentLabyrinth/pull/7)。三个PR均成功创建并关联本聊天，尚未合并。暂存区56个UI/文档/截图路径检查无排除目录或常见密钥格式；二进制PNG不当UTF-8扫描。暂存检查另发现新增taskPresentation.ts尾部多空行，首个UI提交命令未因该检查退出码中止，随后仅删除多余空行并重新核对提交范围；未改运行逻辑，无须重复整套门禁。该格式修正与本回执以新的跟进提交保留，不改写已推送历史。远端CI以实际Checks为准；本机API/Web在测试后恢复，MCP保留。
+
 ## 2026-11-02 UI第三批：演示主线收口
 
 负责人同意优先实时执行→最终交付。共享RunDelivery覆盖流程/结果分析，先实际答案/函数提议、引用、规则与来源，再资源指标；完成后焦点交付且不重播。当前行动/工具反馈/资料去重，输入诊断折叠、调用导航单行跟随、资料可回到Agent最近关联；事件前缀/失败/BFCL不执行边界保持，空正文不误报已返回。桌面行动/画布/右侧资料与窄屏顺序、全屏当前节点适配已接入。UI规范1.16，源码、演示步骤及证据见[主线交接](../learning/ui-demo-mainline-20261102.md)。
