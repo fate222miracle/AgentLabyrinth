@@ -21,6 +21,7 @@ test('live document shelf follows actual reads and citations; previews and refre
     };
   });
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.getByRole('button', { name: '配置退货审核实时演示' }).click();
   await page.locator('#run-button').click();
   await expect.poll(() => page.evaluate(() => typeof (window as Window & { pushDocumentTrace?: unknown }).pushDocumentTrace)).toBe('function');
@@ -50,6 +51,10 @@ test('live document shelf follows actual reads and citations; previews and refre
   await through(started(reads[0].callId));
   await expect(shelf.getByLabel('资料正文预览')).toContainText('RET-ENTRY');
   await expect(shelf.getByLabel('资料正文预览')).toContainText('Agent 正在读取');
+  await shelf.getByRole('button', { name: /退货政策 2025-A/ }).click();
+  await expect(shelf.getByLabel('资料正文预览')).toContainText('Archived policy');
+  await shelf.getByRole('button', { name: '返回 Agent 关联资料', exact: true }).click();
+  await expect(shelf.getByLabel('资料正文预览')).toContainText('RET-ENTRY');
   await expect(shelf).toContainText('0 / 5 已读取');
   await expect(shelf.getByLabel('当前过程阅读统计')).toContainText('成功阅读 0 次');
   await through(succeeded(reads[0].callId));
@@ -109,6 +114,7 @@ test('an interrupted read retains the document preview with an unconfirmed outco
   await page.route('**/api/v1/episodes/stream', route => route.fulfill({ contentType: 'text/event-stream',
     body: saved.artifact.events.slice(0, started + 1).map(event => `event: trace\ndata: ${JSON.stringify(event)}\n\n`).join('') }));
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.getByRole('button', { name: '配置退货审核实时演示' }).click();
   await page.locator('#run-button').click();
   await expect(page.getByText('实时连接已中断，后端运行状态未知。', { exact: false })).toBeVisible();

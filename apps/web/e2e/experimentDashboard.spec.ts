@@ -59,8 +59,9 @@ test('saved charts show exact metrics and compatible history only, with read-onl
   await expect(tokens).toContainText(artifacts[0].metrics.baseline_total_tokens.toLocaleString());
   await expect(tokens).toContainText(artifacts[0].metrics.recovery_total_tokens.toLocaleString());
   await result.screenshot({ path: testInfo.outputPath('saved-visual-metrics.png') });
-  await page.locator('.experiment-draft > summary').click();
+  await page.getByRole('button', { name: '配置下一次实验', exact: true }).click();
   await page.locator('#comparison-axis').selectOption('runtime_backend');
+  await page.goBack();
   await expect(result.getByRole('img', { name: /Recovery Policy：/ })).toBeVisible(); // Saved chart ignores draft axis.
   await page.locator('.history-disclosure > summary').click();
   const trend = page.getByLabel('同配置历史折线图');
@@ -85,7 +86,7 @@ test('saved charts show exact metrics and compatible history only, with read-onl
   await point.focus();
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/experiment_id=/);
-  await expect(page.locator('.experiment-draft')).not.toHaveAttribute('open');
+  await expect(page.locator('.experiment-draft')).toHaveCount(0);
   const contextKey = source.items.find(item => item.experiment_id === context.experiment_id)!.comparison_key!;
   await page.getByLabel('实验历史范围').selectOption(contextKey);
   await expect(trend).toContainText('只有一次完整运行');

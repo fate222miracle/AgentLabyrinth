@@ -15,8 +15,8 @@ export function useContentMotion(
     if (!node || preference.matches || typeof node.animate !== 'function') return;
     const direction = position < old.position ? -1 : 1;
     const tokens = getComputedStyle(node);
-    const milliseconds = Number.parseFloat(tokens.getPropertyValue('--motion-default'));
-    const duration = Number.isFinite(milliseconds) ? Math.max(0, Math.min(300, milliseconds)) : 180;
+    const milliseconds = Number.parseFloat(tokens.getPropertyValue('--motion-slow'));
+    const duration = Number.isFinite(milliseconds) ? Math.max(0, Math.min(500, milliseconds)) : 500;
     const easing = tokens.getPropertyValue('--motion-ease').trim() || 'ease-out';
     const start = interrupted.current?.node === node ? interrupted.current : null;
     interrupted.current = null;

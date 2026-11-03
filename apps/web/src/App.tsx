@@ -1,3 +1,8 @@
+import { ProductNavigation } from './ProductNavigation';
+import { TaskLibrary } from './TaskLibrary';
+import { RunRecords } from './RunRecords';
+import { areaFor, canonicalLocation, routeParams, sectionFor, workspaceFor, type WorkspaceArea, type EpisodeSection } from './workspaceNavigation';
+import { taskDescription, taskTitle, taskCategoryLabels } from './taskPresentation';
 import { useState, useEffect, useRef } from 'react';
 import { explainFailure, changedStateFields, groupTraceByStep, keyFields, toolFeedbackFields, stepOutcome, stepTitle } from './traceSteps';
 import { ReadableFields, fieldLabels } from './ReadableFields';
@@ -22,36 +27,6 @@ import { metaSchema, dashboardSchema, resumableIdsSchema,
   type TaskOption, type MetaResponse, type TraceEvent, type EpisodeArtifact,
   type PairComparison, type ExperimentArtifact, type ExperimentJobState } from './apiContracts';
 import { readApi, readEpisode, readExperiment, readJob, requireOk } from './apiClient';
-
-const bfclDescriptions: Record<string, string> = {
-  'bfcl-simple_python_0': '求底边长为 10、高为 5 的三角形面积。',
-  'bfcl-simple_python_1': '使用数学函数计算 5 的阶乘。',
-  'bfcl-simple_python_2': '已知直角三角形的两条直角边分别为 4 和 5，求斜边长度。',
-  'bfcl-simple_python_3': '求二次方程的根，系数为 a=1、b=-3、c=2。',
-  'bfcl-simple_python_4': '求解系数为 a=2、b=6、c=5 的二次方程。',
-  'bfcl-simple_python_5': '求二次方程的所有根，系数为 a=3、b=-11、c=-4。',
-  'bfcl-simple_python_6': '求系数为 a=2、b=5、c=3 的二次方程的根。',
-  'bfcl-simple_python_7': '求半径为 4 英寸的圆的周长。',
-  'bfcl-simple_java_6': '刷新数据库表格视图的元数据、追加已有数据，并保留当前状态。',
-  'bfcl-simple_java_18': '查询系统角色数量的第 3 页，每页 20 条。',
-  'bfcl-simple_java_53': '构造谓词：判断 Join 是否为完整主节点，且状态早于本地接受的任期 42、版本 7。',
-  'bfcl-simple_java_74': '在 XML 序列化中处理高代理值 55357、低代理值 56832；内容不在 CDATA 内。',
-  'bfcl-simple_java_76': '以宽 800、高 600 的尺寸更新开场动画画面。',
-};
-
-const taskCategoryLabels: Record<string, string> = {
-  tool_selection: '工具选择',
-  parameter_generation: '参数生成',
-  multi_step_planning: '多步规划',
-  evidence_chain: '跨文档证据链 · 自建仿真',
-  error_recovery: '错误恢复',
-  reflection_challenge: '停滞反思',
-  bfcl_single_call: '单次函数调用',
-};
-
-function taskDescription(task: TaskOption): string {
-  return task.suite !== 'tool_lab_core' ? bfclDescriptions[task.id] ?? task.description : task.description;
-}
 
 const experimentJobLabels: Record<ExperimentJobState['status'], string> = {
   queued: '排队中', running: '运行中', paused: '已暂停', cancelled: '已取消',
@@ -253,7 +228,9 @@ async function copyTextToClipboard(value: string, label: string): Promise<string
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'single' | 'experiment'>('experiment');
+  const [workspace, setWorkspace] = useState(() => workspaceFor(new URL(window.location.href)));
+  const [episodeSection, setEpisodeSection] = useState<EpisodeSection>(() => sectionFor(new URL(window.location.href)));
+  const [activeTab, setActiveTab] = useState<'single' | 'experiment'>(() => areaFor(workspace) === 'experiments' ? 'experiment' : 'single');
   const [meta, setMeta] = useState<MetaResponse | null>(null);
   const [metadataLoading, setMetadataLoading] = useState(false);
   const [metadataError, setMetadataError] = useState<string | null>(null);
@@ -267,8 +244,9 @@ export default function App() {
   const [singleTaskQuery, setSingleTaskQuery] = useState('');
   const [maxSteps, setMaxSteps] = useState<number>(6);
   const [artifact, setArtifact] = useState<EpisodeArtifact | null>(null);
+  const [singleConfigOpen, setSingleConfigOpen] = useState(false);
   const [liveRun, setLiveRun] = useState<{
-    events: TraceEvent[]; episodeId: string | null; model: string;
+    events: TraceEvent[]; episodeId: string | null; model: string; provider?: string;
     environmentVersion: string; status: 'running' | 'interrupted' | 'completed';
   } | null>(null);
   const [recentEpisodeIds, setRecentEpisodeIds] = useState<string[]>([]);
@@ -380,8 +358,65 @@ export default function App() {
     setLoadingMessage('');
   };
 
+  const commitLocation = (input: URL, replace = false) => {
+    const url = canonicalLocation(input);
+    const nextWorkspace = workspaceFor(url);
+    setWorkspace(nextWorkspace);
+    setEpisodeSection(sectionFor(url));
+    setActiveTab(areaFor(nextWorkspace) === 'experiments' ? 'experiment' : 'single');
+    window.history[replace ? 'replaceState' : 'pushState']({}, '', url.toString());
+  };
+
+  const navigateWorkspace = (area: WorkspaceArea | 'experiment-new') => {
+    if (isLoading && loadingActivity === 'run' && !activeJobId) return;
+    pageRequests.current.begin();
+    if (loadingActivity === 'history') finishLoading();
+    setErrorMsg(null);
+    setSingleConfigOpen(false);
+    setReplayPlaying(false);
+    const url = new URL(window.location.origin);
+    if (area === 'workbench') {
+      url.searchParams.set('mode', 'single');
+      setArtifact(null);
+      setLiveRun(null);
+    } else if (area !== 'experiment-new') url.searchParams.set('page', area);
+    else { url.searchParams.set('mode', 'experiment'); setExperiment(null); setActiveJobId(null); }
+    commitLocation(url);
+    requestAnimationFrame(() => {
+      mainMotionRef.current?.focus({ preventScroll: true });
+      mainMotionRef.current?.scrollIntoView({ block: 'start' });
+    });
+  };
+
+  const selectLibraryTask = (task: TaskOption) => {
+    if (isLoading || metadataLoading) return;
+    pageRequests.current.begin();
+    setArtifact(null);
+    setLiveRun(null);
+    setErrorMsg(null);
+    setSelectedSuite(task.suite);
+    setSelectedSingleTask(task.id);
+    setSingleTaskQuery('');
+    setMaxSteps(task.max_steps);
+    setSingleTokenBudget(task.token_budget);
+    setSingleToolTransport('local');
+    setSingleFaultProfile('none');
+    setSingleConfigOpen(false);
+    const url = new URL('/workbench?mode=single', window.location.origin);
+    commitLocation(url);
+    requestAnimationFrame(() => document.getElementById('single-stage-controls')?.focus());
+  };
+
+  const selectEpisodeSection = (section: EpisodeSection) => {
+    const url = new URL(window.location.href);
+    if (section === 'process') url.searchParams.delete('section');
+    else url.searchParams.set('section', section);
+    commitLocation(url, true);
+  };
+
   const switchTab = (next: 'single' | 'experiment') => {
-    if (next === activeTab || (isLoading && loadingActivity === 'run' && !activeJobId)) return;
+    if (isLoading && loadingActivity === 'run' && !activeJobId) return;
+    setSingleConfigOpen(false);
     pageRequests.current.begin();
     if (loadingActivity === 'history') finishLoading();
     setErrorMsg(null);
@@ -391,13 +426,15 @@ export default function App() {
     url.searchParams.delete('experiment_id');
     url.searchParams.delete('experiment_job_id');
     url.searchParams.delete('mode');
+    url.searchParams.delete('page');
     if (next === 'single' && artifact) url.searchParams.set('episode_id', artifact.episode.episode_id);
     else if (next === 'single') url.searchParams.set('mode', 'single');
     if (next === 'experiment') {
+      url.searchParams.set('page', 'experiment-new');
       if (activeJobId) url.searchParams.set('experiment_job_id', activeJobId);
       else if (experiment) url.searchParams.set('experiment_id', experiment.experiment_id);
     }
-    window.history.pushState({}, '', url.toString());
+    commitLocation(url);
   };
 
   useEffect(() => {
@@ -424,7 +461,7 @@ export default function App() {
             url.searchParams.set('experiment_id', activeJobId);
             url.searchParams.delete('experiment_job_id');
             url.searchParams.delete('mode');
-            window.history.replaceState({}, '', url.toString());
+            commitLocation(url, true);
           }
           setActiveJobId(null);
           finishLoading();
@@ -506,7 +543,7 @@ export default function App() {
 
   // 1. Fetch Metadata and parse initial query parameters
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    const params = routeParams(new URL(window.location.href));
     const expId = params.get('experiment_id');
     const epId = params.get('episode_id');
     const jobId = params.get('experiment_job_id');
@@ -552,7 +589,11 @@ export default function App() {
     }
 
     const handlePopState = () => {
-      const next = new URLSearchParams(window.location.search);
+      const nextUrl = new URL(window.location.href);
+      setWorkspace(workspaceFor(nextUrl));
+      setEpisodeSection(sectionFor(nextUrl));
+      setSingleConfigOpen(false);
+      const next = routeParams(nextUrl);
       const nextExpId = next.get('experiment_id');
       const nextEpId = next.get('episode_id');
       const nextJobId = next.get('experiment_job_id');
@@ -572,7 +613,7 @@ export default function App() {
         loadEpisodeById(nextEpId, false);
       } else {
         setActiveJobId(null);
-        setActiveTab(next.get('mode') === 'single' ? 'single' : 'experiment');
+        setActiveTab(areaFor(workspaceFor(nextUrl)) === 'experiments' ? 'experiment' : 'single');
         pageRequests.current.begin();
         setExperiment(null);
         setArtifact(null);
@@ -649,6 +690,8 @@ export default function App() {
   // Load an existing episode by ID
   const loadEpisodeById = async (id: string, updateUrl = true) => {
     if (!id || id.trim().length === 0) return;
+    setActiveTab('single');
+    setSingleConfigOpen(false);
     setActiveJobId(null);
     const requestId = pageRequests.current.begin();
     setLiveRun(null);
@@ -661,7 +704,7 @@ export default function App() {
       url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
       url.searchParams.delete('experiment_job_id');
-      window.history.pushState({}, '', url.toString());
+      commitLocation(url);
     }
     try {
       const res = await fetch(`/api/v1/episodes/${encodeURIComponent(id.trim())}`);
@@ -682,6 +725,7 @@ export default function App() {
   // Load an existing experiment by ID
   const loadExperimentById = async (id: string, updateUrl = true) => {
     if (!id || id.trim().length === 0) return;
+    setActiveTab('experiment');
     setActiveJobId(null);
     const requestId = pageRequests.current.begin();
     setLiveRun(null);
@@ -694,7 +738,7 @@ export default function App() {
       url.searchParams.delete('mode');
       url.searchParams.delete('episode_id');
       url.searchParams.delete('experiment_job_id');
-      window.history.pushState({}, '', url.toString());
+      commitLocation(url);
     }
     try {
       const res = await fetch(`/api/v1/experiments/${encodeURIComponent(id.trim())}`);
@@ -714,15 +758,20 @@ export default function App() {
 
   // Execute single episode
   const handleRunEpisode = async () => {
+    setSingleConfigOpen(false);
+    setEpisodeSection('process');
     const requestId = pageRequests.current.begin();
     beginLoading('正在运行，Trace 节点会随事件出现。');
     setErrorMsg(null);
     setArtifact(null);
     const runningUrl = new URL(window.location.href);
+    runningUrl.searchParams.set('mode', 'single');
+    runningUrl.searchParams.delete('page');
+    runningUrl.searchParams.delete('section');
     runningUrl.searchParams.delete('episode_id');
     runningUrl.searchParams.delete('experiment_id');
-    window.history.pushState({}, '', runningUrl.toString());
-    setLiveRun({ events: [], episodeId: null, model: selectedModel,
+    commitLocation(runningUrl);
+    setLiveRun({ events: [], episodeId: null, model: selectedModel, provider: currentSingleModelMeta?.provider,
       environmentVersion: selectedSuite !== 'tool_lab_core' ? 'bfcl-adapted-single-call-v1'
         : selectedSingleTaskMeta?.supports_mcp && singleToolTransport === 'mcp' ? 'tool-lab-mcp-v1' : 'tool-lab-m0-v1',
       status: 'running' });
@@ -782,7 +831,7 @@ export default function App() {
       const newArtifact = data.artifact;
       setArtifact(newArtifact);
       setLiveRun((current) => current ? { ...current, events: newArtifact.events,
-        model: newArtifact.agent.model.model,
+        model: newArtifact.agent.model.model, provider: newArtifact.agent.model.provider,
         environmentVersion: newArtifact.run_config.environment_version ?? current.environmentVersion,
         episodeId: newArtifact.episode.episode_id, status: 'completed' } : current);
       addRecentEpisodeId(newArtifact.episode.episode_id);
@@ -791,7 +840,7 @@ export default function App() {
       url.searchParams.set('episode_id', newArtifact.episode.episode_id);
       url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
-      window.history.replaceState({}, '', url.toString());
+      commitLocation(url, true);
     } catch (err: unknown) {
       if (!pageRequests.current.isCurrent(requestId)) return;
       const message = err instanceof Error ? err.message : '运行失败';
@@ -824,7 +873,7 @@ export default function App() {
       url.searchParams.set('episode_id', id);
       url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
-      window.history.pushState({}, '', url.toString());
+      commitLocation(url);
     } catch (err: unknown) {
       if (!pageRequests.current.isCurrent(requestId)) return;
       setErrorMsg(err instanceof Error ? err.message : '恢复失败');
@@ -852,7 +901,7 @@ export default function App() {
       url.searchParams.set('experiment_id', id);
       url.searchParams.delete('mode');
       url.searchParams.delete('episode_id');
-      window.history.pushState({}, '', url.toString());
+      commitLocation(url);
     } catch (err: unknown) {
       if (!pageRequests.current.isCurrent(requestId)) return;
       setErrorMsg(err instanceof Error ? err.message : '实验恢复失败');
@@ -881,7 +930,7 @@ export default function App() {
       url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
       url.searchParams.delete('experiment_job_id');
-      window.history.pushState({}, '', url.toString());
+      commitLocation(url);
     } catch (error) {
       if (!pageRequests.current.isCurrent(requestId)) return;
       setErrorMsg(error instanceof Error ? error.message : '失败 Episode 重跑失败');
@@ -972,7 +1021,7 @@ export default function App() {
       url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
       url.searchParams.delete('episode_id');
-      window.history.pushState({}, '', url.toString());
+      commitLocation(url);
     } catch (err: unknown) {
       if (!pageRequests.current.isCurrent(requestId)) return;
       const message = err instanceof Error ? err.message : '对照实验运行失败';
@@ -1021,7 +1070,7 @@ export default function App() {
         url.searchParams.delete('mode');
         url.searchParams.delete('experiment_id');
         url.searchParams.delete('episode_id');
-        window.history.pushState({}, '', url.toString());
+        commitLocation(url);
       } else if (data.status === 'cancelled') {
         setResumableJobIds((ids) => ids.filter((id) => id !== targetId));
       }
@@ -1043,6 +1092,15 @@ export default function App() {
     setExpTasks((prev) =>
       prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId]
     );
+  };
+
+  const focusExecutionStage = () => {
+    setSingleConfigOpen(false);
+    requestAnimationFrame(() => {
+      const controls = document.getElementById(artifact ? 'episode-detail-controls' : 'single-stage-controls');
+      controls?.focus({ preventScroll: true });
+      controls?.scrollIntoView({ block: 'start' });
+    });
   };
 
   const configureClassroomScenario = (task: TaskOption, target: 'single' | 'experiment') => {
@@ -1087,7 +1145,8 @@ export default function App() {
     const launcher = document.querySelector<HTMLDetailsElement>('.classroom-scenarios');
     if (launcher) launcher.open = false;
     requestAnimationFrame(() => {
-      const panel = document.getElementById(target === 'single' ? 'config-panel' : 'exp-config-panel');
+      if (target === 'single') { focusExecutionStage(); return; }
+      const panel = document.getElementById('exp-config-panel');
       const details = panel instanceof HTMLDetailsElement ? panel : panel?.querySelector('details');
       if (details) details.open = true;
       const summary = details?.querySelector('summary');
@@ -1103,11 +1162,11 @@ export default function App() {
   const singleTasks = meta?.tasks.filter((task) => task.suite === selectedSuite) ?? [];
   const filteredSingleTasks = singleTasks.filter((task) => {
     const query = singleTaskQuery.trim().toLocaleLowerCase();
-    return !query || `${task.name} ${task.id} ${task.category} ${taskCategoryLabels[task.category] ?? ''} ${task.description} ${taskDescription(task)}`
+    return !query || `${taskTitle(task)} ${task.name} ${task.id} ${task.category} ${taskCategoryLabels[task.category] ?? ''} ${task.description} ${taskDescription(task)}`
       .toLocaleLowerCase().includes(query);
   });
   const bfclTaskCount = meta?.tasks.filter((task) => task.suite === 'bfcl_adapted').length ?? 0;
-  const selectedSingleTaskMeta = filteredSingleTasks.find((task) => task.id === selectedSingleTask);
+  const selectedSingleTaskMeta = singleTasks.find((task) => task.id === selectedSingleTask);
   const defaultSingleMaxSteps = selectedSingleTaskMeta?.max_steps ?? (selectedSuite !== 'tool_lab_core' ? 1 : 6);
   const defaultSingleTokenBudget = selectedSingleTaskMeta?.category === 'evidence_chain' ? selectedSingleTaskMeta.token_budget : 8000;
   const singleAdvancedChangeCount = [
@@ -1235,6 +1294,89 @@ export default function App() {
           : isLoading ? loadingMessage : null;
 
   const hasExperimentResult = Boolean(experiment) || experimentJob?.status === 'failed';
+  const experimentOperations = <div className="experiment-operations">
+      {activeJobId && experimentJob?.experiment_id === activeJobId && (
+        <div className="resumable-panel" role="status" aria-live="polite">
+          <div className="card-title">实验任务：{experimentJobLabels[experimentJob.status]}</div>
+          <p className="card-desc"><code>{activeJobId}</code> · 控制请求在当前 Episode 结束后生效。</p>
+          <div className="resumable-list">
+            <button type="button" className="btn-secondary" onClick={() => setProgressId(activeJobId)}>查看保存进度</button>
+            {['queued', 'running'].includes(experimentJob.status) && !experimentJob.requested_action && (
+              <>
+                <button className="btn-secondary" onClick={() => handleControlExperimentJob('pause')}>暂停</button>
+                <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消</button>
+              </>
+            )}
+            {experimentJob.requested_action && <span>已请求{experimentJob.requested_action === 'pause' ? '暂停' : '取消'}，等待安全点。</span>}
+            {['paused', 'interrupted'].includes(experimentJob.status) && (
+              <>
+                <button className="btn-secondary" onClick={() => handleControlExperimentJob('resume')}>从安全点恢复</button>
+                <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消实验</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {resumableJobIds.some((id) => id !== activeJobId) && (
+        <section className="resumable-panel" aria-labelledby="resumable-job-title">
+          <div className="card-title" id="resumable-job-title">可恢复的实验任务</div>
+          <p className="card-desc">原计划和已完成 Episode 均保留；继续运行可能重新发送中断中的模型请求。</p>
+          <div className="resumable-list">
+            {resumableJobIds.filter((id) => id !== activeJobId).map((id) => (
+              <span className="resumable-list" key={id}>
+              <button type="button" className="btn-secondary" aria-label={`查看 Job 保存进度 ${id}`} onClick={() => setProgressId(id)}>查看保存进度</button>
+              <button className="btn-secondary" disabled={isLoading}
+                onClick={() => handleControlExperimentJob('resume', id)}>
+                恢复 Job <code>{id}</code>
+              </button>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {resumableExpIds.length > 0 && (
+        <section className="resumable-panel" aria-labelledby="resumable-exp-title">
+          <div className="card-title" id="resumable-exp-title">待恢复的对照实验</div>
+          <p className="card-desc">继续原实验并复用已完成结果；中断中的模型请求可能重新发送。</p>
+          <div className="resumable-list">
+            {resumableExpIds.map((id) => (
+              <span className="resumable-list" key={id}>
+              <button type="button" className="btn-secondary" aria-label={`查看 Experiment 保存进度 ${id}`} onClick={() => setProgressId(id)}>查看保存进度</button>
+              <button className="btn-secondary" disabled={isLoading}
+                onClick={() => handleResumeExperiment(id)}>
+                恢复 Experiment <code>{id}</code>
+              </button>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {progressId && <ExperimentProgressReader key={progressId} id={progressId} onClose={() => setProgressId(null)} />}
+
+      {/* Recent Experiments History */}
+      {recentExpIds.length > 0 && (
+        <div className="history-panel">
+          <div className="history-panel-title">
+            最近实验历史：
+          </div>
+          <div className="history-list">
+            {recentExpIds.map((rid) => (
+              <button
+                key={rid}
+                className="btn-secondary history-button"
+                onClick={() => loadExperimentById(rid)}
+              >
+                {rid}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+  </div>;
+
   const experimentConfigPanel = (
     <section className="card" id="exp-config-panel">
       <details className="experiment-draft" open={!experiment}>
@@ -1493,7 +1635,8 @@ export default function App() {
                 disabled={isLoading}
               />
               <div>
-                <div className="task-name">{task.name}</div>
+                <div className="task-name">{taskTitle(task)}</div>
+                <div className="task-code">{task.name}</div>
                 <div className="task-meta">
                   {task.description}
                 </div>
@@ -1616,86 +1759,6 @@ export default function App() {
 
       </details>
 
-      {activeJobId && experimentJob?.experiment_id === activeJobId && (
-        <div className="resumable-panel" role="status" aria-live="polite">
-          <div className="card-title">实验任务：{experimentJobLabels[experimentJob.status]}</div>
-          <p className="card-desc"><code>{activeJobId}</code> · 控制请求在当前 Episode 结束后生效。</p>
-          <div className="resumable-list">
-            <button type="button" className="btn-secondary" onClick={() => setProgressId(activeJobId)}>查看保存进度</button>
-            {['queued', 'running'].includes(experimentJob.status) && !experimentJob.requested_action && (
-              <>
-                <button className="btn-secondary" onClick={() => handleControlExperimentJob('pause')}>暂停</button>
-                <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消</button>
-              </>
-            )}
-            {experimentJob.requested_action && <span>已请求{experimentJob.requested_action === 'pause' ? '暂停' : '取消'}，等待安全点。</span>}
-            {['paused', 'interrupted'].includes(experimentJob.status) && (
-              <>
-                <button className="btn-secondary" onClick={() => handleControlExperimentJob('resume')}>从安全点恢复</button>
-                <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消实验</button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {resumableJobIds.some((id) => id !== activeJobId) && (
-        <section className="resumable-panel" aria-labelledby="resumable-job-title">
-          <div className="card-title" id="resumable-job-title">可恢复的实验任务</div>
-          <p className="card-desc">原计划和已完成 Episode 均保留；继续运行可能重新发送中断中的模型请求。</p>
-          <div className="resumable-list">
-            {resumableJobIds.filter((id) => id !== activeJobId).map((id) => (
-              <span className="resumable-list" key={id}>
-              <button type="button" className="btn-secondary" aria-label={`查看 Job 保存进度 ${id}`} onClick={() => setProgressId(id)}>查看保存进度</button>
-              <button className="btn-secondary" disabled={isLoading}
-                onClick={() => handleControlExperimentJob('resume', id)}>
-                恢复 Job <code>{id}</code>
-              </button>
-              </span>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {resumableExpIds.length > 0 && (
-        <section className="resumable-panel" aria-labelledby="resumable-exp-title">
-          <div className="card-title" id="resumable-exp-title">待恢复的对照实验</div>
-          <p className="card-desc">继续原实验并复用已完成结果；中断中的模型请求可能重新发送。</p>
-          <div className="resumable-list">
-            {resumableExpIds.map((id) => (
-              <span className="resumable-list" key={id}>
-              <button type="button" className="btn-secondary" aria-label={`查看 Experiment 保存进度 ${id}`} onClick={() => setProgressId(id)}>查看保存进度</button>
-              <button className="btn-secondary" disabled={isLoading}
-                onClick={() => handleResumeExperiment(id)}>
-                恢复 Experiment <code>{id}</code>
-              </button>
-              </span>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {progressId && <ExperimentProgressReader key={progressId} id={progressId} onClose={() => setProgressId(null)} />}
-
-      {/* Recent Experiments History */}
-      {recentExpIds.length > 0 && (
-        <div className="history-panel">
-          <div className="history-panel-title">
-            最近实验历史：
-          </div>
-          <div className="history-list">
-            {recentExpIds.map((rid) => (
-              <button
-                key={rid}
-                className="btn-secondary history-button"
-                onClick={() => loadExperimentById(rid)}
-              >
-                {rid}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
     </section>
   );
 
@@ -1727,26 +1790,9 @@ export default function App() {
           </a>
 
           <div className="header-actions">
-            <nav className="nav-tabs" data-active={activeTab} aria-label="工作区模式">
-              <button
-                id="tab-experiment"
-                className={`nav-tab ${activeTab === 'experiment' ? 'active' : ''}`}
-                aria-pressed={activeTab === 'experiment'}
-                onClick={() => switchTab('experiment')}
-                disabled={isLoading && loadingActivity === 'run' && !activeJobId}
-              >
-                对照实验 <span className="nav-english">Agent Comparison</span>
-              </button>
-              <button
-                id="tab-single"
-                className={`nav-tab ${activeTab === 'single' ? 'active' : ''}`}
-                aria-pressed={activeTab === 'single'}
-                onClick={() => switchTab('single')}
-                disabled={isLoading && loadingActivity === 'run' && !activeJobId}
-              >
-                单次运行 <span className="nav-english">Single Episode</span>
-              </button>
-            </nav>
+            <ProductNavigation active={areaFor(workspace)}
+              disabled={isLoading && loadingActivity === 'run' && !activeJobId}
+              onNavigate={navigateWorkspace} />
 
           </div>
         </div>
@@ -1754,22 +1800,22 @@ export default function App() {
 
       {/* Main Content */}
       <main id="main-content" tabIndex={-1}
-        className={`main-container ${activeTab === 'single' && artifact ? 'viewing-episode' : ''}`} ref={mainMotionRef}>
+        className={`main-container ${activeTab === 'single' ? 'stage-mode' : ''} ${activeTab === 'single' && artifact ? 'viewing-episode' : ''}`} ref={mainMotionRef}>
         <section className="page-intro" aria-labelledby="page-title">
           <div>
             <div className="page-eyebrow">Agent 评测工作台</div>
             <h1 id="page-title">
-              {activeTab === 'experiment' ? '比较策略差异' : '审查一次完整运行'}
+              {workspace === 'tasks' ? '选择下一项探索' : workspace === 'runs' ? '运行记录' : workspace === 'experiments' ? '实验中心' : activeTab === 'experiment' ? experiment ? '对照实验结果' : '比较策略差异' : artifact ? '运行详情' : liveRun ? 'Agent 正在执行' : '运行一个 Agent 任务'}
             </h1>
             <p>
-              {activeTab === 'experiment'
+              {workspace === 'tasks' ? '浏览任务目标、交付要求与工具能力，再进入工作台配置。' : workspace === 'runs' ? '找到本机最近访问的任务，核查结果与执行依据。' : activeTab === 'experiment'
                 ? '固定任务、模型、种子与预算，每次比较上下文、恢复策略或 Runtime 中的一项。'
                 : '运行一个任务，核查评测结论、环境状态与完整 Trace。'}
             </p>
           </div>
-          <span className="workspace-status">
+          {(workspace === 'workbench' || workspace === 'experiment-new') && <span className="workspace-status">
             {meta ? `${meta.tasks.length} 个可用任务` : '正在读取任务目录'}
-          </span>
+          </span>}
         </section>
 
         {/* Error Alert Box */}
@@ -1782,7 +1828,8 @@ export default function App() {
             <div>{errorMsg}</div>
           </div>
         )}
-        {(metadataError || meta?.model_catalog_status === 'unavailable') && (
+        {(metadataError || (meta?.model_catalog_status === 'unavailable'
+          && (workspace === 'workbench' || workspace === 'experiment-new' || (workspace === 'episode' && episodeSection === 'review')))) && (
           <div className="alert-box alert-error" role="status">
             <span className="alert-label">模型目录暂不可用</span>
             <div>
@@ -1793,17 +1840,53 @@ export default function App() {
             </div>
           </div>
         )}
-        {meta?.model_catalog_status === 'live' && meta.models.some((model) => model.provider === 'aihubmix') && (
+        {(workspace === 'workbench' || workspace === 'experiment-new' || (workspace === 'episode' && episodeSection === 'review'))
+          && meta?.model_catalog_status === 'live' && meta.models.some((model) => model.provider === 'aihubmix') && (
           <div className="model-catalog-caution" role="note">
             网关目录仅表示模型 ID 可见，不能验证当前 Key 的调用权限、额度或通道。真实可用性以实际运行结果为准。
           </div>
         )}
 
-        <ClassroomScenarios tasks={meta?.tasks ?? []} disabled={isLoading || metadataLoading || !meta}
-          hasSavedResult={Boolean(artifact || experiment || activeJobId)} onConfigure={configureClassroomScenario} />
+        {(workspace === 'experiment-new' || workspace === 'experiment') && <ClassroomScenarios tasks={meta?.tasks ?? []} disabled={isLoading || metadataLoading || !meta}
+          selectedTaskNames={(meta?.tasks ?? []).filter((task) => expTasks.includes(task.id)).map((task) => task.name)}
+          hasSavedResult={Boolean(artifact || experiment || activeJobId)} onConfigure={configureClassroomScenario} />}
+
+        <div hidden={workspace !== 'tasks'}><TaskLibrary tasks={meta?.tasks ?? []} loading={metadataLoading || (!meta && !metadataError)} unavailable={Boolean(metadataError && !meta)}
+          disabled={isLoading || metadataLoading || !meta} onSelect={selectLibraryTask} /></div>
+        <div hidden={workspace !== 'runs'}><RunRecords ids={recentEpisodeIds} summaries={episodeHistorySummaries}
+          value={inputEpisodeId} busy={isLoading} onChange={setInputEpisodeId} onRead={loadEpisodeById} /></div>
+            {workspace === 'runs' && resumableEpisodeIds.length > 0 && (
+              <section className="card resumable-panel" aria-labelledby="resumable-title">
+                <div className="card-title" id="resumable-title">待恢复的单次运行</div>
+                <p className="card-desc">
+                  仅列出上次后端进程留下的运行。恢复可能重新发送中断中的模型请求并产生额外用量。
+                </p>
+                <div className="resumable-list">
+                  {resumableEpisodeIds.map((id) => (
+                    <button key={id} className="btn-secondary" disabled={isLoading}
+                      onClick={() => handleResumeEpisode(id)}>
+                      恢复 Episode <code>{id}</code>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+        {workspace === 'experiments' && <section className="experiment-index" aria-label="实验列表">
+          <div className="workspace-page-actions"><p>查看已保存实验，选择可比条件后分析差异。</p>
+            <button className="btn-primary" onClick={() => navigateWorkspace('experiment-new')} disabled={isLoading}>新建对照实验</button></div>
+          {activeJobId && experimentOperations}
+          <ExperimentDashboard items={dashboardItems} loading={dashboardLoading} error={dashboardError}
+            skipped={dashboardSkipped} activeId={experiment?.experiment_id}
+            onRefresh={refreshExperimentDashboard} onOpen={loadExperimentById} />
+          <section className="experiment-archive" aria-label="按 ID 查找与恢复">
+            <h2>按 ID 查找与恢复</h2><p className="metric-sub">读取指定实验，或查看中断实验的保存进度。</p>
+            <HistoryReader kind="exp" value={inputExpId} busy={isLoading} onChange={setInputExpId} onRead={loadExperimentById} />
+            {!activeJobId && experimentOperations}
+          </section>
+        </section>}
 
         {/* TAB 1: EXPERIMENT MODE */}
-        {activeTab === 'experiment' && (
+        {(workspace === 'experiment-new' || workspace === 'experiment') && (
           <div>
             {/* Persistent ID Bar */}
             <div className="persistence-bar persistence-bar-spaced">
@@ -1858,6 +1941,7 @@ export default function App() {
               </div>
             )}
 
+            {experimentOperations}
             <details className="history-disclosure">
               <summary>实验历史与趋势 <span>{dashboardLoading ? '读取中' : `${dashboardItems.length} 条记录`}</span></summary>
             <ExperimentDashboard items={dashboardItems} loading={dashboardLoading} error={dashboardError}
@@ -2261,16 +2345,17 @@ export default function App() {
                   )}
                 </section>
               </div>
-              {hasExperimentResult && experimentConfigPanel}
+              {hasExperimentResult && <div className="next-experiment-action"><p>此处显示已保存的实验。下一次实验使用独立草稿。</p>
+                <button className="btn-secondary" onClick={() => navigateWorkspace('experiment-new')}>配置下一次实验</button></div>}
             </div>
           </div>
         )}
 
         {/* TAB 2: SINGLE EPISODE MODE */}
-        {activeTab === 'single' && (
+        {(workspace === 'workbench' || workspace === 'episode') && (
           <div>
             {/* Persistent ID Bar */}
-            <div className="persistence-bar persistence-bar-spaced">
+            {(artifact || liveRun) && <div className="persistence-bar persistence-bar-spaced">
               <div className="persistence-cluster">
                 <span className="persistence-label">当前 Episode:</span>
                 <span className="persistence-value">
@@ -2307,23 +2392,66 @@ export default function App() {
                   </>
                 )}
               </div>
-              <HistoryReader kind="episode" value={inputEpisodeId} busy={isLoading}
-                onChange={setInputEpisodeId} onRead={loadEpisodeById} />
-            </div>
+              {artifact && !singleConfigOpen && <button className="btn-secondary" disabled={isLoading}
+                onClick={() => {
+                  setSingleConfigOpen(true);
+                  selectEpisodeSection('process');
+                  requestAnimationFrame(() => document.querySelector<HTMLElement>('#config-panel > summary')?.focus());
+                }}>修改任务与配置</button>}
+            </div>}
+            {artifact && <p className="saved-run-context">已保存运行 · {artifact.task.name} · {artifact.agent.model.model} · {artifact.agent.runtime_backend ?? 'Runtime 未记录'}</p>}
             {copyNotice && (
               <div className="copy-feedback" role="status" aria-live="polite">
                 {copyNotice}
               </div>
             )}
 
+            {artifact && !singleConfigOpen && <div id="episode-detail-controls" className="episode-detail-navigation" tabIndex={-1}>
+              <nav aria-label="运行详情视图">
+                {([{ id: 'process', label: '执行过程' }, { id: 'results', label: '结果分析' }, { id: 'review', label: '模型评审' }] as const).map(section =>
+                  <button type="button" key={section.id} aria-pressed={episodeSection === section.id}
+                    className={episodeSection === section.id ? 'active' : ''} onClick={() => selectEpisodeSection(section.id)}>{section.label}</button>)}
+              </nav>
+              <span id="eval-badge" className={`badge ${artifact.evaluation.success ? 'badge-green' : 'badge-red'}`}>
+                {artifact.evaluation.success ? '评测通过 (SUCCESS)' : '评测未通过 (FAILED)'}</span>
+            </div>}
+
             <div className={`dashboard-grid single-dashboard ${artifact ? 'has-artifact' : liveRun ? 'streaming' : 'configuring'}`}>
-              <details className="card config-panel" id="config-panel" open={!artifact}>
+              <div className="execution-stage">
+                <div hidden={Boolean(artifact && !singleConfigOpen)} id="single-stage-controls" className="single-launch-bar stage-launch-bar" tabIndex={-1} aria-label="舞台运行配置">
+                  <div className="single-launch-summary" aria-live="polite">
+                    <small>{artifact ? '下次运行草稿 · 不修改当前保存结果' : '当前运行配置'}</small>
+                    <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
+                    <span>{currentSingleModelMeta?.name || selectedModel || '请选择模型'} · {singleRuntimeBackend === 'langgraph' ? 'LangGraph' : singleRuntimeBackend === 'pydantic_ai' ? 'PydanticAI' : 'Reference'} · {singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp ? 'MCP HTTP' : selectedSuite === 'tool_lab_core' ? '本地工具' : '本地函数调用提议评测'}</span>
+                    <span className="single-parameter-summary">{singleContextChoice === 'full' ? '完整历史' : `近期 ${singleContextWindow} 轮${singleContextChoice === 'memory' ? ` · 记忆 ${singleMemoryBytes} 字节` : ''}`} · 最多 {maxSteps} 步 · {executionSeconds} 秒 · {selectedModel === 'fake' || currentSingleModelMeta?.provider === 'fake' ? 'Token 模拟用量' : `Token 预算 ${singleTokenBudget ?? '未设置'}`}</span>
+                    <small>{!meta || !selectedModel ? '目录就绪后可开始运行' : selectedModel === 'fake' ? 'Fake 离线模拟' : '将发起真实模型请求'}</small>
+                  </div>
+                  <div className="single-launch-action">
+                    <button type="button" className="btn-secondary" aria-controls="config-panel"
+                      aria-expanded={singleConfigOpen} disabled={isLoading}
+                      onClick={() => {
+                        if (singleConfigOpen) { focusExecutionStage(); return; }
+                        setSingleConfigOpen(true);
+                        requestAnimationFrame(() => {
+                          const panel = document.getElementById('config-panel');
+                          panel?.querySelector<HTMLElement>('summary')?.focus({ preventScroll: true });
+                          panel?.scrollIntoView({ block: 'start' });
+                        });
+                      }}>{singleConfigOpen ? '完成配置' : '修改任务与配置'}</button>
+                    <button id="run-button" className="btn-primary" onClick={handleRunEpisode} disabled={!isSingleRunReady}
+                      aria-describedby={singleRunHint ? 'single-run-hint' : undefined}>
+                      {isLoading ? <><div className="spinner" /><span>{loadingActivity === 'history' ? '正在读取历史记录…' : '正在运行 Episode…'}</span></> : <span>开始运行 Episode</span>}
+                    </button>
+                    {singleRunHint && !isLoading && <p id="single-run-hint" className="inline-note" role="status">{singleRunHint}</p>}
+                    {isLoading && <p id="single-run-hint" className="loading-note" role="status" aria-live="polite">{loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span></p>}
+                  </div>
+                </div>
+              <details className="card config-panel" id="config-panel" open={singleConfigOpen}
+                onToggle={(event) => setSingleConfigOpen(event.currentTarget.open)}>
                 <summary className="card-title config-panel-summary">
                   <span>{artifact ? '下次运行配置' : '配置单次运行'}</span>
                   <span className="config-summary-meta">
-                    {artifact
-                      ? `${selectedSingleTaskMeta?.name ?? '选择任务'} · ${currentSingleModelMeta?.name ?? (selectedModel || '选择模型')}`
-                      : `${singleTasks.length} 个可用任务`}
+                    {`${selectedSingleTaskMeta ? taskTitle(selectedSingleTaskMeta) : '选择任务'} · ${currentSingleModelMeta?.name ?? (selectedModel || '选择模型')}`}
                   </span>
                 </summary>
                 <div className="config-panel-content">
@@ -2422,12 +2550,14 @@ export default function App() {
                               setSelectedSingleTask(task.id);
                               setSingleToolTransport('local');
                               setSingleFaultProfile('none');
+                              focusExecutionStage();
                             }}
                             disabled={isLoading}>
                             <span className="task-option-topline">
-                              <strong>{task.name}</strong>
+                              <strong>{taskTitle(task)}</strong>
                               <span>{taskCategoryLabels[task.category] ?? task.category.replace(/_/g, ' ')}</span>
                             </span>
+                            <span className="task-code">{task.name}</span>
                             <span className="task-option-description">{taskDescription(task)}</span>
                             <span className="task-option-foot">
                               {task.split === 'development' ? '开发集' : task.split === 'evaluation' ? '评测集' : task.split} · 最多 {task.max_steps} 步 · {
@@ -2501,37 +2631,6 @@ export default function App() {
                 </fieldset>
 
 
-                  <div className="single-launch-bar">
-                    <div className="single-launch-summary" aria-live="polite">
-                      <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
-                      <span>
-                        {currentSingleModelMeta?.name || selectedModel || '请选择模型'}
-                        {' · '}{singleRuntimeBackend === 'langgraph' ? 'LangGraph' : singleRuntimeBackend === 'pydantic_ai' ? 'PydanticAI' : 'Reference'}
-                        {' · '}
-                        {singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp
-                          ? 'MCP HTTP'
-                          : selectedSuite === 'tool_lab_core' ? '本地工具' : '本地函数调用提议评测'}
-                      </span>
-                      <small>{!meta || !selectedModel ? '目录就绪后可开始运行'
-                        : selectedModel === 'fake' ? 'Fake 离线模拟' : '将发起真实模型请求'}</small>
-                      <span className="single-parameter-summary">{singleContextChoice === 'full' ? '完整历史' : `近期 ${singleContextWindow} 轮${singleContextChoice === 'memory' ? ` · 记忆 ${singleMemoryBytes} 字节` : ''}`} · 最多 {maxSteps} 步 · {executionSeconds} 秒</span>
-                    </div>
-                    <div className="single-launch-action">
-                      <button id="run-button" className="btn-primary"
-                        onClick={handleRunEpisode} disabled={!isSingleRunReady}
-                        aria-describedby={singleRunHint ? 'single-run-hint' : undefined}
-                        title={!meta ? '元数据尚未就绪' : !selectedSingleTaskMeta ? '请选择一个可见任务后再运行' : undefined}>
-                        {isLoading ? <><div className="spinner" /><span>{loadingActivity === 'history' ? '正在读取历史记录…' : '正在运行 Episode…'}</span></>
-                          : <span>开始运行 Episode</span>}
-                      </button>
-                      {singleRunHint && !isLoading && <p id="single-run-hint" className="inline-note" role="status">{singleRunHint}</p>}
-                      {isLoading && (
-                        <p id="single-run-hint" className="loading-note" role="status" aria-live="polite">
-                          {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
-                        </p>
-                      )}
-                    </div>
-                  </div>
                     </section>
                 <details className="advanced-settings single-advanced-settings">
                   <summary>
@@ -2673,26 +2772,21 @@ export default function App() {
                 </div>
               </details>
 
-              {/* Right Column: Single Episode Result + Trace View */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                 {/* Result Summary */}
-                <section className="card" id="results-panel" aria-labelledby="episode-results-title">
+                <section hidden={!artifact || singleConfigOpen || isLoading || episodeSection !== 'results'} className="card" id="results-panel" aria-labelledby="episode-results-title">
                   <div className="card-title">
-                    <h2 id="episode-results-title" className="section-heading">运行结果指标</h2>
+                    <h2 id="episode-results-title" className="section-heading">最终交付与运行分析</h2>
                     {artifact && (
                       <div className="result-heading-actions">
                       <a className="result-jump" href="#trace-panel" onClick={(event) => {
                         if (!tracePanelRef.current) return;
                         event.preventDefault();
-                        tracePanelRef.current.focus({ preventScroll: true });
-                        tracePanelRef.current.scrollIntoView({ block: 'start' });
+                        selectEpisodeSection('process');
+                        requestAnimationFrame(() => {
+                          tracePanelRef.current?.focus({ preventScroll: true });
+                          tracePanelRef.current?.scrollIntoView({ block: 'start' });
+                        });
                       }}>查看调用过程</a>
-                      <span
-                        id="eval-badge"
-                        className={`badge ${artifact.evaluation.success ? 'badge-green' : 'badge-red'}`}
-                      >
-                        {artifact.evaluation.success ? '评测通过 (SUCCESS)' : '评测未通过 (FAILED)'}
-                      </span>
                       </div>
                     )}
                   </div>
@@ -2706,12 +2800,12 @@ export default function App() {
                   )}
                 </section>
 
-                {artifact && <EpisodeReviewPanel key={artifact.episode.episode_id} artifact={artifact} models={meta?.models ?? []} />}
+                {artifact && !singleConfigOpen && !isLoading && <div hidden={episodeSection !== 'review'}><EpisodeReviewPanel key={artifact.episode.episode_id} artifact={artifact} models={meta?.models ?? []} /></div>}
 
                 {/* Trace Timeline */}
-                <section className="card" id="trace-panel" ref={tracePanelRef} tabIndex={-1} aria-labelledby="trace-title">
+                <section hidden={Boolean(artifact && episodeSection !== 'process')} className="card" id="trace-panel" ref={tracePanelRef} tabIndex={-1} aria-labelledby="trace-title">
                   <div className="card-title">
-                    <h2 id="trace-title" className="section-heading">{liveRun ? liveRun.status === 'completed' ? '本次执行过程' : '实时执行过程' : 'Trace Replay'}</h2>
+                    <h2 id="trace-title" className="section-heading">{liveRun ? liveRun.status === 'completed' ? '本次执行过程' : '实时执行过程' : artifact ? 'Trace Replay' : 'Agent 执行舞台'}</h2>
                     {artifact && (
                       <span className="badge" style={{ fontFamily: 'var(--font-mono)' }}>
                         {artifact.events.length} 个事件
@@ -2720,7 +2814,7 @@ export default function App() {
                   </div>
                   <div className="card-desc">
                     {liveRun ? liveRun.status === 'completed' ? '执行已完成，停留在最终输出；仅主动查看时进入历史回放。' : '节点随实际事件即时出现；结束后停留在最终输出，不自动重播。'
-                      : '仅回放已保存的事件和环境快照，不重新请求模型或执行工具。'}
+                      : artifact ? '仅回放已保存的事件和环境快照，不重新请求模型或执行工具。' : '核对上方任务与模型后开始运行。需要调整时点击“修改任务与配置”。'}
                   </div>
 
                   {liveRun ? (
@@ -2730,7 +2824,7 @@ export default function App() {
                         {liveRun.episodeId && ` Episode ID：${liveRun.episodeId}`}
                       </p>
                       {liveRun.events.length > 0 && <McpFlowReplay displayMode={liveRun.status === 'completed' ? 'completed' : 'live'} events={liveRun.events}
-                        environmentVersion={liveRun.environmentVersion} model={liveRun.model}
+                        environmentVersion={liveRun.environmentVersion} model={liveRun.model} provider={liveRun.provider}
                         finalState={artifact?.episode.final_state ?? {}} evaluation={artifact?.evaluation}
                         termination={artifact?.episode.termination_reason ?? (liveRun.status === 'running' ? '运行中' : '连接中断')}
                         detail={artifact?.episode.detail ?? ''} />}
@@ -2761,7 +2855,7 @@ export default function App() {
                       <div ref={replayMotionRef} className="replay-content" data-view={replayView}>
                       {replayView === 'flow' && <McpFlowReplay key={artifact.episode.episode_id}
                         events={artifact.events} environmentVersion={artifact.run_config.environment_version ?? ''}
-                        model={artifact.agent.model.model} finalState={artifact.episode.final_state}
+                        model={artifact.agent.model.model} provider={artifact.agent.model.provider} finalState={artifact.episode.final_state}
                         evaluation={artifact.evaluation}
                         termination={artifact.episode.termination_reason} detail={artifact.episode.detail}
                         eventIndex={replayIndex} onSelectEvent={setReplayIndex} />}
@@ -3061,67 +3155,20 @@ export default function App() {
                       </div>
                     </>
                   ) : (
-                    <div className="empty-state">
-                      <div className="empty-icon">暂无 Trace</div>
-                      <div>Trace 数据将在 Episode 执行完成后呈现在此。</div>
+                    <div className="stage-ready" aria-label="执行舞台准备状态">
+                      <div className="stage-ready-heading"><img src="/brand/fox-mark.svg" width="48" height="48" alt="" />
+                        <div><span>任务目标 · 当前草稿</span><h3>{selectedSingleTaskMeta ? taskTitle(selectedSingleTaskMeta) : '选择一个任务，开始探索'}</h3></div>
+                      </div>
+                      <p>{selectedSingleTaskMeta ? taskDescription(selectedSingleTaskMeta) : '从任务库选择任务，或展开上方配置查看目标与执行设置。'}</p>
+                      <div className="stage-ready-note"><span className="stage-ready-status">尚未开始</span><p>启动后，模型行动与工具反馈将实时出现在这里；实际读取的依据在右侧同步展示。</p></div>
                     </div>
                   )}
                 </section>
               </div>
             </div>
-            {resumableEpisodeIds.length > 0 && (
-              <section className="card resumable-panel" aria-labelledby="resumable-title">
-                <div className="card-title" id="resumable-title">待恢复的单次运行</div>
-                <p className="card-desc">
-                  仅列出上次后端进程留下的运行。恢复可能重新发送中断中的模型请求并产生额外用量。
-                </p>
-                <div className="resumable-list">
-                  {resumableEpisodeIds.map((id) => (
-                    <button key={id} className="btn-secondary" disabled={isLoading}
-                      onClick={() => handleResumeEpisode(id)}>
-                      恢复 Episode <code>{id}</code>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            )}
-            {recentEpisodeIds.length > 0 && (
-              <section className="card recent-episodes" aria-labelledby="recent-episodes-title">
-                <div className="card-title" id="recent-episodes-title">最近运行</div>
-                <p className="card-desc">历史条目仅通过 GET 回读；切换历史产物不会发起新运行。</p>
-                <div className="recent-episode-list">
-                  {recentEpisodeIds.map((id) => {
-                    const summary = episodeHistorySummaries[id];
-                    const status = summary?.status === 'ready'
-                      ? summary.success === undefined ? '结果未记录' : summary.success ? '评测通过' : '评测未通过'
-                      : summary?.status === 'error' ? '摘要暂不可用' : '读取摘要中';
-                    const statusClass = summary?.status === 'ready'
-                      ? summary.success === undefined ? 'badge' : summary.success ? 'badge-green' : 'badge-red'
-                      : 'badge';
-                    const parsedTime = summary?.timestamp ? new Date(summary.timestamp) : null;
-                    const time = parsedTime && !Number.isNaN(parsedTime.getTime())
-                      ? parsedTime.toLocaleString() : '时间未记录';
-                    return (
-                      <article className="recent-episode-row" key={id}>
-                        <button type="button" className="recent-episode-open"
-                          onClick={() => loadEpisodeById(id)} disabled={isLoading}>
-                          <span className="recent-episode-main">
-                            <strong>{summary?.taskName ?? '读取历史 Episode'}</strong>
-                            <span>{summary?.modelId ?? (summary?.status === 'error' ? '无法读取摘要' : '模型信息读取中')} · {time}</span>
-                          </span>
-                          <span className={`badge ${statusClass}`}>{status}</span>
-                        </button>
-                        <button type="button" className="btn-secondary recent-episode-copy"
-                          aria-label={`复制 Episode ID ${id}`}
-                          onClick={async () => setCopyNotice(await copyTextToClipboard(id, 'Episode ID'))}>
-                          复制 ID
-                        </button>
-                      </article>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
+            <ClassroomScenarios tasks={meta?.tasks ?? []} disabled={isLoading || metadataLoading || !meta}
+              selectedTaskNames={(meta?.tasks ?? []).filter((task) => task.id === selectedSingleTask).map((task) => task.name)}
+              hasSavedResult={Boolean(artifact || experiment || activeJobId)} onConfigure={configureClassroomScenario} />
           </div>
         )}
       </main>

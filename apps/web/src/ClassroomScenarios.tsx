@@ -7,31 +7,33 @@ const scenarios = [
 ];
 
 /** Configure existing public scenarios without starting inference or editing history. */
-export function ClassroomScenarios({ tasks, disabled, hasSavedResult, onConfigure }: {
+export function ClassroomScenarios({ tasks, disabled, hasSavedResult, selectedTaskNames, onConfigure }: {
   tasks: TaskOption[];
   disabled: boolean;
   hasSavedResult: boolean;
+  selectedTaskNames: string[];
   onConfigure: (task: TaskOption, target: 'single' | 'experiment') => void;
 }) {
   return <details className="classroom-scenarios card" open={!hasSavedResult}>
-    <summary><strong>课堂演示场景</strong><span>选择场景，配置后再运行</span></summary>
-    <p className="classroom-intro">自建仿真 · 提交任务结论和已读依据。实时演示观察执行过程；上下文对照比较同一任务的两种历史保留策略。</p>
+    <summary><strong>课堂演示 · 快速配置</strong><span>选择场景后，在下方确认并运行</span></summary>
     <div className="classroom-grid">
       {scenarios.map((scenario) => {
         const task = tasks.find((item) => item.name === scenario.name && item.suite === 'tool_lab_core' && item.category === 'evidence_chain');
-        return <article className="classroom-scenario" key={scenario.name}>
+        return <article className={`classroom-scenario ${selectedTaskNames.includes(scenario.name) ? 'selected' : ''}`} key={scenario.name}>
+          <div className="classroom-scenario-copy">
           <div className="classroom-scenario-heading"><h2>{scenario.title}</h2><span>{scenario.count} 份关联依据</span></div>
           <p>{scenario.summary}</p>
           <small>{task ? `最多 ${task.max_steps} 步 · 单次 Token 预算 ${task.token_budget}` : '当前任务目录未提供此场景'}</small>
+          </div>
           <div className="classroom-actions">
-            <button type="button" className="btn-primary" disabled={disabled || !task}
+            <button type="button" className="btn-secondary classroom-configure" disabled={disabled || !task}
               aria-label={`配置${scenario.title}实时演示`} onClick={() => task && onConfigure(task, 'single')}>实时演示</button>
-            <button type="button" className="btn-secondary" disabled={disabled || !task}
+            <button type="button" className="btn-text" disabled={disabled || !task}
               aria-label={`配置${scenario.title}上下文对照`} onClick={() => task && onConfigure(task, 'experiment')}>上下文对照</button>
           </div>
         </article>;
       })}
     </div>
-    <p className="classroom-footnote">沿用当前模型，仅填写下次运行配置。上下文对照为同任务、Seed 1、各运行一次，共 2 个 Episode；结果可能成功或失败。</p>
+    <details className="classroom-help"><summary>场景与对照说明</summary><p className="classroom-footnote">自建仿真 · 沿用当前模型，仅填写下次运行配置。上下文对照为同任务、Seed 1、各运行一次，共 2 个 Episode；结果可能成功或失败。</p></details>
   </details>;
 }
