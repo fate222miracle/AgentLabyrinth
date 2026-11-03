@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { readApi } from './apiClient';
 import {
-  episodeReviewListResponseSchema,
+  episodeReviewPartialListResponseSchema,
   requireIdentity,
   type EpisodeReview,
   type ExperimentArtifact,
@@ -32,11 +32,12 @@ export function ExperimentReviewSummary({ experiment }: Props) {
     const controller = new AbortController();
     setLoading(true);
     void Promise.all(experiment.episode_ids.map(async (episodeId) => {
-      const response = await fetch(`/api/v1/episodes/${encodeURIComponent(episodeId)}/reviews`, {
+      const response = await fetch(`/api/v1/episodes/${encodeURIComponent(episodeId)}/reviews?include_integrity=true`, {
         signal: controller.signal,
       });
-      const data = await readApi(response, episodeReviewListResponseSchema);
+      const data = await readApi(response, episodeReviewPartialListResponseSchema);
       requireIdentity(data.episode_id, episodeId);
+      if (data.unreadable_count > 0) throw new Error('评审记录不完整，暂无法统计覆盖率和一致性。');
       return data.reviews;
     })).then((groups) => {
       setReviewedEpisodes(groups.filter((group) => group.some((review) =>
@@ -80,12 +81,12 @@ export function ExperimentReviewSummary({ experiment }: Props) {
     <details className="experiment-review-summary"
       onToggle={(event) => setOpened(event.currentTarget.open)}>
       <summary>已保存的模型评审 <span>只读查看，不重新调用模型</span></summary>
-      <div className="review-summary-grid" aria-live="polite">
+      {!error && !loading && loaded && <div className="review-summary-grid" aria-live="polite">
         <div><strong>{reviewedEpisodes} / {experiment.episode_ids.length}</strong><span>已有复核的运行</span></div>
         <div><strong>{summary.completed}</strong><span>已完成的复核</span></div>
         <div><strong>{summary.passed} / {summary.rejected} / {summary.uncertain}</strong><span>通过 / 不通过 / 暂无法判断</span></div>
         <div><strong>{summary.comparable ? `${summary.agreements} / ${summary.comparable}` : '暂无'}</strong><span>与规则评分同向</span></div>
-      </div>
+      </div>}
       {loading && <p role="status" className="loading-note">正在读取各 Episode 的独立复核…</p>}
       {error && <p role="alert" className="review-failure">{error}</p>}
       {!loading && !error && reviewedEpisodes === 0 && <p className="metric-sub">当前实验没有已保存的大模型评审。</p>}

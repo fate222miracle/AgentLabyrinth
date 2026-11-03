@@ -6,24 +6,25 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from uuid import UUID, uuid4, uuid5
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from packages.application.checkpoint import (
     CheckpointStore,
-    read_completed_episode,
+    EpisodeStore,
     resume_checkpointed_episode,
     run_checkpointed_episode,
 )
-from packages.application.trace import read_artifact, write_text_atomically
+from packages.application.trace import write_text_atomically
 from packages.domain.models import (
     AgentSpec,
     ContextPolicy,
     EpisodeArtifact,
     EventType,
     PlanningConfig,
+    ReflectionConfig,
     RunConfig,
     TaskSpec,
     TerminationReason,
@@ -40,8 +41,25 @@ from packages.tools.executor import ToolExecutor
 from packages.tools.registry import DefaultToolValidator
 
 ComparisonAxis = Literal[
-    "recovery_policy", "runtime_backend", "context_policy", "memory_ablation", "planning"
+    "recovery_policy",
+    "runtime_backend",
+    "context_policy",
+    "memory_ablation",
+    "planning",
+    "reflection",
 ]
+
+
+class ExperimentStore(Protocol):
+    """Persistence port for one frozen plan and its immutable result."""
+
+    def save_experiment_plan(self, plan: "ExperimentCheckpoint") -> None: ...
+
+    def load_experiment_plan(self, experiment_id: UUID) -> "ExperimentCheckpoint | None": ...
+
+    def save_experiment_result(self, artifact: "ExperimentArtifact") -> None: ...
+
+    def load_experiment_result(self, experiment_id: UUID) -> "ExperimentArtifact | None": ...
 
 
 class PairComparison(BaseModel):
@@ -141,7 +159,7 @@ class ExperimentArtifact(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] = "1.2"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"] = "1.2"
     experiment_id: UUID
     created_at: str
     config: dict[str, Any]
@@ -159,6 +177,7 @@ class ExperimentArtifact(BaseModel):
             "1.5",
             "1.6",
             "1.7",
+            "1.8",
         ):
             raise ValueError("Global Token budget requires experiment revision 1.3")
         if self.schema_version == "1.7" and self.config.get("comparison_axis") != "runtime_backend":
@@ -220,6 +239,41 @@ class ExperimentArtifact(BaseModel):
                 )
             ):
                 raise ValueError("Planning challenge has no recovery metrics")
+        if self.config.get("comparison_axis") == "reflection":
+            if self.schema_version != "1.8":
+                raise ValueError("Reflection challenge requires experiment revision 1.8")
+            left_arm = self.config.get("baseline_agent")
+            right_arm = self.config.get("recovery_agent")
+            if not isinstance(left_arm, dict) or not isinstance(right_arm, dict):
+                raise ValueError("Reflection challenge requires both saved arm configurations")
+            if left_arm.get("reflection") is not None:
+                raise ValueError("Reflection challenge requires a plain baseline")
+            ReflectionConfig.model_validate(right_arm.get("reflection"))
+            if (
+                any(
+                    left_arm.get(field) != right_arm.get(field)
+                    for field in (
+                        "runtime_backend",
+                        "runtime_strategy",
+                        "runtime_version",
+                        "recovery_policy",
+                        "context_policy",
+                    )
+                )
+                or left_arm.get("recovery_policy") != "none"
+            ):
+                raise ValueError("Reflection challenge requires one fixed plain Runtime policy")
+            if any(pair.retry_eligible is not None or pair.recovered for pair in self.pairs) or any(
+                value is not None
+                for value in (
+                    self.metrics.retry_eligible_count,
+                    self.metrics.retry_recovery_count,
+                    self.metrics.retry_recovery_rate,
+                )
+            ):
+                raise ValueError("Reflection challenge has no recovery metrics")
+        if self.schema_version == "1.8" and self.config.get("comparison_axis") != "reflection":
+            raise ValueError("Experiment revision 1.8 supports only the reflection challenge")
         if self.schema_version == "1.5" and self.config.get("comparison_axis") != "memory_ablation":
             raise ValueError("Experiment revision 1.5 supports only memory ablation")
         if self.config.get("comparison_axis") == "memory_ablation":
@@ -296,7 +350,7 @@ class ExperimentCheckpoint(BaseModel):
     """Frozen paired-run plan; completed Episode artifacts are the progress ledger."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"] = "1.0"
     experiment_id: UUID
     created_at: str
     baseline_agent: AgentSpec
@@ -319,6 +373,7 @@ class ExperimentCheckpoint(BaseModel):
             "1.3",
             "1.4",
             "1.5",
+            "1.6",
         ):
             raise ValueError("Global Token budget requires experiment plan revision 1.1")
         if self.comparison_axis == "runtime_backend" and "pydantic_ai" in (
@@ -346,12 +401,18 @@ class ExperimentCheckpoint(BaseModel):
             raise ValueError("Planning challenge requires plan revision 1.4")
         if self.schema_version == "1.4" and self.comparison_axis != "planning":
             raise ValueError("Plan revision 1.4 supports only the planning challenge")
+        if self.comparison_axis == "reflection" and self.schema_version != "1.6":
+            raise ValueError("Reflection challenge requires plan revision 1.6")
+        if self.schema_version == "1.6" and self.comparison_axis != "reflection":
+            raise ValueError("Plan revision 1.6 supports only the reflection challenge")
         if self.comparison_axis == "context_policy":
             _validate_context_agents(self.baseline_agent, self.recovery_agent)
         if self.comparison_axis == "memory_ablation":
             _validate_memory_agents(self.baseline_agent, self.recovery_agent)
         if self.comparison_axis == "planning":
             _validate_planning_agents(self.baseline_agent, self.recovery_agent)
+        if self.comparison_axis == "reflection":
+            _validate_reflection_agents(self.baseline_agent, self.recovery_agent)
 
 
 def experiment_checkpoint_path(artifacts_dir: Path, experiment_id: UUID) -> Path:
@@ -448,6 +509,28 @@ def _validate_planning_agents(baseline_agent: AgentSpec, recovery_agent: AgentSp
         raise ValueError("Planning challenge agents must share all inputs except identity and plan")
 
 
+def _validate_reflection_agents(baseline_agent: AgentSpec, recovery_agent: AgentSpec) -> None:
+    """Reject any variable other than the bounded reflection component."""
+    if (
+        baseline_agent.runtime_backend != recovery_agent.runtime_backend
+        or baseline_agent.runtime_strategy != recovery_agent.runtime_strategy
+        or baseline_agent.recovery_policy != "none"
+        or recovery_agent.recovery_policy != "none"
+        or baseline_agent.context_policy != ContextPolicy(mode="full")
+        or recovery_agent.context_policy != baseline_agent.context_policy
+        or baseline_agent.planning is not None
+        or recovery_agent.planning is not None
+        or baseline_agent.reflection is not None
+        or recovery_agent.reflection is None
+    ):
+        raise ValueError("Reflection challenge requires a plain left and reflection-only right")
+    fixed_fields = {"id", "name", "reflection"}
+    if baseline_agent.model_dump(exclude=fixed_fields) != recovery_agent.model_dump(
+        exclude=fixed_fields
+    ):
+        raise ValueError("Reflection challenge agents must share all inputs except reflection")
+
+
 def create_experiment_plan(
     baseline_agent: AgentSpec,
     recovery_agent: AgentSpec,
@@ -466,6 +549,8 @@ def create_experiment_plan(
         shared_fields.append("context_policy")
     if comparison_axis != "planning":
         shared_fields.append("planning")
+    if comparison_axis != "reflection":
+        shared_fields.append("reflection")
     for field in shared_fields:
         if getattr(baseline_agent, field) != getattr(recovery_agent, field):
             raise ValueError(f"Paired agents must share {field}")
@@ -492,6 +577,8 @@ def create_experiment_plan(
         _validate_memory_agents(baseline_agent, recovery_agent)
     elif comparison_axis == "planning":
         _validate_planning_agents(baseline_agent, recovery_agent)
+    elif comparison_axis == "reflection":
+        _validate_reflection_agents(baseline_agent, recovery_agent)
     else:
         raise ValueError("Unknown comparison axis")
     raw_limit = config_metadata.get("max_reference_cost_usd")
@@ -501,7 +588,9 @@ def create_experiment_plan(
         raise ValueError("Reference cost budget requires a positive limit and price version")
     token_limit = _global_token_limit(config_metadata)
     plan = {
-        "schema_version": "1.5"
+        "schema_version": "1.6"
+        if comparison_axis == "reflection"
+        else "1.5"
         if "pydantic_ai" in (baseline_agent.runtime_backend, recovery_agent.runtime_backend)
         else "1.4"
         if comparison_axis == "planning"
@@ -543,6 +632,8 @@ async def run_experiment(
     resume_provider_factory: Callable[[int], ModelProvider] | None = None,
     experiment_id: UUID | None = None,
     before_arm: Callable[[], None] | None = None,
+    episode_store: EpisodeStore | None = None,
+    experiment_store: ExperimentStore | None = None,
 ) -> ExperimentArtifact:
     """Run or resume a fixed paired matrix, reusing completed Episode artifacts."""
     resolved_seeds = list(seeds) if seeds is not None else [seed]
@@ -562,17 +653,35 @@ async def run_experiment(
 
     if checkpoint_state is None:
         new_id = prepared.experiment_id
-        if (
-            experiment_checkpoint_path(artifacts_dir, new_id).exists()
+        exists = (
+            experiment_store.load_experiment_plan(new_id) is not None
+            or experiment_store.load_experiment_result(new_id) is not None
+            if experiment_store is not None
+            else experiment_checkpoint_path(artifacts_dir, new_id).exists()
             or (artifacts_dir / "experiments" / f"{new_id}.json").exists()
-        ):
+        )
+        if exists:
             raise ValueError("Experiment ID already exists")
         checkpoint_state = prepared
-        write_experiment_checkpoint(
-            experiment_checkpoint_path(artifacts_dir, checkpoint_state.experiment_id),
-            checkpoint_state,
-        )
+        if experiment_store is not None:
+            experiment_store.save_experiment_plan(checkpoint_state)
+        else:
+            write_experiment_checkpoint(
+                experiment_checkpoint_path(artifacts_dir, checkpoint_state.experiment_id),
+                checkpoint_state,
+            )
     else:
+        existing_result = (
+            experiment_store.load_experiment_result(checkpoint_state.experiment_id)
+            if experiment_store is not None
+            else read_experiment(
+                artifacts_dir / "experiments" / f"{checkpoint_state.experiment_id}.json"
+            )
+            if (artifacts_dir / "experiments" / f"{checkpoint_state.experiment_id}.json").exists()
+            else None
+        )
+        if existing_result is not None:
+            raise ValueError("Experiment result already exists; inspect the saved result")
         checkpoint_state.verify()
         if experiment_id is not None and experiment_id != checkpoint_state.experiment_id:
             raise ValueError("Experiment resume ID mismatch")
@@ -594,6 +703,7 @@ async def run_experiment(
     committed_reference_cost = Decimal("0")
     token_limit = _global_token_limit(checkpoint_state.config_metadata)
     token_ledger: dict[UUID, int] = {}
+    active_episode_store = episode_store or CheckpointStore(artifacts_dir / "checkpoints")
 
     def reported_tokens(
         events: tuple[TraceEvent, ...] | list[TraceEvent], calls: int, total: int
@@ -617,14 +727,13 @@ async def run_experiment(
     ]
     if token_limit is not None:
         # Rebuild once; later completions replace their own safe-point count.
-        store = CheckpointStore(artifacts_dir / "checkpoints")
         for pair_index, (task, current_seed, _) in enumerate(runs):
             for arm, agent in (("baseline", baseline_agent), ("recovery", recovery_agent)):
                 arm_id = uuid5(experiment_id, f"{pair_index}:{arm}")
                 expected_config = RunConfig(
                     seed=current_seed, runtime_version=runtime_version(agent.runtime_backend)
                 )
-                artifact = read_completed_episode(arm_id, artifacts_dir)
+                artifact = active_episode_store.load_completed(arm_id)
                 if artifact is not None:
                     if (
                         artifact.agent != agent
@@ -638,8 +747,12 @@ async def run_experiment(
                         artifact.episode.model_call_count,
                         usage.prompt_tokens + usage.completion_tokens,
                     )
-                elif store.path(arm_id).is_file():
-                    saved = store.load(arm_id)
+                else:
+                    try:
+                        saved = active_episode_store.load_checkpoint(arm_id)
+                    except FileNotFoundError:
+                        saved = None
+                if artifact is None and saved is not None:
                     if (
                         saved.agent != agent
                         or saved.task != task
@@ -652,8 +765,6 @@ async def run_experiment(
                         budget.model_call_count,
                         budget.prompt_tokens + budget.completion_tokens,
                     )
-                elif (artifacts_dir / f"{arm_id}.json").is_file():
-                    raise ValueError("Malformed experiment result has no valid safe point")
 
     def record_tokens(artifact: EpisodeArtifact) -> None:
         """Replace one Episode's accumulated usage, never add it twice on resume."""
@@ -695,25 +806,21 @@ async def run_experiment(
             validator=validator,
             tool_set_version=agent.tool_set_version,
         )
-        artifact_path = artifacts_dir / f"{episode_id}.json"
-        store = CheckpointStore(artifacts_dir / "checkpoints")
-        if artifact_path.is_file():
-            try:
-                artifact = read_artifact(artifact_path)
-            except ValueError:
-                if not store.path(episode_id).is_file():
-                    raise
-            else:
-                if (
-                    artifact.episode.episode_id != episode_id
-                    or artifact.agent != agent
-                    or artifact.task != task
-                    or artifact.run_config != config
-                ):
-                    raise ValueError("Saved experiment Episode provenance mismatch")
-                return artifact
+        artifact = active_episode_store.load_completed(episode_id)
+        if artifact is not None:
+            if (
+                artifact.episode.episode_id != episode_id
+                or artifact.agent != agent
+                or artifact.task != task
+                or artifact.run_config != config
+            ):
+                raise ValueError("Saved experiment Episode provenance mismatch")
+            return artifact
         check_reference_budget()
-        saved = store.load(episode_id) if store.path(episode_id).is_file() else None
+        try:
+            saved = active_episode_store.load_checkpoint(episode_id)
+        except FileNotFoundError:
+            saved = None
         if saved is not None and (
             saved.agent != agent or saved.task != task or saved.run_config != config
         ):
@@ -737,6 +844,7 @@ async def run_experiment(
                 environment,
                 OrderStatusEvaluator(),
                 artifacts_dir,
+                store=active_episode_store,
             )
         return await run_checkpointed_episode(
             agent,
@@ -748,6 +856,7 @@ async def run_experiment(
             artifacts_dir,
             fake_scenario=(config_metadata or {}).get("scenario"),
             episode_id=episode_id,
+            store=active_episode_store,
         )
 
     # Run every matrix cell serially: Baseline then Recovery under exact same conditions.
@@ -996,6 +1105,8 @@ async def run_experiment(
             if comparison_axis == "memory_ablation"
             else {"baseline": "No Planning", "recovery": "Declared Plan"}
             if comparison_axis == "planning"
+            else {"baseline": "No Reflection", "recovery": "Bounded Reflection"}
+            if comparison_axis == "reflection"
             else {"baseline": "Baseline Policy", "recovery": "Recovery Policy"}
         ),
         "baseline_agent": {
@@ -1057,6 +1168,8 @@ async def run_experiment(
             )
         if agent.planning is not None:
             exp_config[f"{arm}_agent"]["planning"] = agent.planning.model_dump(mode="json")
+        if agent.reflection is not None:
+            exp_config[f"{arm}_agent"]["reflection"] = agent.reflection.model_dump(mode="json")
 
     if config_metadata:
         # Execution inputs remain authoritative, including for non-API callers.
@@ -1067,7 +1180,9 @@ async def run_experiment(
     config_hash = compute_config_hash(exp_config)
 
     experiment_artifact = ExperimentArtifact(
-        schema_version="1.7"
+        schema_version="1.8"
+        if comparison_axis == "reflection"
+        else "1.7"
         if "pydantic_ai" in (baseline_agent.runtime_backend, recovery_agent.runtime_backend)
         else "1.6"
         if comparison_axis == "planning"
@@ -1088,11 +1203,16 @@ async def run_experiment(
     )
 
     # Persist experiment summary
-    exp_dir = artifacts_dir / "experiments"
-    exp_dir.mkdir(parents=True, exist_ok=True)
-    exp_file = exp_dir / f"{experiment_id}.json"
-    write_experiment(experiment_artifact, exp_file)
-    experiment_checkpoint_path(artifacts_dir, experiment_id).unlink(missing_ok=True)
+    if experiment_store is not None:
+        experiment_store.save_experiment_result(experiment_artifact)
+    else:
+        exp_dir = artifacts_dir / "experiments"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        exp_file = exp_dir / f"{experiment_id}.json"
+        if exp_file.exists():
+            raise ValueError("Experiment result already exists; inspect the saved result")
+        write_experiment(experiment_artifact, exp_file)
+        experiment_checkpoint_path(artifacts_dir, experiment_id).unlink(missing_ok=True)
 
     return experiment_artifact
 

@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import ValidationError
 
 from apps.api.schemas import (
     CreateEpisodeRequest,
@@ -16,6 +17,7 @@ from apps.api.schemas import (
     CreateExperimentRequest,
     EpisodeResponse,
     EpisodeReviewListResponse,
+    EpisodeReviewPartialListResponse,
     EpisodeReviewResponse,
     ErrorResponse,
     ExperimentDashboardResponse,
@@ -24,13 +26,8 @@ from apps.api.schemas import (
     ExperimentResponse,
     MetaResponse,
 )
-from apps.api.service import EpisodeService, ExperimentJobStopped
-from packages.application.experiment import (
-    ExperimentTokenBudgetError,
-    ReferenceCostBudgetExceeded,
-    experiment_checkpoint_path,
-    read_experiment_checkpoint,
-)
+from apps.api.service import DEFAULT_ARTIFACTS_DIR, EpisodeService, ExperimentJobStopped
+from packages.application.experiment import ExperimentTokenBudgetError, ReferenceCostBudgetExceeded
 from packages.domain.models import TraceEvent
 
 app = FastAPI(
@@ -70,7 +67,7 @@ async def require_local_browser_origin(
     return await call_next(request)
 
 
-_default_service = EpisodeService(live_model_catalog=True)
+_default_service: EpisodeService | None = None
 _stream_runs: set[asyncio.Task[None]] = set()
 _experiment_jobs: dict[UUID, asyncio.Task[None]] = {}
 _experiment_slots = asyncio.Semaphore(2)
@@ -115,6 +112,12 @@ def _schedule_experiment_job(service: EpisodeService, experiment_id: UUID) -> No
 
 def get_episode_service() -> EpisodeService:
     """Dependency provider for EpisodeService."""
+    global _default_service
+    if _default_service is None:
+        _default_service = EpisodeService(
+            live_model_catalog=True,
+            database_path=DEFAULT_ARTIFACTS_DIR / "agentlabyrinth.sqlite3",
+        )
     return _default_service
 
 
@@ -144,7 +147,11 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         schema_version="1.0",
         request_id=req_id,
         error_code="REQUEST_FAILED",
-        message=str(exc.detail),
+        message=(
+            "Stored data is invalid or unavailable."
+            if isinstance(exc.__cause__, (ValidationError, OSError, UnicodeError))
+            else str(exc.detail)
+        ),
     )
     return JSONResponse(
         status_code=exc.status_code,
@@ -232,7 +239,13 @@ async def stream_episode(
                 (
                     "error",
                     ErrorResponse(
-                        request_id=req.request_id, error_code="VALIDATION_ERROR", message=str(exc)
+                        request_id=req.request_id,
+                        error_code="VALIDATION_ERROR",
+                        message=(
+                            "Stored data is invalid or unavailable."
+                            if isinstance(exc, (ValidationError, UnicodeError))
+                            else str(exc)
+                        ),
                     ).model_dump_json(),
                 )
             )
@@ -277,7 +290,7 @@ async def list_resumable_episodes(
     service: Annotated[EpisodeService, Depends(get_episode_service)],
 ) -> list[UUID]:
     """Return IDs that can safely be resumed after an API restart."""
-    return service.resumable_episode_ids()
+    return await asyncio.to_thread(service.resumable_episode_ids)
 
 
 @app.post(
@@ -365,15 +378,26 @@ async def get_episode_review(
 
 @app.get(
     "/api/v1/episodes/{episode_id}/reviews",
-    response_model=EpisodeReviewListResponse,
+    response_model=EpisodeReviewListResponse | EpisodeReviewPartialListResponse,
     summary="List saved reviews for one Episode without invoking a Judge",
 )
 async def list_episode_reviews(
     episode_id: UUID,
     service: Annotated[EpisodeService, Depends(get_episode_service)],
-) -> EpisodeReviewListResponse:
+    include_integrity: bool = False,
+) -> EpisodeReviewListResponse | EpisodeReviewPartialListResponse:
     """Return only persisted reviews for the requested source Episode."""
     try:
+        if include_integrity:
+            reviews, unreadable = await asyncio.to_thread(
+                service.list_episode_reviews_partial, episode_id
+            )
+            return EpisodeReviewPartialListResponse(
+                request_id=uuid4(),
+                episode_id=episode_id,
+                reviews=reviews,
+                unreadable_count=unreadable,
+            )
         reviews = await asyncio.to_thread(service.list_episode_reviews, episode_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -456,11 +480,8 @@ async def list_resumable_experiment_jobs(
     service: Annotated[EpisodeService, Depends(get_episode_service)],
 ) -> list[UUID]:
     """Discover stopped jobs after a refresh or API process restart."""
-    return [
-        experiment_id
-        for experiment_id in service.resumable_experiment_job_ids()
-        if experiment_id not in _experiment_jobs
-    ]
+    saved_ids = await asyncio.to_thread(service.resumable_experiment_job_ids)
+    return [experiment_id for experiment_id in saved_ids if experiment_id not in _experiment_jobs]
 
 
 @app.get("/api/v1/experiments/jobs/{experiment_id}", response_model=ExperimentJobState)
@@ -469,10 +490,21 @@ async def get_experiment_job(
     service: Annotated[EpisodeService, Depends(get_episode_service)],
 ) -> ExperimentJobState:
     """Report persisted state; an orphaned running job is an interruption."""
-    state = service.get_experiment_job(experiment_id)
+    # A job can finish while its earlier running snapshot is read off-loop.
+    active_at_start = experiment_id in _experiment_jobs
+    state = await asyncio.to_thread(service.get_experiment_job, experiment_id)
     if state is None:
         raise HTTPException(status_code=404, detail="Experiment job not found")
-    if state.status in {"queued", "running"} and experiment_id not in _experiment_jobs:
+    if (
+        state.status in {"queued", "running"}
+        and not active_at_start
+        and experiment_id not in _experiment_jobs
+    ):
+        latest = await asyncio.to_thread(service.get_experiment_job, experiment_id)
+        if latest is None:
+            raise HTTPException(status_code=404, detail="Experiment job not found")
+        if latest != state or experiment_id in _experiment_jobs:
+            return latest
         return state.model_copy(update={"status": "interrupted"})
     return state
 
@@ -490,12 +522,10 @@ async def control_experiment_job(
             raise HTTPException(status_code=409, detail="Job is not resumable")
         if experiment_id in _experiment_jobs:
             raise HTTPException(status_code=409, detail="Job is already active")
-        if not experiment_checkpoint_path(service.artifacts_dir, experiment_id).is_file():
-            raise HTTPException(status_code=409, detail="Experiment plan is unavailable")
         try:
-            plan = read_experiment_checkpoint(
-                experiment_checkpoint_path(service.artifacts_dir, experiment_id)
-            )
+            plan = service.get_experiment_plan(experiment_id)
+            if plan is None:
+                raise HTTPException(status_code=409, detail="Experiment plan is unavailable")
             if plan.experiment_id != experiment_id:
                 raise ValueError("Foreign experiment plan")
         except ValueError as exc:
@@ -534,7 +564,7 @@ async def list_resumable_experiments(
     service: Annotated[EpisodeService, Depends(get_episode_service)],
 ) -> list[UUID]:
     """Return persisted experiment plans that can continue with their original IDs."""
-    return service.resumable_experiment_ids()
+    return await asyncio.to_thread(service.resumable_experiment_ids)
 
 
 @app.post(

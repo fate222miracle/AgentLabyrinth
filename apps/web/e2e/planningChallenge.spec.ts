@@ -187,9 +187,10 @@ test('planning challenge runs from Web and shows the declared plan apart from ex
   expect(csv.split('\r\n')[0]).toContain('planning_algorithm_version');
   expect(csv).toContain('"no_plan"');
   expect(csv).toContain('"declared_plan"');
-  const csvRows = csv.trim().split('\r\n').slice(1);
-  expect(csvRows[0].split(',').at(-1)).toBe('');
-  expect(csvRows[1].split(',').at(-1)).toBe('"plan-update-v1"');
+  const csvLines = csv.trim().split('\r\n');
+  const planningColumn = csvLines[0].split(',').indexOf('"planning_algorithm_version"');
+  expect(csvLines[1].split(',')[planningColumn]).toBe('');
+  expect(csvLines[2].split(',')[planningColumn]).toBe('"plan-update-v1"');
   await download.saveAs(testInfo.outputPath('planning-challenge.csv'));
   for (const [width, height] of [[1440, 900], [1280, 800], [768, 1024], [390, 844]]) {
     await page.setViewportSize({ width, height });

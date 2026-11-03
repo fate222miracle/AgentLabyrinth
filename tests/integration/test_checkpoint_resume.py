@@ -103,7 +103,8 @@ def test_resume_across_processes(backend: str, tmp_path: Path) -> None:
     assert checkpoint.session.budget.model_call_count == 1
     assert checkpoint.session.budget.tool_call_count == 1
     assert checkpoint.session.next_node == "model"
-    (tmp_path / f"{episode_id}.json").write_text("{", encoding="utf-8")
+    damaged = tmp_path / f"{episode_id}.json"
+    damaged.write_text("{", encoding="utf-8")
 
     from apps.api.main import app, get_episode_service
     from apps.api.service import EpisodeService
@@ -111,7 +112,11 @@ def test_resume_across_processes(backend: str, tmp_path: Path) -> None:
     service = EpisodeService(artifacts_dir=tmp_path)
     app.dependency_overrides[get_episode_service] = lambda: service
     try:
-        with TestClient(app) as client:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            assert client.get("/api/v1/episodes/resumable").status_code == 500
+            assert damaged.read_text(encoding="utf-8") == "{"
+            # The test explicitly removes its own corrupt fixture to exercise normal recovery.
+            damaged.unlink()
             listed = client.get("/api/v1/episodes/resumable")
             assert listed.status_code == 200
             assert str(episode_id) in listed.json()

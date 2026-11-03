@@ -43,8 +43,8 @@ test('real Judge requires explicit selection and exactly one click; refresh only
   } });
   const history = [seed.review];
   await showRealModel(page);
-  await page.route(`**/api/v1/episodes/${id}/reviews`, route => route.fulfill({
-    json: { schema_version: '1.0', request_id: seed.request_id, episode_id: id, reviews: history },
+  await page.route(`**/api/v1/episodes/${id}/reviews?*`, route => route.fulfill({
+    json: { schema_version: '1.1', request_id: seed.request_id, episode_id: id, reviews: history, unreadable_count: 0 },
   }));
   const posts: unknown[] = [];
   let releaseReply: () => void = () => { throw new Error('No pending request'); };
@@ -108,8 +108,8 @@ test('saved model versions, unknown usage and legacy CSV remain readable without
       reviewer_label: '=SUM(1,2)', rationale: '说明含"引号"\n第二行' },
   ];
   await showRealModel(page);
-  await page.route(`**/api/v1/episodes/${id}/reviews`, route => route.fulfill({
-    json: { schema_version: '1.0', request_id: seed.request_id, episode_id: id, reviews },
+  await page.route(`**/api/v1/episodes/${id}/reviews?*`, route => route.fulfill({
+    json: { schema_version: '1.1', request_id: seed.request_id, episode_id: id, reviews, unreadable_count: 0 },
   }));
   const writes: string[] = [];
   page.on('request', value => {
@@ -155,6 +155,21 @@ test('saved model versions, unknown usage and legacy CSV remain readable without
   expect(writes).toEqual([]);
 });
 
+test('incomplete review history warns and cannot be exported as complete', async ({ page, request }) => {
+  const artifact = await savedEpisode(request);
+  const id = artifact.episode.episode_id;
+  const seed = await fakeReview(request, id);
+  await page.route(`**/api/v1/episodes/${id}/reviews?*`, route => route.fulfill({
+    json: { schema_version: '1.1', request_id: seed.request_id, episode_id: id,
+      reviews: [seed.review], unreadable_count: 1 },
+  }));
+  await page.goto(`/?episode_id=${id}`);
+  const panel = page.locator('.episode-review-card');
+  await expect(panel.getByRole('alert')).toContainText('列表可能不完整');
+  await expect(panel.getByRole('button', { name: '导出全部记录 CSV' })).toHaveCount(0);
+  await expect(panel.getByText('尚无大模型评审', { exact: false })).toHaveCount(0);
+});
+
 test('experiment review summary counts only saved real model reviews and stays read-only', async ({ page, request }) => {
   await page.goto('/?mode=experiment');
   await page.getByRole('button', { name: '清空', exact: true }).click();
@@ -166,8 +181,9 @@ test('experiment review summary counts only saved real model reviews and stays r
   const pair = experiment.pairs[0];
   const reviewedId = pair.recovery_success ? pair.recovery_episode_id : pair.baseline_episode_id;
   const seed = await fakeReview(request, reviewedId);
-  await page.route(`**/api/v1/episodes/${reviewedId}/reviews`, route => route.fulfill({ json: {
-    schema_version: '1.0', request_id: seed.request_id, episode_id: reviewedId,
+  let unreadable = 0;
+  await page.route(`**/api/v1/episodes/${reviewedId}/reviews?*`, route => route.fulfill({ json: {
+    schema_version: '1.1', request_id: seed.request_id, episode_id: reviewedId, unreadable_count: unreadable,
     reviews: [seed.review, { ...seed.review, review_id: '10000000-0000-4000-8000-000000000029',
       provider: 'aihubmix', model: MODEL, verdict: 'pass' }],
   } }));
@@ -176,6 +192,11 @@ test('experiment review summary counts only saved real model reviews and stays r
   await page.locator('.experiment-review-summary > summary').click();
   await expect(page.locator('.experiment-review-summary')).toContainText(`1 / ${experiment.episode_ids.length}`);
   await expect(page.locator('.review-summary-grid > div').nth(1).locator('strong')).toHaveText('1');
+  unreadable = 1;
+  await page.reload();
+  await page.locator('.experiment-review-summary > summary').click();
+  await expect(page.locator('.experiment-review-summary [role="alert"]')).toContainText('评审记录不完整');
+  await expect(page.locator('.review-summary-grid')).toHaveCount(0);
   expect(writes).toEqual([]);
 });
 

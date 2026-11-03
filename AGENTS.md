@@ -2,6 +2,18 @@
 
 唯一权威需求是 `docs/product/requirements.md`，已核对版本 **V0.6**。本文件和任务卡只指导执行，不替代需求。
 
+负责人2026-10-31确认按ADR-044实施并要求完成后提交GitHub。一次有界Reflection已成品闭环：两次相同成功无进展只读后，同Provider无工具严格JSON修正一次，计入原预算，不重试；三Runtime、SQLite恢复、单次/对照API-Web、实时/回放、CSV及公开旧别名题均接入。最终`scripts.check` 退出0：749Python/50Node/76Edge、126文件Ruff-Mypy、22格零退化/audit0，证据见current-state。Fake只证机制，未发真实模型/Judge、未迁移真实历史。本轮Git授权仅限已验证源码/测试/文档，不自动合并main或延伸为以后授权。
+
+负责人2026-10-30要求借鉴Pi设计思想但不引入依赖，全力推进V0.3剩余功能。Accepted ADR-043阶段2新数据链路已完成：产品默认SQLite保存新单次/成对Episode、Experiment计划/结果、Job和Review；旧JSON只读兼容，不迁移/删除。最终733Python/48Node/74Edge、22格零退化及audit0通过，证据与首次Dashboard失败见current-state。V0.3唯一未实施核心项为Reflection；具体算法、公开任务、失败语义和单变量协议已写入Proposed ADR-044，按需求§0.3须负责人确认后实施，不能把方案当成已完成或用额外请求冒充创新。A1保持已接受披露边界；不自动真实模型、Git提交/推送或真实历史迁移。
+
+负责人2026-10-29要求完成当前数据持久化整项切片后统一汇报。ADR-043首个单Episode成品切片已接Application Port/SQLAlchemy Adapter/Alembic：产品新单次/实时Episode以SQLite同一记录保存安全点、Trace和结果，数据库原生恢复、不可覆盖、旧JSON只读兼容及在线备份已测。实际732Python/123文件Ruff-Mypy/48Node/74Edge/22格零退化/audit0见current-state；默认Chromium缺本机可执行文件，系统Edge实测通过，不能称完整脚本原命令退出0。Experiment/Job/Review和真实历史迁移仍是后续切片，不自动迁移/删除旧数据，不提交或推送Git，不发真实模型请求。
+
+负责人2026-10-28要求连续修复已发现及新发现问题再统一汇报。评审不完整提示/旧接口兼容见ADR-042，恢复列表损坏报错、Episode与Experiment结果防覆盖已完成；最终727Python/48Node/74Edge及22格零退化等实测见current-state。多进程、跨文件事务、备份、自由文本脱敏和损坏列表部分可见仍有边界；下一步设计SQLite及无损迁移，不将既有本地工作自动提交或推送，不发真实模型请求。
+
+负责人2026-10-28要求继续检查问题。已修普通API及实时错误流暴露校验输入/本机路径，离线93项相关测试及Ruff/Linux目标Mypy通过；本轮未重跑完整门禁。当前分支codex/fix-api-error-disclosure保留上轮全部未提交工作，不提交/推送、不调用真实模型；具体结果及待核查评审列表隔离见current-state顶部。
+
+负责人2026-10-28要求接续优化存量问题。当前任务docs/learning/V0.3-readonly-api-responsiveness-20261028.md：修复四个只读GET同步读盘阻塞事件循环，处理Job在读取期间结束的快照竞态；不改运行/控制写入、协议/评分/CSV或依赖，不新增真实模型调用。分支codex/fix-readonly-api-responsiveness从5066436接续，保留PR#3中的最后修复；不沿用上一轮一次性Git授权提交/推送或合并。完整结果以current-state本轮实际记录为准。
+
 负责人2026-10-28明确要求提交GitHub，授权本次提交/推送全部已验证源码、测试和文档并按CONTRIBUTING创建关联PR；覆盖此前本地保留约束，仅限本次交付。密钥、本机配置、实验产物和缓存不入库，不授权真实模型请求或自动合并。按Git规范、实验可靠性、网络诊断分组，实际提交/PR/CI状态见current-state，不能把本地Edge门禁冒称远端CI通过。
 
 本次实际已推送并创建PR #1/#2/#3。随后检测远端PR#4将5d44d4a合并main（e4d9497，非Codex操作），尚未包含最后课程超时修复与交接；已将#3改为直接对比main并关闭本轮重叠#2，分支/提交均保留，#1主体已入main且PR关闭。当前审查入口为#3，不再沿旧依赖链合并；未自动合并或改写main。旧“不提交”是当时约束，不阻止本次已授权交付，也不授权未来自动推送/模型调用/合并。

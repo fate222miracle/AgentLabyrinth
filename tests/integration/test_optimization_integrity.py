@@ -189,7 +189,8 @@ def test_conflicting_complete_result_does_not_hide_safe_point_or_get_reused(
     write_artifact(foreign, path)
     before = path.read_bytes()
     service = EpisodeService(artifacts_dir=tmp_path)
-    assert checkpoint.episode_id in service.resumable_episode_ids()
+    with pytest.raises(ValueError, match="invalid or unavailable"):
+        service.resumable_episode_ids()
     with patch("packages.providers.fake.FakeModelProvider.generate") as model:
         with pytest.raises(ValueError, match="mismatch"):
             asyncio.run(

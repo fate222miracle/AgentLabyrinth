@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { readApi } from './apiClient';
 import {
-  episodeReviewListResponseSchema,
+  episodeReviewPartialListResponseSchema,
   episodeReviewResponseSchema,
   requireIdentity,
   type EpisodeArtifact,
@@ -104,6 +104,7 @@ interface Props { artifact: EpisodeArtifact; models: ModelOption[] }
 export function EpisodeReviewPanel({ artifact, models }: Props) {
   const episodeId = artifact.episode.episode_id;
   const [reviews, setReviews] = useState<EpisodeReview[]>([]);
+  const [unreadable, setUnreadable] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [judgeModel, setJudgeModel] = useState('');
@@ -119,16 +120,18 @@ export function EpisodeReviewPanel({ artifact, models }: Props) {
     setLoading(true);
     setError('');
     setReviews([]);
+    setUnreadable(0);
     void (async () => {
       try {
         const response = await fetch(
-          `/api/v1/episodes/${encodeURIComponent(episodeId)}/reviews`,
+          `/api/v1/episodes/${encodeURIComponent(episodeId)}/reviews?include_integrity=true`,
           { signal: controller.signal },
         );
-        const data = await readApi(response, episodeReviewListResponseSchema);
+        const data = await readApi(response, episodeReviewPartialListResponseSchema);
         requireIdentity(data.episode_id, episodeId);
         if (controller.signal.aborted) return;
         setReviews(data.reviews);
+        setUnreadable(data.unreadable_count);
       } catch (reason) {
         if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : '评审记录读取失败。');
       } finally {
@@ -171,7 +174,7 @@ export function EpisodeReviewPanel({ artifact, models }: Props) {
           <h2 id="episode-review-title" className="section-heading">大模型评审</h2>
           <p className="card-desc">让模型检查答案、依据和工具使用，并给出理由。它可能误判，原规则评分保持不变。</p>
         </div>
-        {reviews.length > 0 && <button className="btn-secondary" type="button"
+        {reviews.length > 0 && unreadable === 0 && <button className="btn-secondary" type="button"
           onClick={() => downloadReviews(episodeId, reviews)}>导出全部记录 CSV</button>}
       </div>
       <div className="review-judge-controls">
@@ -190,12 +193,13 @@ export function EpisodeReviewPanel({ artifact, models }: Props) {
       {judgeModels.length === 0 && <p className="metric-sub">暂无可选的真实模型，请先恢复模型目录。</p>}
       {(loading || saving) && <p role="status">{saving ? '正在等待模型评审结果，不会额外重试…' : '正在读取已保存的模型评审…'}</p>}
       {(error || saveError) && <p role="alert" className="review-failure">{saveError || `模型评审记录读取失败：${error}`}</p>}
+      {unreadable > 0 && <p role="alert" className="review-failure">有 {unreadable} 份评审记录无法读取或核验，归属可能未知；当前列表可能不完整，暂不能导出完整记录。</p>}
       <div className="review-baseline" aria-label="确定性评分">
         <strong>规则评分：{artifact.evaluation.success ? '通过' : '未通过'}</strong>
         <span>与下方模型判断分别保留，不互相覆盖</span>
       </div>
       <div className="review-list">{modelReviews.map((review) => renderReview(review, artifact))}</div>
-      {!loading && !error && modelReviews.length === 0 && <p className="metric-sub">尚无大模型评审。选择模型后点击上方按钮，才会生成判断与理由。</p>}
+      {!loading && !error && unreadable === 0 && modelReviews.length === 0 && <p className="metric-sub">尚无大模型评审。选择模型后点击上方按钮，才会生成判断与理由。</p>}
       {reviews.length > modelReviews.length && <details className="review-archive">
         <summary>旧人工／模拟记录（{reviews.length - modelReviews.length} 条，仅归档）</summary>
         <p>这些记录不作为大模型评审结论。完整字段保留在上方 CSV 导出与历史 API 中。</p>

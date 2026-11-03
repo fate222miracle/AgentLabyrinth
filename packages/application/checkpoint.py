@@ -3,7 +3,7 @@
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -56,6 +56,57 @@ class EpisodeCheckpoint(BaseModel):
         return JsonTraceRecorder(self.run_config, self.episode_id, self.events)
 
 
+class EpisodeStore(Protocol):
+    """Persistence port for one authoritative Episode record."""
+
+    def save(
+        self,
+        state: SessionState,
+        agent: AgentSpec,
+        task: TaskSpec,
+        config: RunConfig,
+        recorder: JsonTraceRecorder,
+        fake_scenario: str | None = None,
+    ) -> None: ...
+
+    def save_checkpoint(self, checkpoint: EpisodeCheckpoint) -> None: ...
+
+    def load_checkpoint(self, episode_id: UUID) -> EpisodeCheckpoint: ...
+
+    def save_completed(
+        self, artifact: EpisodeArtifact, *, fake_scenario: str | None = None
+    ) -> None: ...
+
+    def load_completed(self, episode_id: UUID) -> EpisodeArtifact | None: ...
+
+
+def build_checkpoint(
+    state: SessionState,
+    agent: AgentSpec,
+    task: TaskSpec,
+    config: RunConfig,
+    recorder: JsonTraceRecorder,
+    fake_scenario: str | None = None,
+) -> EpisodeCheckpoint:
+    """Build and validate the portable safety point shared by all adapters."""
+    checkpoint = EpisodeCheckpoint(
+        episode_id=recorder.episode_id,
+        agent=agent,
+        task=task,
+        run_config=config,
+        config_hashes={
+            "agent": content_hash(agent),
+            "task": content_hash(task),
+            "run_config": content_hash(config),
+        },
+        fake_scenario=fake_scenario,
+        events=recorder.events,
+        session=state,
+    )
+    checkpoint.validated_recorder()
+    return checkpoint
+
+
 class CheckpointStore:
     """Write each complete state by replacing one local JSON file atomically."""
 
@@ -76,25 +127,16 @@ class CheckpointStore:
         fake_scenario: str | None = None,
     ) -> None:
         """Persist the runtime and matching Trace as one versioned JSON document."""
-        checkpoint = EpisodeCheckpoint(
-            episode_id=recorder.episode_id,
-            agent=agent,
-            task=task,
-            run_config=config,
-            config_hashes={
-                "agent": content_hash(agent),
-                "task": content_hash(task),
-                "run_config": content_hash(config),
-            },
-            fake_scenario=fake_scenario,
-            events=recorder.events,
-            session=state,
-        )
+        checkpoint = build_checkpoint(state, agent, task, config, recorder, fake_scenario)
+        self.save_checkpoint(checkpoint)
+
+    def save_checkpoint(self, checkpoint: EpisodeCheckpoint) -> None:
+        """Persist one already validated safety point."""
         checkpoint.validated_recorder()
         safe = sanitize(checkpoint.model_dump(mode="json"))
         serialized = json.dumps(safe, ensure_ascii=False, indent=2) + "\n"
         EpisodeCheckpoint.model_validate_json(serialized)
-        target = self.path(recorder.episode_id)
+        target = self.path(checkpoint.episode_id)
         write_text_atomically(target, serialized)
 
     def load(self, episode_id: UUID) -> EpisodeCheckpoint:
@@ -106,6 +148,23 @@ class CheckpointStore:
             raise ValueError("Foreign episode checkpoint")
         checkpoint.validated_recorder()
         return checkpoint
+
+    def load_checkpoint(self, episode_id: UUID) -> EpisodeCheckpoint:
+        """Implement the shared Episode storage port."""
+        return self.load(episode_id)
+
+    def save_completed(
+        self, artifact: EpisodeArtifact, *, fake_scenario: str | None = None
+    ) -> None:
+        """Write the final artifact and retire its superseded safety point."""
+        del fake_scenario
+        episode_id = artifact.episode.episode_id
+        write_artifact(artifact, self.directory.parent / f"{episode_id}.json")
+        self.path(episode_id).unlink(missing_ok=True)
+
+    def load_completed(self, episode_id: UUID) -> EpisodeArtifact | None:
+        """Read a final artifact and reject conflicting retained safety points."""
+        return read_completed_episode(episode_id, self.directory.parent)
 
 
 async def run_checkpointed_episode(
@@ -119,12 +178,13 @@ async def run_checkpointed_episode(
     fake_scenario: str | None = None,
     on_event: Callable[[TraceEvent], None] | None = None,
     episode_id: UUID | None = None,
+    store: EpisodeStore | None = None,
 ) -> EpisodeArtifact:
     """Run one supported episode with durable safe points and a final artifact."""
     if config.environment_version not in CHECKPOINT_ENVIRONMENTS:
         raise ValueError("Checkpoint environment is unsupported")
     recorder = JsonTraceRecorder(config, episode_id=episode_id, on_event=on_event)
-    store = CheckpointStore(artifacts_dir / "checkpoints")
+    active_store = store or CheckpointStore(artifacts_dir / "checkpoints")
     artifact = await run_episode(
         agent,
         task,
@@ -133,12 +193,11 @@ async def run_checkpointed_episode(
         environment,
         evaluator,
         recorder=recorder,
-        save_checkpoint=lambda state: store.save(
+        save_checkpoint=lambda state: active_store.save(
             state, agent, task, config, recorder, fake_scenario
         ),
     )
-    write_artifact(artifact, artifacts_dir / f"{recorder.episode_id}.json")
-    store.path(recorder.episode_id).unlink(missing_ok=True)
+    active_store.save_completed(artifact, fake_scenario=fake_scenario)
     return artifact
 
 
@@ -147,14 +206,8 @@ def read_completed_episode(episode_id: UUID, artifacts_dir: Path) -> EpisodeArti
     artifact_path = artifacts_dir / f"{episode_id}.json"
     if not artifact_path.is_file():
         return None
-    try:
-        artifact = read_artifact(artifact_path)
-    except ValueError:
-        return None  # Only malformed results may be rebuilt from a valid safe point.
-    if artifact.episode.episode_id != episode_id or any(
-        event.episode_id != episode_id for event in artifact.events
-    ):
-        raise ValueError("Completed episode identity mismatch")
+    artifact = read_artifact(artifact_path)
+    validate_completed_episode(artifact, episode_id)
     store = CheckpointStore(artifacts_dir / "checkpoints")
     if store.path(episode_id).is_file():
         checkpoint = store.load(episode_id)
@@ -174,20 +227,49 @@ def read_completed_episode(episode_id: UUID, artifacts_dir: Path) -> EpisodeArti
     return artifact
 
 
+def validate_completed_episode(artifact: EpisodeArtifact, episode_id: UUID) -> None:
+    """Reject foreign, modified, or structurally invalid final Episode payloads."""
+    if artifact.episode.episode_id != episode_id or any(
+        event.episode_id != episode_id for event in artifact.events
+    ):
+        raise ValueError("Completed episode ID mismatch")
+    expected = {
+        "agent": content_hash(artifact.agent),
+        "task": content_hash(artifact.task),
+        "run_config": content_hash(artifact.run_config),
+    }
+    if artifact.config_hashes != expected:
+        raise ValueError("Completed episode provenance mismatch")
+    events = artifact.events
+    if (
+        not events
+        or events[0].event_type.value != "EPISODE_STARTED"
+        or events[0].parent_event_id is not None
+        or events[-1].event_type.value != "EPISODE_FINISHED"
+        or len({event.event_id for event in events}) != len(events)
+        or any(event.event_type.value == "EPISODE_FINISHED" for event in events[:-1])
+        or any(
+            current.parent_event_id != previous.event_id or current.step_index < previous.step_index
+            for previous, current in zip(events, events[1:], strict=False)
+        )
+    ):
+        raise ValueError("Completed episode Trace invalid")
+
+
 async def resume_checkpointed_episode(
     episode_id: UUID,
     runtime: AgentRuntime,
     environment: Environment,
     evaluator: Evaluator,
     artifacts_dir: Path,
+    store: EpisodeStore | None = None,
 ) -> EpisodeArtifact:
     """Continue one unfinished run, or return its existing final artifact."""
-    artifact_path = artifacts_dir / f"{episode_id}.json"
-    completed = read_completed_episode(episode_id, artifacts_dir)
+    active_store = store or CheckpointStore(artifacts_dir / "checkpoints")
+    completed = active_store.load_completed(episode_id)
     if completed is not None:
         return completed
-    store = CheckpointStore(artifacts_dir / "checkpoints")
-    checkpoint = store.load(episode_id)
+    checkpoint = active_store.load_checkpoint(episode_id)
     recorder = checkpoint.validated_recorder()
     artifact = await run_episode(
         checkpoint.agent,
@@ -198,7 +280,7 @@ async def resume_checkpointed_episode(
         evaluator,
         recorder=recorder,
         resume_state=checkpoint.session,
-        save_checkpoint=lambda state: store.save(
+        save_checkpoint=lambda state: active_store.save(
             state,
             checkpoint.agent,
             checkpoint.task,
@@ -207,6 +289,5 @@ async def resume_checkpointed_episode(
             checkpoint.fake_scenario,
         ),
     )
-    write_artifact(artifact, artifact_path)
-    store.path(episode_id).unlink(missing_ok=True)
+    active_store.save_completed(artifact, fake_scenario=checkpoint.fake_scenario)
     return artifact

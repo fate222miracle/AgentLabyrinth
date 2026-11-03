@@ -402,6 +402,49 @@ def test_review_input_omits_deterministic_verdict_and_detects_source_tampering(
     assert client.get(f"/api/v1/episode-reviews/{review['review_id']}").status_code == 409
 
 
+def test_unrelated_review_with_missing_source_does_not_block_history(
+    review_client: tuple[TestClient, EpisodeService],
+) -> None:
+    """A different Episode's missing source cannot block this Episode's reviews."""
+    client, service = review_client
+    first = create_episode(service)
+    second = create_episode(service)
+    review = client.post(
+        "/api/v1/episode-reviews", json=human_payload(str(first.episode.episode_id))
+    ).json()["review"]
+    source = service.artifacts_dir / f"{first.episode.episode_id}.json"
+    source.unlink()
+    response = client.get(f"/api/v1/episodes/{second.episode.episode_id}/reviews")
+    assert response.status_code == 200
+    assert response.json()["reviews"] == []
+    assert client.get(f"/api/v1/episode-reviews/{review['review_id']}").status_code == 409
+
+
+def test_partial_reviews_keep_valid_results_and_report_corruption(
+    review_client: tuple[TestClient, EpisodeService],
+) -> None:
+    """Explicit partial reads preserve valid history without pretending it is complete."""
+    client, service = review_client
+    episode = create_episode(service)
+    episode_id = str(episode.episode.episode_id)
+    created = client.post("/api/v1/episode-reviews", json=human_payload(episode_id))
+    assert created.status_code == 201
+    invalid = service.artifacts_dir / "reviews" / f"{uuid4()}.json"
+    invalid.write_text("{broken", encoding="utf-8")
+    before = invalid.read_bytes()
+    url = f"/api/v1/episodes/{episode_id}/reviews"
+    assert client.get(url).status_code == 409
+    result = client.get(f"{url}?include_integrity=true")
+    assert result.status_code == 200
+    assert result.json()["schema_version"] == "1.1"
+    assert result.json()["unreadable_count"] == 1
+    assert result.json()["reviews"][0]["review_id"] == created.json()["review"]["review_id"]
+    assert invalid.read_bytes() == before
+    assert (
+        client.get(f"/api/v1/episodes/{uuid4()}/reviews?include_integrity=true").status_code == 404
+    )
+
+
 def test_review_request_method_boundary(
     review_client: tuple[TestClient, EpisodeService],
 ) -> None:
