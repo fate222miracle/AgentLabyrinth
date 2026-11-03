@@ -914,7 +914,12 @@ class EpisodeService:
                     reasoning_split=True if "minimax" in req.judge_model.lower() else None,
                 ),
                 ModelConfig(
-                    provider="aihubmix", model=req.judge_model, temperature=0.0, max_tokens=800
+                    schema_version="1.1",
+                    tool_call_mode="single",
+                    provider="aihubmix",
+                    model=req.judge_model,
+                    temperature=0.0,
+                    max_tokens=4096,
                 ),
             )
         else:

@@ -1,5 +1,6 @@
 """Read-only human and model review artifacts for saved Episodes."""
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Self
@@ -18,6 +19,8 @@ from packages.domain.models import (
     TokenUsage,
 )
 from packages.domain.ports import ModelProvider, ModelProviderError
+
+logger = logging.getLogger(__name__)
 
 ReviewMethod = Literal["human", "llm_judge"]
 ReviewVerdict = Literal["pass", "fail", "uncertain"]
@@ -247,13 +250,18 @@ async def create_judge_review(
             config,
         )
     except ModelProviderError as exc:
+        logger.warning("Judge provider rejected output: code=%s", exc.code)
         return EpisodeReviewArtifact.model_validate(
             {
                 **common,
                 "status": "failed",
                 "token_usage": exc.token_usage,
                 "estimated_cost": EstimatedCost(is_known=False, price_table_version="unknown"),
-                "failure_code": "JUDGE_PROVIDER_ERROR",
+                "failure_code": (
+                    "INVALID_JUDGE_OUTPUT"
+                    if exc.code == "OUTPUT_TRUNCATED"
+                    else "JUDGE_PROVIDER_ERROR"
+                ),
             }
         )
     except Exception:
