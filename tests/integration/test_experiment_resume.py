@@ -57,20 +57,27 @@ def test_experiment_resume_reuses_completed_arm(tmp_path: Path, damage: str) -> 
         foreign = json.loads(baseline_bytes)
         foreign["episode"]["episode_id"] = str(uuid4())
         baseline_path.write_text(json.dumps(foreign), encoding="utf-8")
-    (tmp_path / "experiments" / f"{experiment_id}.json").write_text("{", encoding="utf-8")
+    damaged_experiment = tmp_path / "experiments" / f"{experiment_id}.json"
+    damaged_experiment.write_text("{", encoding="utf-8")
 
     restarted = EpisodeService(artifacts_dir=tmp_path)
     app.dependency_overrides[get_episode_service] = lambda: restarted
     try:
-        with TestClient(app) as client:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            assert client.get("/api/v1/experiments/resumable").status_code == 500
+            assert damaged_experiment.read_text(encoding="utf-8") == "{"
+            damaged_experiment.unlink()  # Only this disposable test fixture is removed.
             assert str(experiment_id) in client.get("/api/v1/experiments/resumable").json()
-            if damage == "foreign-id":
-                before = baseline_path.read_bytes()
+            if damage in {"foreign-id", "broken-json"}:
+                damaged_arm = (
+                    baseline_path if damage == "foreign-id" else tmp_path / f"{recovery_id}.json"
+                )
+                before = damaged_arm.read_bytes()
                 with patch.object(FakeModelProvider, "generate") as model:
                     response = client.post(f"/api/v1/experiments/{experiment_id}/resume")
                     assert response.status_code == 400
                     model.assert_not_called()
-                assert baseline_path.read_bytes() == before and plans[0].exists()
+                assert damaged_arm.read_bytes() == before and plans[0].exists()
                 return
             response = client.post(f"/api/v1/experiments/{experiment_id}/resume")
             assert response.status_code == 200, response.text

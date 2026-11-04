@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "id": "429de774-df71-4ce8-b925-3f6750c3f3b0",
+  "name": "reflection-stale-alias-001",
+  "version": "1.0.0",
+  "category": "reflection_challenge",
+  "description": "先查询旧订单别名 ORD-OLD-001；若查询成功但返回空记录且没有新增证据，则改用公开的规范订单 ID ORD-001，最后提交状态与真实证据 ID。",
+  "initial_state": {
+    "target_order_id": "ORD-OLD-001",
+    "orders": [
+      {
+        "order_id": "ORD-001",
+        "status": "shipped",
+        "evidence_id": "order:ORD-001"
+      }
+    ]
+  },
+  "goal_conditions": {
+    "answer": "shipped",
+    "evidence": ["order:ORD-001"]
+  },
+  "constraints": [
+    "只使用任务公开的订单标识",
+    "先查询再提交，不得伪造证据"
+  ],
+  "expected_tools": ["query_records", "submit_answer"],
+  "forbidden_tools": [],
+  "max_steps": 6,
+  "token_budget": 2000,
+  "evaluator_config": {
+    "name": "order_status_v1",
+    "split": "development",
+    "origin": "native",
+    "reflection_protocol": "no-progress-revision-v1"
+  }
+}

@@ -5,8 +5,10 @@ import { flowFrames } from '../src/flowFrames';
 
 test('live single memory keeps successful sources and saved history independent from the next draft', async ({ page, request }, testInfo) => {
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('#single-task-search').fill('order-status-007');
   await page.getByRole('button', { name: /order-status-007/ }).click();
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('.advanced-settings > summary').click();
   await page.locator('#single-context-mode').selectOption('memory');
   await page.locator('#single-context-window').fill('1');
@@ -21,7 +23,7 @@ test('live single memory keeps successful sources and saved history independent 
   await expect(page.locator('.episode-runtime')).toContainText('工具记忆（最多 8192 字节）');
   const posts: string[] = [];
   page.on('request', event => { if (event.url().includes('/api/') && event.method() !== 'GET') posts.push(event.url()); });
-  await page.locator('#config-panel > summary').click();
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('#single-context-mode').selectOption('full');
   await expect(page.locator('.episode-runtime')).toContainText('工具记忆（最多 8192 字节）');
   await page.reload();

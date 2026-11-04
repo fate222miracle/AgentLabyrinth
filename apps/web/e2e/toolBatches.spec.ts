@@ -4,8 +4,10 @@ import { episodeResponseSchema, experimentResponseSchema, parseApi } from '../sr
 
 test('multiple calls render independently live and in a saved step without mutating history', async ({ page, request }, testInfo) => {
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('#single-task-search').fill('memory-fact-reuse-001');
   await page.getByRole('button', { name: /memory-fact-reuse-001/ }).click();
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('.advanced-settings > summary').click();
   await expect(page.locator('#single-call-mode')).toHaveValue('serial');
   await page.locator('#run-button').click();

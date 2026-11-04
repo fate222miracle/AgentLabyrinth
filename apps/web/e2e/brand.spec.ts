@@ -13,7 +13,7 @@ test('fox brand opens a keyboard-accessible preview without changing saved histo
   });
   await page.goto(`/?episode_id=${artifact.episode.episode_id}`);
   await expect(page.getByText('评测通过 (SUCCESS)', { exact: true })).toBeVisible();
-  await page.locator('#config-panel > summary').click();
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   const search = page.getByLabel('搜索任务', { exact: true });
   await search.fill('order-status-007');
   const originalUrl = page.url();
@@ -28,6 +28,8 @@ test('fox brand opens a keyboard-accessible preview without changing saved histo
   await preview.close();
   expect(page.url()).toBe(originalUrl);
   await expect(search).toHaveValue('order-status-007');
+  await expect(page.locator('#results-panel')).toBeHidden();
+  await page.getByRole('button', { name: '完成配置', exact: true }).click();
   await expect(page.getByText('评测通过 (SUCCESS)', { exact: true })).toBeVisible();
   await page.emulateMedia({ reducedMotion: 'reduce' });
   for (const width of [390, 640, 800, 1440]) {

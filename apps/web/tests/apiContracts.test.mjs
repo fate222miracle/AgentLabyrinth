@@ -218,6 +218,35 @@ test('planning result requires revision 1.6, a declared right arm and no recover
   }
 });
 
+test('reflection result requires revision 1.8 and changes only the right reflection component', () => {
+  const value = JSON.parse(readFileSync(new URL('../../../tests/fixtures/legacy_experiment.json', import.meta.url)));
+  value.schema_version = '1.8';
+  value.config.comparison_axis = 'reflection';
+  value.config.baseline_agent = { runtime_backend: 'handwritten', runtime_strategy: 'handwritten',
+    runtime_version: 'reference-v2', recovery_policy: 'none', context_policy: {
+      schema_version: '1.0', algorithm_version: 'tool-round-window-v1', mode: 'full', max_tool_rounds: null,
+    }, planning: null, reflection: null };
+  value.config.recovery_agent = { ...value.config.baseline_agent, reflection: {
+    schema_version: '1.0', algorithm_version: 'no-progress-revision-v1',
+  } };
+  for (const pair of value.pairs) { pair.retry_eligible = null; pair.recovered = false; }
+  value.metrics.retry_eligible_count = null;
+  value.metrics.retry_recovery_count = null;
+  value.metrics.retry_recovery_rate = null;
+  assert.equal(parseApi(experimentArtifactSchema, value).config.recovery_agent.reflection.algorithm_version,
+    'no-progress-revision-v1');
+  for (const mutate of [
+    (v) => { v.schema_version = '1.7'; },
+    (v) => { v.config.baseline_agent.reflection = structuredClone(v.config.recovery_agent.reflection); },
+    (v) => { v.config.recovery_agent.reflection = null; },
+    (v) => { v.config.recovery_agent.reflection.algorithm_version = 'future'; },
+    (v) => { v.config.recovery_agent.runtime_backend = 'langgraph'; },
+  ]) {
+    const invalid = structuredClone(value); mutate(invalid);
+    assert.throws(() => parseApi(experimentArtifactSchema, invalid), /校验失败/);
+  }
+});
+
 test('memory ablation result requires revision 1.5, a same-window switch and no recovery metrics', () => {
   const legacy = JSON.parse(readFileSync(new URL('../../../tests/fixtures/legacy_experiment.json', import.meta.url)));
   legacy.schema_version = '1.5';

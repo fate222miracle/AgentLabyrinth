@@ -8,14 +8,17 @@ test('long-task budget presets preserve explicit user limits without execution',
   const posts: string[] = [];
   page.on('request', (req) => { if (req.url().includes('/api/') && req.method() !== 'GET') posts.push(req.url()); });
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('#model-select').selectOption('tested-budget-candidate');
   await page.getByRole('button').filter({ has: page.getByText('refund-evidence-chain-003', { exact: true }) }).click();
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('.advanced-settings > summary').click();
   await expect(page.locator('#single-token-budget')).toHaveValue('20000');
   await expect(page.locator('#steps-input')).toHaveValue('10');
   await page.locator('#single-token-budget').fill('6000');
   await page.locator('#steps-input').fill('3');
   await page.getByRole('button').filter({ has: page.getByText('return-evidence-chain-001', { exact: true }) }).click();
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await expect(page.locator('#single-token-budget')).toHaveValue('6000');
   await expect(page.locator('#steps-input')).toHaveValue('3');
   expect(posts).toEqual([]);
@@ -25,8 +28,9 @@ test('linked evidence task runs from the actual UI and stays read-only on refres
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.getByRole('button').filter({ has: page.getByText('refund-evidence-chain-003', { exact: true }) }).click();
-  await expect(page.getByText('跨文档证据链 · 自建仿真', { exact: true })).toHaveCount(9);
+  await expect(page.locator('.task-option-list').getByText('跨文档证据链 · 自建仿真', { exact: true })).toHaveCount(9);
   await page.getByRole('button', { name: '开始运行 Episode', exact: true }).click();
   await expect(page).toHaveURL(/episode_id=[a-f0-9-]+/);
   const id = new URL(page.url()).searchParams.get('episode_id');

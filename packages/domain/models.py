@@ -180,10 +180,30 @@ class PlanningConfig(Contract):
     algorithm_version: Literal["plan-update-v1"] = "plan-update-v1"
 
 
+class ReflectionConfig(Contract):
+    """Enable one bounded revision after repeated successful no-progress actions."""
+
+    algorithm_version: Literal["no-progress-revision-v1"] = "no-progress-revision-v1"
+
+
+class ReflectionNote(Contract):
+    """Strict public output of the bounded reflection request."""
+
+    diagnosis: str = Field(min_length=1, max_length=200)
+    revised_goal: str = Field(min_length=1, max_length=200)
+
+    @field_validator("diagnosis", "revised_goal")
+    @classmethod
+    def non_blank_reflection_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Reflection text cannot be blank")
+        return value
+
+
 class AgentSpec(Contract):
     """Versioned, validated agent configuration."""
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = "1.1"  # type: ignore[assignment]
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = "1.1"  # type: ignore[assignment]
     id: UUID
     name: str
     version: str
@@ -196,15 +216,23 @@ class AgentSpec(Contract):
     budget: Budget = Field(default_factory=Budget)
     context_policy: ContextPolicy | None = None
     planning: PlanningConfig | None = None
+    reflection: ReflectionConfig | None = None
 
     @model_validator(mode="after")
     def validate_context_revision(self) -> Self:
         """An explicit projection or planning component requires the additive Agent revision."""
-        if self.context_policy is not None and self.schema_version not in ("1.2", "1.3", "1.4"):
+        if self.context_policy is not None and self.schema_version not in (
+            "1.2",
+            "1.3",
+            "1.4",
+            "1.5",
+        ):
             raise ValueError("Context policy requires AgentSpec schema 1.2")
-        if self.planning is not None and self.schema_version not in ("1.3", "1.4"):
+        if self.planning is not None and self.schema_version not in ("1.3", "1.4", "1.5"):
             raise ValueError("Planning requires AgentSpec schema 1.3")
-        if self.runtime_backend == "pydantic_ai" and self.schema_version != "1.4":
+        if self.reflection is not None and self.schema_version != "1.5":
+            raise ValueError("Reflection requires AgentSpec schema 1.5")
+        if self.runtime_backend == "pydantic_ai" and self.schema_version not in ("1.4", "1.5"):
             raise ValueError("PydanticAI backend requires AgentSpec schema 1.4")
         return self
 
@@ -216,6 +244,8 @@ class AgentSpec(Contract):
             result.pop("context_policy", None)
         if self.planning is None:
             result.pop("planning", None)
+        if self.reflection is None:
+            result.pop("reflection", None)
         return result
 
     @property
@@ -373,6 +403,8 @@ class EventType(StrEnum):
     TOOL_SUCCEEDED = "TOOL_SUCCEEDED"
     TOOL_FAILED = "TOOL_FAILED"
     PLAN_UPDATED = "PLAN_UPDATED"
+    REFLECTION_PRODUCED = "REFLECTION_PRODUCED"
+    REFLECTION_REJECTED = "REFLECTION_REJECTED"
     ENVIRONMENT_UPDATED = "ENVIRONMENT_UPDATED"
     EPISODE_FINISHED = "EPISODE_FINISHED"
 

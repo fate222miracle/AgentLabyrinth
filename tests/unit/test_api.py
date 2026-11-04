@@ -235,7 +235,7 @@ def test_get_meta_returns_all_native_tasks(client: TestClient) -> None:
         )
     }
     assert {task["id"] for task in native_tasks} == expected
-    assert len(native_tasks) == 21
+    assert len(native_tasks) == 22
 
 
 def test_create_and_get_experiment(client: TestClient, temp_artifacts_dir: Path) -> None:

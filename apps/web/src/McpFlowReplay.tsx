@@ -6,7 +6,7 @@ import { documentEvidence, flowFrames, flowPath, frameIndexAt, type FlowFrame } 
 import { DocumentEvidence } from './DocumentEvidence';
 import { latestDeclaredPlan, type TraceStepEvent } from './traceSteps';
 import { ReadableFields } from './ReadableFields';
-import { useContentMotion } from './useContentMotion';
+import { RunDelivery } from './RunDelivery';
 import './flowReplay.css';
 
 type VisualNode = Node<{ title: string; subtitle: string; kind: string; active: boolean; failed: boolean;
@@ -85,9 +85,9 @@ function callLabel(call: Record<string, unknown>): string {
 }
 
 /** Read-only visual replay; playback controls never issue API requests. */
-export function McpFlowReplay({ events, environmentVersion, model, finalState, termination, detail, evaluation, displayMode = 'replay',
+export function McpFlowReplay({ events, environmentVersion, model, provider, finalState, termination, detail, evaluation, displayMode = 'replay',
   eventIndex = 0, onSelectEvent }: {
-  events: TraceStepEvent[]; environmentVersion: string; model: string;
+  events: TraceStepEvent[]; environmentVersion: string; model: string; provider?: string;
   finalState: Record<string, unknown>; termination: string; detail: string;
   displayMode?: 'live' | 'completed' | 'replay';
   evaluation?: { success: boolean; reason: string };
@@ -113,9 +113,19 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
   const section = useRef<HTMLElement>(null);
   const canvas = useRef<HTMLDivElement>(null);
   const inspector = useRef<HTMLElement>(null);
+  const trail = useRef<HTMLDivElement>(null);
   const focusButton = useRef<HTMLButtonElement>(null);
   const [focused, setFocused] = useState(false);
   const [focusError, setFocusError] = useState('');
+  useEffect(() => {
+    if (displayMode !== 'completed') return;
+    const pending = requestAnimationFrame(() => {
+      const delivery = section.current?.querySelector<HTMLElement>('.run-delivery.saved');
+      delivery?.focus({ preventScroll: true });
+      delivery?.scrollIntoView({ block: 'start' });
+    });
+    return () => cancelAnimationFrame(pending);
+  }, [displayMode]);
   useEffect(() => {
     const update = () => {
       const active = document.fullscreenElement === section.current;
@@ -150,13 +160,6 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
     && (frame.phase === 'execute' || frame.phase === 'return');
   const networkArrow = remoteFrame && frame.failed ? '×' : remoteFrame && frame.phase === 'return' ? '←' : '→';
   const initialInput = savedRecord(events.find((event) => event.event_type === 'OBSERVATION_CREATED')?.payload.observation);
-  const submission = savedRecord(finalState.submission);
-  const proposedCall = savedRecord(finalState.proposed_call);
-  const proposedName = typeof proposedCall.name === 'string' ? proposedCall.name : null;
-  const proposedArgs = Object.entries(savedRecord(proposedCall.arguments))
-    .map(([name, value]) => `${name}=${JSON.stringify(value)}`).join(' · ');
-  const answer = typeof submission.answer === 'string' ? submission.answer : null;
-  const evidence = Array.isArray(submission.evidence) ? submission.evidence.filter((value): value is string => typeof value === 'string') : [];
   const inputContext = [
     { label: '搜索关键词', value: initialInput.document_query },
     { label: '目标订单', value: initialInput.target_order_id },
@@ -181,7 +184,6 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
     observer.observe(target); update();
     return () => observer.disconnect();
   }, [Boolean(frame), focused]);
-  useContentMotion(inspector, `${frame?.eventIndex ?? -1}`, index);
   useEffect(() => {
     const query = window.matchMedia('(max-width: 639px)');
     const update = () => setCompact(query.matches);
@@ -197,6 +199,15 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
     return () => window.clearTimeout(timer);
   }, [playing, index, duration, frames, onSelectEvent]);
   const activeNode = path.find((node) => node.frameIndex === index)?.id ?? path.at(-1)?.id ?? '';
+  useEffect(() => {
+    const container = trail.current;
+    const active = container?.querySelector<HTMLElement>('[aria-current="step"]');
+    if (!container || !active) return;
+    const outer = container.getBoundingClientRect(), inner = active.getBoundingClientRect();
+    if (inner.left < outer.left) container.scrollLeft -= outer.left - inner.left;
+    else if (inner.right > outer.right) container.scrollLeft += inner.right - outer.right;
+  }, [activeNode, columns]);
+  const returnedDocument = savedRecord(frame?.feedback.find(([key]) => key === 'document')?.[1]);
   const nodes: VisualNode[] = path.map((node, i) => {
     const beat = node.frame;
     const row = Math.floor(i / columns), column = i % columns;
@@ -230,6 +241,8 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
       {focused && <span>Esc 返回</span>}
       {focusError && <span role="status">{focusError}</span>}
     </div>
+    {!live && <RunDelivery state={finalState} environmentVersion={environmentVersion} termination={termination} detail={detail}
+      evaluation={evaluation} provider={provider} replay={displayMode === 'replay'} />}
     {isMcp && <div className="mcp-network" aria-label="MCP 网络链路">
       <div className="mcp-network-heading"><strong>MCP 网络链路</strong><span aria-live="polite">{remoteFrame
         ? `${frame.tool} · ${frame.phase === 'execute' ? '远程调用开始' : frame.failed ? '远程调用失败' : '远程结果已返回'}`
@@ -241,6 +254,7 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
       </div>
       <p>按已保存的工具调用与结果展示；Trace 未记录协议握手或 tools/list 报文。</p>
     </div>}
+    <details className="flow-task-brief" open={frame.phase === 'observe'}><summary>任务目标与交付要求</summary>
     <div className={`flow-bookend input ${frame.phase === 'observe' ? 'current' : ''}`} aria-label="最初输入">
       <span className="flow-input-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M6 4h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 3V6a2 2 0 0 1 2-2Z" /><path d="M8 9h8M8 13h5" /></svg></span>
       <div><span className="flow-bookend-label">{isBfcl ? 'BFCL 原题' : '这次要做什么'}</span>
@@ -248,10 +262,10 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
         <span className="flow-bookend-meta">交付要求：{deliveryRequirement}</span>
         {inputContext.length > 0 && <div className="flow-input-context">{inputContext.map((item) => <span key={item.label}>{item.label}<strong>{item.value}</strong></span>)}</div>}
       </div>
-    </div>
+    </div></details>
     <div className="flow-path-nav"><div className="flow-path-heading"><div><span className="story-section-label">执行路径</span><p>每次调用独立呈现，沿记录顺序展开。</p></div>
       <span>{path.filter((node) => node.kind === 'model').length} 个模型节点 · {path.filter((node) => node.kind === 'tool').length} 次调用</span></div>
-    <div className="flow-call-trail" aria-label="已记录执行节点">{path.map((node) => <button key={node.id} type="button" disabled={following}
+    <div ref={trail} className="flow-call-trail" aria-label="已记录执行节点">{path.map((node) => <button key={node.id} type="button" disabled={following}
       className={`${node.id === activeNode ? 'active' : ''} ${node.frame.failed ? 'failed' : ''}`} aria-current={node.id === activeNode ? 'step' : undefined}
       onClick={() => { setPlaying(false); selectFrame(node.frameIndex); }}>{node.kind === 'tool' ? toolLabels[node.frame.tool ?? ''] ?? node.frame.tool ?? '调用校验' : node.kind === 'model' ? `模型 ${node.frame.step}` : node.kind === 'task' ? '任务' : '结束'}{node.frame.failed ? ' · 失败' : ''}</button>)}</div></div>
     <div className={`flow-workspace ${hasDocuments ? 'with-documents' : ''}`}>
@@ -267,20 +281,19 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
       </ReactFlow>
     </div>
     <div className="flow-sidebar">
-    {hasDocuments && <DocumentEvidence source={documents} running={live && termination !== '连接中断'} />}
     <aside ref={inspector} className={`flow-inspector ${frame.failed ? 'failed' : ''}`} aria-label="当前阶段摘要" tabIndex={0}>
-      <span className="story-section-label">Step {frame.step} · 当前阶段</span>
+      <span className="story-section-label">Step {frame.step} · 当前行动与反馈</span>
       <h3>{phaseLabels[frame.phase]}</h3>
       <span className={`flow-inspector-status ${frame.failed ? 'failed' : ''}`}>{frame.failed ? '此阶段已记录异常' : live ? '已收到的实时事件' : '已保存事件 · 只读'}</span>
       {frame.tool && <p className="story-tool-name">{frame.tool}</p>}
       {frame.phase === 'request' && <p>已记录模型请求，等待响应；不显示模型内部思考或推测进度。</p>}
       {frame.phase === 'request' && Object.keys(savedRecord(frame.payload.context)).length > 0 && <section aria-label="已保存模型输入诊断">
         <h4>模型可见上下文</h4>
-        <ReadableFields entries={Object.entries(savedRecord(frame.payload.context)).filter(([key]) =>
+      <details className="flow-context-details"><summary>展开输入诊断</summary><ReadableFields entries={Object.entries(savedRecord(frame.payload.context)).filter(([key]) =>
           ['mode', 'max_tool_rounds', 'history_messages_count', 'visible_messages_count', 'dropped_messages_count', 'input_messages_bytes',
             'memory_max_bytes', 'memory_entries_count', 'memory_omitted_entries_count', 'memory_bytes', 'memory_source_call_ids'].includes(key))} />
         <p>字节仅为序列化消息 UTF-8 大小，不是 Token 或 HTTP 包大小；完整历史仍保留。</p>
-      </section>}
+      </details></section>}
       {frame.phase === 'respond' && <p>{frame.payload.action_kind === 'rejected'
         ? `响应被拒绝：${String(frame.payload.error_code ?? '协议错误')}；没有执行本轮工具。`
         : typeof frame.payload.tool_calls_count === 'number' ? `本轮提出 ${frame.payload.tool_calls_count} 个工具调用，校验通过后按顺序执行。`
@@ -289,7 +302,10 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
         <ReadableFields entries={['error_code', 'message', 'arguments_valid', 'permitted']
           .filter((key) => key in frame.payload).map((key) => [key, frame.payload[key]])} /></section>}
       {frame.feedback.length > 0 && <section><h4>{frame.failed ? '失败反馈' : isBfcl ? '调用记录反馈' : '工具返回'}</h4>
-        <ReadableFields entries={frame.feedback} /></section>}
+        {hasDocuments && !frame.failed && frame.tool === 'read_document' && typeof returnedDocument.content === 'string' && returnedDocument.content.length > 0
+          ? <><ReadableFields entries={Object.entries(returnedDocument).filter(([key]) => ['document_id', 'title', 'evidence_id'].includes(key))} />
+            <p className="flow-inspector-note">正文已返回，完整内容见关联资料。</p></>
+          : <ReadableFields entries={frame.feedback} />}</section>}
       {frame.arguments && <section><h4>调用参数</h4>{Object.keys(frame.arguments).length
         ? <ReadableFields entries={Object.entries(frame.arguments)} /> : <p>无参数。</p>}</section>}
       {frame.phase === 'execute' && <p>{isBfcl ? '记录函数调用提议，不执行上游函数。' : '已记录调用开始，尚未收到本次工具返回。'}</p>}
@@ -308,6 +324,7 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
       {frame.durationMs !== null && <p className="flow-recorded-duration">本事件记录耗时 {frame.durationMs} ms</p>}
       <p className="flow-inspector-note">摘要取自当前保存事件；完整数据可在技术 Trace 中核查。</p>
     </aside>
+    {hasDocuments && <DocumentEvidence source={documents} running={live && termination !== '连接中断'} />}
     </div>
     </div>
     {displayMode === 'replay' && <div className="flow-player">
@@ -319,19 +336,7 @@ export function McpFlowReplay({ events, environmentVersion, model, finalState, t
       <select aria-label="动画速度" value={duration} onChange={(event) => setDuration(Number(event.target.value))}><option value={2800}>0.5×</option><option value={1400}>1×</option><option value={700}>2×</option></select>
     </div>}
     {displayMode === 'replay' && <p className="flow-playback-note">按事件阶段播放 · 播放速度用于阅读，不代表实际执行耗时。</p>}
-    <div className={`flow-bookend output ${frame.phase === 'finish' ? 'current' : ''} ${!live && (termination !== 'SUCCESS' || evaluation?.success === false) ? 'failed' : ''}`} aria-label="最终输出">
-      <span className="flow-bookend-icon" aria-hidden="true">↗</span>
-      <div><span className="flow-bookend-label">{live ? '等待最终产物' : isBfcl ? '函数调用提议 · 已保存' : '最终输出 · 已保存'}</span>
-        <span className="flow-bookend-meta">交付要求：{deliveryRequirement}</span>
-        <p>{live ? termination === '连接中断' ? '请稍后按 Episode ID 回读最终产物' : '运行完成后显示评测结果' : isBfcl ? proposedName ? callLabel(proposedCall) : '未保存函数调用提议' : answer ?? '未保存已提交的答案'}</p>
-        {!live && isBfcl && proposedArgs && <span className="flow-bookend-meta">参数：{proposedArgs}</span>}
-        {!live && isBfcl && <span className="flow-bookend-meta">评测函数选择与参数；未执行函数，未产生数值计算结果。</span>}
-        {!live && !isBfcl && evidence.length > 0 && <span className="flow-bookend-meta">证据：{evidence.join(' · ')}</span>}
-        {!live && !isBfcl && answer !== null && evidence.length === 0 && <span className="flow-bookend-meta">未保存引用证据。</span>}
-        {!live && evaluation && <span className="flow-bookend-meta">评测结论：{evaluation.success ? '通过' : '未通过'} · {evaluation.reason}</span>}
-        {!live && (isBfcl || answer === null) && <span className="flow-bookend-meta">{termination}{detail ? ` · ${detail}` : ''}</span>}
-      </div>
-    </div>
+    {live && <RunDelivery state={{}} environmentVersion={environmentVersion} termination={termination} detail={detail} provider={provider} live />}
     {declaredPlan && <section className="flow-bookend flow-plan" aria-label="当前计划声明"><div>
       <span className="flow-bookend-label">当前计划 · 模型声明</span>
       <p>这是子目标声明，状态由模型填写；实际完成以工具返回和任务评测为准。</p>

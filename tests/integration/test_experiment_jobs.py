@@ -19,6 +19,23 @@ from packages.domain.models import Message, ModelConfig, ModelResponse, ToolSche
 from packages.providers.fake import FakeModelProvider
 
 
+def test_resume_job_preserves_existing_experiment_result(tmp_path: Path) -> None:
+    """A direct job resume must not overwrite an existing (even corrupt) result."""
+    service = EpisodeService(artifacts_dir=tmp_path)
+    request = CreateExperimentRequest(
+        provider="fake", model="fake-model", task_ids=["order-status-001"]
+    )
+    plan = asyncio.run(service.prepare_experiment(request, experiment_id=request.request_id))
+    service.reserve_experiment_job(request.request_id, plan)
+    result = tmp_path / "experiments" / f"{request.request_id}.json"
+    result.write_bytes(b"{broken")
+    with patch.object(FakeModelProvider, "generate") as model:
+        with pytest.raises(ValueError):
+            asyncio.run(service.resume_experiment_job(request.request_id))
+        model.assert_not_called()
+    assert result.read_bytes() == b"{broken"
+
+
 @pytest.mark.parametrize("failure", ["plan", "job"])
 def test_plan_write_failure_never_accepts_or_schedules_a_job(tmp_path: Path, failure: str) -> None:
     """A failed durable write cannot become an accepted request or invoke a provider."""

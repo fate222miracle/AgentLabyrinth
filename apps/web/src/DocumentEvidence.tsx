@@ -8,6 +8,7 @@ export function DocumentEvidence({ source, running }: { source: ReturnType<typeo
   const [selection, setSelection] = useState<{ id: string; cursor: string } | null>(null);
   const selectedId = selection?.cursor === source.readCursor ? selection.id : source.activeId;
   const selected = source.documents.find(doc => doc.id === selectedId) ?? source.documents[0];
+  const agentDocument = source.documents.find(doc => doc.id === source.activeId);
   const status = (doc: typeof selected) => doc.status === 'reading' && !running ? '读取已发起 · 结果未确认' : statuses[doc.status];
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -27,6 +28,8 @@ export function DocumentEvidence({ source, running }: { source: ReturnType<typeo
       <span>{source.documents.filter(doc => doc.read).length} / {source.documents.length} 已读取</span></header>
     <p className="document-source-note">环境资料含干扰项；Agent 自主搜索、读取并提交引用。</p>
     <p className="document-source-note" aria-label="当前过程阅读统计">成功阅读 {reads} 次 · 重复阅读 {repeats} 次。仅统计已收到正文的工具返回。</p>
+    {agentDocument && selected.id !== agentDocument.id && <div className="document-follow-note"><p>正在预览其他资料，Agent 最近关联：{agentDocument.title}</p>
+      <button type="button" className="btn-text" onClick={() => setSelection(null)}>返回 Agent 关联资料</button></div>}
     <div ref={list} className="document-list" role="group" aria-label="环境文档目录">
       {source.documents.map(doc => <button type="button" key={doc.id} aria-pressed={doc.id === selected.id}
         className={`document-card ${doc.id === selected.id ? 'selected' : ''} ${doc.status}`}

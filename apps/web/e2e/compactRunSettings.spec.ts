@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { episodeResponseSchema, metaSchema, parseApi } from '../src/apiContracts';
 
-test('advanced settings occupy a separate row, keeping task and model columns compact at all viewports', async ({ page, request }, testInfo) => {
+test('advanced settings remain separate from task and execution controls at all viewports', async ({ page, request }, testInfo) => {
   const meta = parseApi(metaSchema, await (await request.get('/api/v1/meta')).json());
   await page.route('**/api/v1/meta', route => route.fulfill({ json: { ...meta, models: [...meta.models,
     { ...meta.models[0], id: 'layout-candidate', name: '配置布局检查候选', provider: 'aihubmix', is_default: false,
@@ -10,7 +10,9 @@ test('advanced settings occupy a separate row, keeping task and model columns co
   const posts: string[] = [];
   page.on('request', event => { if (event.url().includes('/api/') && event.method() !== 'GET') posts.push(event.url()); });
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.getByRole('button', { name: '配置配送争议实时演示' }).click();
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('#model-select').selectOption('layout-candidate');
   const taskBefore = await page.locator('.task-picker').boundingBox();
   const optionsBefore = await page.locator('.single-run-options').boundingBox();
@@ -25,9 +27,14 @@ test('advanced settings occupy a separate row, keeping task and model columns co
   const optionsAfter = await page.locator('.single-run-options').boundingBox();
   expect(Math.abs(taskAfter!.height - taskBefore!.height)).toBeLessThan(2);
   expect(Math.abs(optionsAfter!.height - optionsBefore!.height)).toBeLessThan(70);
-  const advanced = await page.locator('.single-advanced-settings').boundingBox();
-  expect(advanced!.y).toBeGreaterThanOrEqual(Math.max(taskAfter!.y + taskAfter!.height, optionsAfter!.y + optionsAfter!.height));
-  expect(advanced!.width).toBeGreaterThan(taskAfter!.width);
+  // Measure in one frame: smooth scrolling can otherwise move the page between reads.
+  const placement = await page.evaluate(() => {
+    const task = document.querySelector('.task-picker')!.getBoundingClientRect();
+    const options = document.querySelector('.single-run-options')!.getBoundingClientRect();
+    const advanced = document.querySelector('.single-advanced-settings')!.getBoundingClientRect();
+    return { after: advanced.top >= Math.max(task.bottom, options.bottom), wide: advanced.width >= task.width - 1 };
+  });
+  expect(placement).toEqual({ after: true, wide: true });
   await page.locator('.context-help > summary').focus();
   await page.keyboard.press('Enter');
   await expect(page.locator('.context-help')).toHaveAttribute('open', '');
@@ -58,8 +65,10 @@ test('advanced settings occupy a separate row, keeping task and model columns co
 
 test('grouped controls preserve explicit limits, rejected tools and read-only history', async ({ page, request }) => {
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('#single-task-search').fill('order-status-001');
   await page.getByRole('button', { name: /order-status-001/ }).click();
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('input[name="single-runtime-backend"][value="langgraph"]').check();
   await page.locator('.single-advanced-settings > summary').focus();
   await page.keyboard.press('Enter');
@@ -83,10 +92,12 @@ test('grouped controls preserve explicit limits, rejected tools and read-only hi
   await expect(page.locator('#eval-badge')).toContainText('评测未通过');
   const posts: string[] = [];
   page.on('request', value => { if (value.url().includes('/api/') && value.method() !== 'GET') posts.push(value.url()); });
-  await page.locator('#config-panel > summary').click();
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.locator('.single-advanced-settings > summary').click();
   await expect(page.locator('#single-context-bytes')).toHaveValue('2048');
   await page.locator('#single-context-mode').selectOption('full');
+  await expect(page.locator('#results-panel')).toBeHidden();
+  await page.getByRole('button', { name: '完成配置', exact: true }).click();
   await expect(page.locator('.episode-runtime')).toContainText('工具记忆（最多 2048 字节）');
   await page.reload();
   await expect(page.locator('#eval-badge')).toContainText('评测未通过');

@@ -16,6 +16,7 @@ from packages.domain.models import (
     ContextPolicy,
     EpisodeArtifact,
     PlanningConfig,
+    ReflectionConfig,
     RuntimeBackend,
     RuntimeStrategy,
     TerminationReason,
@@ -77,6 +78,7 @@ class TaskOption(BaseModel):
     split: str = "development"
     supports_mcp: bool = False
     supports_planning: bool = False
+    supports_reflection: bool = False
 
 
 class MetaResponse(BaseModel):
@@ -98,7 +100,7 @@ class CreateEpisodeRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] = "1.3"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"] = "1.3"
     tool_call_mode: ToolCallMode | None = None
     request_id: UUID = Field(default_factory=uuid4)
     provider: Literal["fake", "aihubmix"]
@@ -118,6 +120,7 @@ class CreateEpisodeRequest(BaseModel):
     fault_profile: FaultProfile = "none"
     context_policy: ContextPolicy | None = None
     planning: PlanningConfig | None = None
+    reflection: ReflectionConfig | None = None
 
     @model_validator(mode="after")
     def context_revision(self) -> "CreateEpisodeRequest":
@@ -125,7 +128,7 @@ class CreateEpisodeRequest(BaseModel):
         if self.schema_version in ("1.4", "1.5"):
             if self.tool_call_mode is None:
                 raise ValueError("Tool call mode requires Episode request revision 1.4")
-        elif self.tool_call_mode is not None and self.schema_version not in ("1.6", "1.7"):
+        elif self.tool_call_mode is not None and self.schema_version not in ("1.6", "1.7", "1.8"):
             raise ValueError("Tool call mode requires Episode request revision 1.4")
         if self.context_policy is not None and self.schema_version not in (
             "1.3",
@@ -133,11 +136,23 @@ class CreateEpisodeRequest(BaseModel):
             "1.5",
             "1.6",
             "1.7",
+            "1.8",
         ):
             raise ValueError("Context policy requires Episode request revision 1.3")
-        if self.planning is not None and self.schema_version not in ("1.6", "1.7"):
+        if self.planning is not None and self.schema_version not in ("1.6", "1.7", "1.8"):
             raise ValueError("Planning requires Episode request revision 1.6")
-        if self.runtime_backend == "pydantic_ai" and self.schema_version != "1.7":
+        if self.reflection is not None and self.schema_version != "1.8":
+            raise ValueError("Reflection requires Episode request revision 1.8")
+        if self.reflection is not None and (
+            self.planning is not None
+            or (self.context_policy is not None and self.context_policy.mode != "full")
+            or self.runtime_strategy != "handwritten"
+            or self.tool_call_mode not in (None, "single")
+        ):
+            raise ValueError(
+                "Reflection requires full context and single calls without Planning or Recovery"
+            )
+        if self.runtime_backend == "pydantic_ai" and self.schema_version not in ("1.7", "1.8"):
             raise ValueError("PydanticAI backend requires Episode request revision 1.7")
         return self
 
@@ -221,13 +236,24 @@ class EpisodeReviewListResponse(BaseModel):
     reviews: tuple[EpisodeReviewArtifact, ...]
 
 
+class EpisodeReviewPartialListResponse(BaseModel):
+    """Explicitly requested history with an incomplete-source count."""
+
+    model_config = ConfigDict(frozen=True)
+    schema_version: Literal["1.1"] = "1.1"
+    request_id: UUID
+    episode_id: UUID
+    reviews: tuple[EpisodeReviewArtifact, ...]
+    unreadable_count: int = Field(ge=0)
+
+
 class CreateExperimentRequest(BaseModel):
     """Request payload to execute a paired comparison experiment."""
 
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[
-        "1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10"
+        "1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11"
     ] = "1.5"
     tool_call_mode: ToolCallMode | None = None
     request_id: UUID = Field(default_factory=uuid4)
@@ -273,7 +299,11 @@ class CreateExperimentRequest(BaseModel):
         if self.schema_version in ("1.7", "1.8"):
             if self.tool_call_mode is None:
                 raise ValueError("Tool call mode requires Experiment request revision 1.7")
-        elif self.tool_call_mode is not None and self.schema_version not in ("1.9", "1.10"):
+        elif self.tool_call_mode is not None and self.schema_version not in (
+            "1.9",
+            "1.10",
+            "1.11",
+        ):
             raise ValueError("Tool call mode requires Experiment request revision 1.7")
         if self.max_total_tokens is not None and self.schema_version not in (
             "1.4",
@@ -283,6 +313,7 @@ class CreateExperimentRequest(BaseModel):
             "1.8",
             "1.9",
             "1.10",
+            "1.11",
         ):
             raise ValueError("Global Token budget requires request revision 1.4")
         if self.schema_version == "1.6" and self.comparison_axis != "memory_ablation":
@@ -302,6 +333,18 @@ class CreateExperimentRequest(BaseModel):
             self.context_policy is not None and self.context_policy.mode != "full"
         ):
             raise ValueError("Planning challenge requires full context")
+        if self.schema_version == "1.11" and self.comparison_axis != "reflection":
+            raise ValueError("Request revision 1.11 supports only the reflection axis")
+        if self.comparison_axis == "reflection" and self.schema_version != "1.11":
+            raise ValueError("Reflection challenge requires Experiment request revision 1.11")
+        if self.comparison_axis == "reflection" and (
+            self.runtime_strategy != "handwritten"
+            or (self.context_policy is not None and self.context_policy.mode != "full")
+            or self.tool_call_mode not in (None, "single")
+        ):
+            raise ValueError(
+                "Reflection challenge requires full context and single calls without Recovery"
+            )
         if (
             self.context_policy is not None or self.comparison_axis == "context_policy"
         ) and self.schema_version not in ("1.5", "1.6", "1.7", "1.8", "1.9", "1.10"):
@@ -328,7 +371,7 @@ class CreateExperimentRequest(BaseModel):
             and self.schema_version != "1.10"
         ):
             raise ValueError("PydanticAI Runtime comparison requires request revision 1.10")
-        if self.runtime_backend == "pydantic_ai":
+        if self.runtime_backend == "pydantic_ai" and self.comparison_axis != "reflection":
             raise ValueError("PydanticAI is selected only as an explicit Runtime comparison target")
         return self
 
