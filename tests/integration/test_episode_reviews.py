@@ -29,6 +29,7 @@ from packages.domain.models import (
     ModelResponse,
     TokenUsage,
 )
+from packages.providers.aihubmix import AIHubMixModelProvider
 from packages.providers.fake import FakeModelProvider
 
 
@@ -199,7 +200,8 @@ def test_real_judge_entry_calls_once_and_preserves_source(
     assert generate.call_count == 1
     factory.assert_called_once_with(timeout=30.0, min_request_interval=13.0, reasoning_split=True)
     messages, tools, config = generate.call_args.args
-    assert tools == [] and config.provider == "aihubmix" and config.max_tokens == 800
+    assert tools == [] and config.provider == "aihubmix" and config.max_tokens == 4096
+    assert config.schema_version == "1.1" and config.tool_call_mode == "single"
     assert messages[0].content == JUDGE_SYSTEM_PROMPT
     assert "evaluation" not in messages[1].content
     review = response.json()["review"]
@@ -223,6 +225,86 @@ def test_real_judge_entry_calls_once_and_preserves_source(
     assert len(list((service.artifacts_dir / "reviews").glob("*.json"))) == 1
     assert client.get(f"/api/v1/episode-reviews/{review['review_id']}").status_code == 200
     assert client.get(f"/api/v1/episodes/{episode.episode.episode_id}/reviews").status_code == 200
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "coding-minimax-m2.7-free",
+        "coding-minimax-m3-free",
+        "coding-glm-5.3-free",
+        "coding-glm-5.3-flash-free",
+    ],
+)
+@pytest.mark.parametrize("outcome", ["complete", "truncated", "truncated_without_usage"])
+def test_judge_transport_budget_and_truncation_accounting(
+    review_client: tuple[TestClient, EpisodeService],
+    model: str,
+    outcome: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Exercise the real parser once offline, including reported and unknown usage."""
+    client, service = review_client
+    episode = create_episode(service)
+    source = service.artifacts_dir / f"{episode.episode.episode_id}.json"
+    original = source.read_bytes()
+    truncated = outcome != "complete"
+    usage = {"prompt_tokens": 11628, "completion_tokens": 4096 if truncated else 1200}
+    upstream = {
+        "choices": [
+            {
+                "finish_reason": "length" if truncated else "stop",
+                "message": {
+                    "content": '{"verdict":'
+                    if truncated
+                    else json.dumps(
+                        {
+                            "verdict": "pass",
+                            "answer_correctness": "pass",
+                            "evidence_support": "pass",
+                            "process_safety": "pass",
+                            "rationale": "已读取的证据支持提交的结论。" * 80,
+                            "event_ids": [str(episode.events[0].event_id)],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    "reasoning_content": "private-reasoning-must-not-be-logged",
+                },
+            }
+        ],
+        "usage": None if outcome == "truncated_without_usage" else usage,
+    }
+    payload = real_judge_payload(str(episode.episode.episode_id))
+    payload["judge_model"] = model
+    with (
+        patch.object(AIHubMixModelProvider, "_resolve_key", return_value="offline-test-key"),
+        patch.object(AIHubMixModelProvider, "_send_http_request", return_value=upstream) as send,
+    ):
+        response = client.post("/api/v1/episode-reviews", json=payload)
+    assert response.status_code == 201
+    send.assert_called_once()
+    request = send.call_args.args[0]
+    assert request["max_tokens"] == 4096
+    assert request["model"] == model and "tools" not in request
+    assert ("reasoning_split" in request) == ("minimax" in model)
+    review = response.json()["review"]
+    if truncated:
+        assert review["status"] == "failed"
+        assert review["failure_code"] == "INVALID_JUDGE_OUTPUT"
+        assert review["verdict"] is None
+        assert "code=OUTPUT_TRUNCATED" in caplog.text
+    else:
+        assert review["status"] == "completed" and review["verdict"] == "pass"
+    if outcome == "truncated_without_usage":
+        assert review["token_usage"] is None
+    else:
+        assert review["token_usage"]["prompt_tokens"] == usage["prompt_tokens"]
+        assert review["token_usage"]["completion_tokens"] == usage["completion_tokens"]
+    assert "private-reasoning-must-not-be-logged" not in caplog.text
+    assert review["estimated_cost"]["is_known"] is False
+    assert source.read_bytes() == original
+    loaded = client.get(f"/api/v1/episode-reviews/{review['review_id']}")
+    assert loaded.json()["review"] == review
 
 
 @pytest.mark.parametrize(
@@ -400,6 +482,49 @@ def test_review_input_omits_deterministic_verdict_and_detects_source_tampering(
     source = service.artifacts_dir / f"{episode.episode.episode_id}.json"
     source.write_text(altered.model_dump_json(indent=2), encoding="utf-8")
     assert client.get(f"/api/v1/episode-reviews/{review['review_id']}").status_code == 409
+
+
+def test_unrelated_review_with_missing_source_does_not_block_history(
+    review_client: tuple[TestClient, EpisodeService],
+) -> None:
+    """A different Episode's missing source cannot block this Episode's reviews."""
+    client, service = review_client
+    first = create_episode(service)
+    second = create_episode(service)
+    review = client.post(
+        "/api/v1/episode-reviews", json=human_payload(str(first.episode.episode_id))
+    ).json()["review"]
+    source = service.artifacts_dir / f"{first.episode.episode_id}.json"
+    source.unlink()
+    response = client.get(f"/api/v1/episodes/{second.episode.episode_id}/reviews")
+    assert response.status_code == 200
+    assert response.json()["reviews"] == []
+    assert client.get(f"/api/v1/episode-reviews/{review['review_id']}").status_code == 409
+
+
+def test_partial_reviews_keep_valid_results_and_report_corruption(
+    review_client: tuple[TestClient, EpisodeService],
+) -> None:
+    """Explicit partial reads preserve valid history without pretending it is complete."""
+    client, service = review_client
+    episode = create_episode(service)
+    episode_id = str(episode.episode.episode_id)
+    created = client.post("/api/v1/episode-reviews", json=human_payload(episode_id))
+    assert created.status_code == 201
+    invalid = service.artifacts_dir / "reviews" / f"{uuid4()}.json"
+    invalid.write_text("{broken", encoding="utf-8")
+    before = invalid.read_bytes()
+    url = f"/api/v1/episodes/{episode_id}/reviews"
+    assert client.get(url).status_code == 409
+    result = client.get(f"{url}?include_integrity=true")
+    assert result.status_code == 200
+    assert result.json()["schema_version"] == "1.1"
+    assert result.json()["unreadable_count"] == 1
+    assert result.json()["reviews"][0]["review_id"] == created.json()["review"]["review_id"]
+    assert invalid.read_bytes() == before
+    assert (
+        client.get(f"/api/v1/episodes/{uuid4()}/reviews?include_integrity=true").status_code == 404
+    )
 
 
 def test_review_request_method_boundary(

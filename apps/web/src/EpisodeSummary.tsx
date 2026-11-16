@@ -1,6 +1,7 @@
 import type { EpisodeArtifact } from './apiContracts';
 import { contextLabel } from './ContextSettings';
 import { savedUsage } from './historySummary';
+import { RunDelivery } from './RunDelivery';
 
 interface Props { artifact: EpisodeArtifact; explanation: string }
 
@@ -15,6 +16,9 @@ export function EpisodeSummary({ artifact, explanation }: Props) {
   const usage = savedUsage(artifact);
   return (
     <div className="episode-summary">
+      <RunDelivery state={episode.final_state} environmentVersion={config.environment_version ?? ''}
+        termination={episode.termination_reason} detail={episode.detail} evaluation={artifact.evaluation} provider={agent.model.provider} label="结果交付摘要" />
+      <h3 className="episode-cost-heading">这次运行用了多少资源</h3>
       <div className="episode-provenance" aria-label="已保存运行来源">
         <span className={`badge ${simulated ? 'badge-blue' : 'badge-yellow'}`}>
           {simulated ? 'Fake 离线模拟' : agent.model.provider === 'aihubmix' ? '真实 API · 探索性结果' : `来源：${agent.model.provider}`}
@@ -29,6 +33,7 @@ export function EpisodeSummary({ artifact, explanation }: Props) {
         <span>工具传输：{config.environment_version === 'tool-lab-mcp-v1' ? 'MCP HTTP' : '本地'}</span>
         <span>工具调用：{agent.model.tool_call_mode === 'serial' ? '多工具 · 顺序执行' : '单工具'}</span>
         {agent.planning && <span>规划：声明计划 · {agent.planning.algorithm_version}</span>}
+        {agent.reflection && <span>反思：停滞后最多一次 · {agent.reflection.algorithm_version}</span>}
         {agent.context_policy && <span>上下文：{contextLabel(agent.context_policy)}</span>}
       </div>
       <div className="metrics-grid episode-metrics">

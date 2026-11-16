@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blender 建模演示 · AgentLabyrinth</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f5f3ee; color: #202a2b; font: 15px/1.6 Inter, 'Microsoft YaHei UI', sans-serif; }
+    main { width: min(1180px, 100% - 40px); margin: 0 auto; padding-block: 32px; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+    h1 { font-size: clamp(1.9rem, 5vw, 3rem); line-height: 1.15; letter-spacing: -.035em; margin: 6px 0 8px; }
+    h2 { font-size: 1.05rem; margin: 0; }
+    p { margin: 0; }
+    .brand { font-weight: 700; color: #425f5d; font-size: .85rem; }
+    .intro { color: #4f5a59; }
+    button { appearance: none; flex-shrink: 0; cursor: pointer; font: inherit; font-weight: 700; color: white; background: #9d432d; border: 0; border-radius: 8px; padding: 12px 18px; }
+    button[aria-disabled="true"] { cursor: wait; opacity: .72; }
+    :focus-visible { outline: 3px solid #116e71; outline-offset: 3px; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+    section { overflow: hidden; background: #fffdf8; border: 1px solid #dedad0; border-radius: 12px; }
+    .heading { padding: 15px 18px; border-bottom: 1px solid #dedad0; }
+    .stage { display: grid; place-items: center; aspect-ratio: 12/7; background: #152529; color: #dbe6e1; }
+    .stage img { width: 100%; display: block; }
+    .stage img[hidden] { display: none; }
+    .stage p { padding: 20px; text-align: center; }
+    .assets { display: flex; flex-wrap: wrap; gap: 9px 20px; padding: 13px 18px; }
+    .assets[hidden] { display: none; }
+    a { color: #285d61; font-weight: 700; }
+    #status { color: #4f5a59; font-size: .88rem; margin-top: 3px; }
+    #trace { list-style: none; padding: 0 18px; margin: 0; }
+    #trace li { padding: 11px 0; border-bottom: 1px solid #e7e4dc; }
+    #trace li:last-child { border-bottom: 0; }
+    .event { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 5px 10px; }
+    .state { font-size: .81rem; color: #4d6064; }
+    .ok { color: #24664b; }
+    .error { color: #a33a2e; }
+    details { margin-top: 5px; }
+    summary { cursor: pointer; font-size: .84rem; color: #425f5d; }
+    pre { margin: 5px 0 0; padding: 8px; border-radius: 6px; background: #f2f1eb; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .79rem; }
+    @media (max-width: 760px) { header { align-items: start; flex-direction: column; } .layout { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="brand">AgentLabyrinth · GridWorld</p>
+        <h1>Blender 建模演示</h1>
+        <p class="intro">通过 MCP 生成钥匙、门与角色，实时查看调用过程。</p>
+      </div>
+      <button id="build" type="button">生成场景</button>
+    </header>
+    <div class="layout">
+      <section aria-labelledby="preview-title">
+        <h2 class="heading" id="preview-title">Blender 渲染预览</h2>
+        <div class="stage">
+          <p id="placeholder">生成后在这里查看钥匙门场景。</p>
+          <img id="preview" alt="GridWorld 钥匙门场景，包含角色、钥匙、墙、门和目标点" hidden>
+        </div>
+        <nav class="assets" id="assets" aria-label="生成文件" hidden>
+          <a id="blend">Blender 源文件</a><a id="glb">GLB 模型</a><a id="png">预览图</a>
+        </nav>
+      </section>
+      <section aria-labelledby="trace-title">
+        <div class="heading">
+          <h2 id="trace-title">MCP 调用记录</h2>
+          <p id="status" role="status">等待生成。</p>
+        </div>
+        <ol id="trace"></ol>
+      </section>
+    </div>
+  </main>
+  <script>
+    const button = document.querySelector('#build');
+    const trace = document.querySelector('#trace');
+    const status = document.querySelector('#status');
+    const preview = document.querySelector('#preview');
+    const placeholder = document.querySelector('#placeholder');
+    const assets = document.querySelector('#assets');
+
+    function showEvent({ method, state, ms, detail }) {
+      const item = document.createElement('li');
+      const line = document.createElement('div');
+      line.className = 'event';
+      const title = document.createElement('strong');
+      title.textContent = method;
+      const badge = document.createElement('span');
+      badge.className = `state ${state}`;
+      badge.textContent = state === 'request' ? '请求' : `${state === 'ok' ? '成功' : '失败'} · ${ms} ms`;
+      line.append(title, badge);
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = state === 'request' ? '请求详情' : '响应详情';
+      const data = document.createElement('pre');
+      data.textContent = typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2);
+      details.append(summary, data);
+      item.append(line, details);
+      trace.append(item);
+      if (state === 'error') {
+        status.textContent = detail;
+        return;
+      }
+      if (method === 'tools/call' && state === 'request') status.textContent = 'Blender 正在生成与渲染场景…';
+      if (method === 'tools/call' && state === 'ok') {
+        preview.src = detail.files['preview.png'];
+        preview.hidden = false;
+        placeholder.hidden = true;
+        document.querySelector('#blend').href = detail.files['key-door.blend'];
+        document.querySelector('#glb').href = detail.files['key-door.glb'];
+        document.querySelector('#png').href = preview.getAttribute('src');
+        assets.hidden = false;
+        status.textContent = '建模完成，三个文件可下载。';
+      }
+    }
+
+    button.addEventListener('click', async () => {
+      if (button.getAttribute('aria-disabled') === 'true') return;
+      button.setAttribute('aria-disabled', 'true');
+      trace.replaceChildren();
+      assets.hidden = true;
+      preview.hidden = true;
+      placeholder.hidden = false;
+      placeholder.textContent = '等待 Blender 输出预览…';
+      status.textContent = '正在连接本地 MCP 服务…';
+      try {
+        const response = await fetch('/build', { method: 'POST', headers: { 'X-Blender-Demo': 'build' } });
+        if (!response.ok || !response.body) throw new Error('响应不可用');
+        const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+        let pending = '';
+        let terminal = false;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const lines = (pending + value).split('\n');
+          pending = lines.pop();
+          for (const line of lines) {
+            const event = JSON.parse(line);
+            showEvent(event);
+            terminal ||= event.state === 'error' || (event.method === 'tools/call' && event.state === 'ok');
+          }
+        }
+        if (pending || !terminal) throw new Error('事件流提前结束');
+      } catch {
+        status.textContent = '演示连接中断，请确认本机服务已启动后再试。';
+      } finally {
+        if (assets.hidden) placeholder.textContent = '当前没有可用预览。';
+        button.removeAttribute('aria-disabled');
+      }
+    });
+  </script>
+</body>
+</html>

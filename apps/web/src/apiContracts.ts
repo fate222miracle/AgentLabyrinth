@@ -20,6 +20,35 @@ const runtimeFields = {
   runtime_strategy: z.optional(z.enum(['handwritten', 'handwritten_recovery'])),
   runtime_version: z.optional(z.string()),
 };
+
+const gridWorldRow = z.object({
+    episode_id: uuid, started_at: utc, comparison_key: hash,
+    task_name: z.string(), task_version: z.string(), seed: z.int(),
+    model_id: z.string(), provider: z.enum(['fake', 'aihubmix']),
+    context_rounds: z.nullable(count), max_steps: count, token_budget: count,
+    max_execution_time_ms: z.nullable(count),
+    success: z.boolean(), termination, detail: z.string(),
+    actions: z.nullable(count), illegal_actions: z.nullable(count), duration_ms: count,
+    input_tokens: z.nullable(count), output_tokens: z.nullable(count), usage_complete: z.boolean(),
+});
+export const gridWorldComparisonSchema = z.object({
+  schema_version: z.literal('1.0'), skipped_count: count, items: z.array(gridWorldRow),
+});
+export type GridWorldComparisonRow = z.infer<typeof gridWorldRow>;
+export const gridWorldBatchSchema = z.object({
+  schema_version: z.literal('1.0'), batch_id: uuid, created_at: utc,
+  task: z.string(), task_version: z.string(), seed: z.int(), max_steps: count,
+  input_threshold: count, output_per_call: count, timeout_ms: count, context_rounds: count,
+  running: z.boolean(), runs: z.array(z.object({
+    model: z.string(), episode_id: uuid,
+    status: z.enum(['queued', 'running', 'completed', 'failed', 'unavailable', 'error', 'interrupted', 'not_started']),
+    row: z.nullable(gridWorldRow),
+  })).check(z.length(4)),
+});
+export const gridWorldBatchListSchema = z.object({
+  schema_version: z.literal('1.0'), skipped_count: count, items: z.array(gridWorldBatchSchema),
+});
+export type GridWorldBatch = z.infer<typeof gridWorldBatchSchema>;
 const contextPolicy = z.looseObject({
   schema_version: z.enum(['1.0', '1.1']), algorithm_version: z.enum(['tool-round-window-v1', 'tool-round-window-memory-v1']),
   mode: z.enum(['full', 'recent_tool_rounds']),
@@ -32,9 +61,28 @@ const contextPolicy = z.looseObject({
 const planningConfig = z.looseObject({
   schema_version: z.literal('1.0'), algorithm_version: z.literal('plan-update-v1'),
 });
+const reflectionConfig = z.looseObject({
+  schema_version: z.literal('1.0'), algorithm_version: z.literal('no-progress-revision-v1'),
+});
 const usage = z.looseObject({ prompt_tokens: count, completion_tokens: count, simulated: z.boolean() });
 const cost = z.looseObject({ amount: decimal, currency: z.literal('USD'),
   price_table_version: z.string(), is_known: z.boolean() });
+
+export const gridWorldReviewSchema = z.object({
+  schema_version: z.literal('1.0'), review_id: uuid, episode_ids: z.tuple([uuid, uuid]),
+  source_hashes: z.tuple([hash, hash]), comparison_key: hash, review_input_hash: hash,
+  judge_model: z.string(), prompt_version: z.enum(['gridworld-pair-review-v1', 'gridworld-pair-review-v2']), created_at: utc,
+  output: z.nullable(z.object({
+    assessment: z.enum(['a', 'b', 'tradeoff', 'insufficient']), rationale: z.string(),
+    citations: z.array(z.object({ side: z.enum(['a', 'b']), event_id: uuid })),
+  })),
+  failure_code: z.nullable(z.enum(['JUDGE_PROVIDER_ERROR', 'JUDGE_REQUEST_TIMEOUT', 'INVALID_JUDGE_OUTPUT', 'INVALID_EVENT_REFERENCE'])),
+  token_usage: z.nullable(usage), estimated_cost: z.nullable(cost),
+}).check(z.refine(value => (value.output === null) !== (value.failure_code === null), 'review state mismatch'));
+export type GridWorldReview = z.infer<typeof gridWorldReviewSchema>;
+export const gridWorldReviewListSchema = z.object({
+  schema_version: z.literal('1.0'), reviews: z.array(gridWorldReviewSchema), skipped_count: count,
+});
 
 export const metaSchema = z.looseObject({
   schema_version: z.literal('1.0'), request_id: uuid,
@@ -43,8 +91,10 @@ export const metaSchema = z.looseObject({
     is_experimental: z.boolean(), notes: z.string(), scenarios: z.array(z.string()) })),
   tasks: z.array(z.looseObject({ id: z.string(), name: z.string(), category: z.string(),
     description: z.string(), max_steps: count, token_budget: count,
-    suite: z.enum(['tool_lab_core', 'bfcl_adapted', 'bfcl_java_adapted']),
-    split: z.string(), supports_mcp: z.boolean(), supports_planning: z.optional(z.boolean()) })),
+    suite: z.enum(['tool_lab_core', 'bfcl_adapted', 'bfcl_java_adapted', 'gridworld']),
+    split: z.string(), supports_mcp: z.boolean(), supports_planning: z.optional(z.boolean()),
+    supports_reflection: z.optional(z.boolean()),
+    allowed_model_ids: z.nullish(z.array(z.string())) })),
   default_model: z.string(), default_task: z.string(),
   model_catalog_status: z.enum(['live', 'unavailable', 'static']),
 }).check(z.refine((value) => value.models.some((model) => model.id === value.default_model)
@@ -54,7 +104,8 @@ export const traceEventSchema = z.looseObject({
   schema_version: z.literal('1.0'), event_id: uuid, episode_id: uuid, step_index: count,
   event_type: z.enum(['EPISODE_STARTED', 'EPISODE_RESUMED', 'OBSERVATION_CREATED',
     'MODEL_REQUESTED', 'MODEL_RESPONDED', 'TOOL_CALL_PROPOSED', 'TOOL_CALL_VALIDATED',
-    'TOOL_STARTED', 'TOOL_SUCCEEDED', 'TOOL_FAILED', 'ENVIRONMENT_UPDATED', 'PLAN_UPDATED', 'EPISODE_FINISHED']),
+    'TOOL_STARTED', 'TOOL_SUCCEEDED', 'TOOL_FAILED', 'ENVIRONMENT_UPDATED', 'PLAN_UPDATED',
+    'REFLECTION_PRODUCED', 'REFLECTION_REJECTED', 'EPISODE_FINISHED']),
   timestamp: utc, duration_ms: count, payload: record, token_usage: usage,
   estimated_cost: cost, parent_event_id: z.optional(z.nullable(uuid)),
 });
@@ -68,20 +119,24 @@ export const episodeArtifactSchema = z.looseObject({
   evaluation: z.looseObject({ success: z.boolean(), reason: z.string(), metrics: record }),
   run_config: z.looseObject({ runtime_version: z.nullish(z.string()), environment_version: z.optional(z.string()) }),
   agent: z.looseObject({ name: z.optional(z.string()), ...runtimeFields,
-    schema_version: z.optional(z.enum(['1.0', '1.1', '1.2', '1.3', '1.4'])),
+    schema_version: z.optional(z.enum(['1.0', '1.1', '1.2', '1.3', '1.4', '1.5'])),
     context_policy: z.nullish(contextPolicy),
     planning: z.nullish(planningConfig),
+    reflection: z.nullish(reflectionConfig),
     budget: z.optional(z.looseObject({ max_execution_time_ms: z.optional(count) })),
     model: modelConfig }),
   events: z.array(traceEventSchema), reference_cost: z.nullish(cost),
 }).check(z.superRefine((value, ctx) => {
-  if (value.agent.context_policy != null && !['1.2', '1.3', '1.4'].includes(value.agent.schema_version ?? '')) {
+  if (value.agent.context_policy != null && !['1.2', '1.3', '1.4', '1.5'].includes(value.agent.schema_version ?? '')) {
     ctx.addIssue({ code: 'custom', path: ['agent', 'schema_version'], message: 'context revision mismatch' });
   }
-  if (value.agent.planning != null && !['1.3', '1.4'].includes(value.agent.schema_version ?? '')) {
+  if (value.agent.planning != null && !['1.3', '1.4', '1.5'].includes(value.agent.schema_version ?? '')) {
     ctx.addIssue({ code: 'custom', path: ['agent', 'schema_version'], message: 'planning revision mismatch' });
   }
-  if (value.agent.runtime_backend === 'pydantic_ai' && value.agent.schema_version !== '1.4') {
+  if (value.agent.reflection != null && value.agent.schema_version !== '1.5') {
+    ctx.addIssue({ code: 'custom', path: ['agent', 'schema_version'], message: 'reflection revision mismatch' });
+  }
+  if (value.agent.runtime_backend === 'pydantic_ai' && !['1.4', '1.5'].includes(value.agent.schema_version ?? '')) {
     ctx.addIssue({ code: 'custom', path: ['agent', 'schema_version'], message: 'third runtime revision mismatch' });
   }
   const ids = new Set<string>();
@@ -143,7 +198,7 @@ const metricsSchema = z.looseObject({
   recovery_total_reference_cost: armMetricFields.total_reference_cost,
 });
 const experimentConfig = z.looseObject({
-  comparison_axis: z.optional(z.enum(['recovery_policy', 'runtime_backend', 'context_policy', 'memory_ablation', 'planning'])),
+  comparison_axis: z.optional(z.enum(['recovery_policy', 'runtime_backend', 'context_policy', 'memory_ablation', 'planning', 'reflection'])),
   model: z.optional(z.union([z.string(), z.looseObject({ model: z.string(),
     schema_version: z.optional(z.enum(['1.0', '1.1'])), tool_call_mode: z.optional(z.enum(['single', 'serial'])),
   }).check(z.refine(value => (value.tool_call_mode !== undefined) === (value.schema_version === '1.1'), 'tool call mode revision mismatch'))])),
@@ -152,14 +207,15 @@ const experimentConfig = z.looseObject({
   repeat_count: z.optional(count), task_ids: z.optional(z.array(z.string())), evaluator: z.optional(z.string()),
   max_total_tokens: z.optional(z.int().check(z.minimum(1), z.maximum(1_000_000_000))),
   budget: z.optional(z.looseObject({ max_execution_time_ms: z.optional(count) })),
-  baseline_agent: z.optional(z.looseObject({ ...runtimeFields, context_policy: z.nullish(contextPolicy), planning: z.nullish(planningConfig) })), recovery_agent: z.optional(z.looseObject({ ...runtimeFields, context_policy: z.nullish(contextPolicy), planning: z.nullish(planningConfig) })),
+  baseline_agent: z.optional(z.looseObject({ ...runtimeFields, context_policy: z.nullish(contextPolicy), planning: z.nullish(planningConfig), reflection: z.nullish(reflectionConfig) })), recovery_agent: z.optional(z.looseObject({ ...runtimeFields, context_policy: z.nullish(contextPolicy), planning: z.nullish(planningConfig), reflection: z.nullish(reflectionConfig) })),
 });
 export const experimentArtifactSchema = z.looseObject({
-  schema_version: z.enum(['1.0', '1.1', '1.2', '1.3', '1.4', '1.5', '1.6', '1.7']), experiment_id: uuid, created_at: utc,
+  schema_version: z.enum(['1.0', '1.1', '1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.8']), experiment_id: uuid, created_at: utc,
   config: experimentConfig, config_hash: hash, episode_ids: z.array(uuid),
   pairs: z.array(pairSchema), metrics: metricsSchema,
-}).check(z.refine((value) => (value.config.max_total_tokens == null || ['1.3', '1.4', '1.5', '1.6', '1.7'].includes(value.schema_version))
+}).check(z.refine((value) => (value.config.max_total_tokens == null || ['1.3', '1.4', '1.5', '1.6', '1.7', '1.8'].includes(value.schema_version))
   && (value.schema_version !== '1.7' || value.config.comparison_axis === 'runtime_backend')
+  && (value.schema_version !== '1.8' || value.config.comparison_axis === 'reflection')
   && (value.schema_version !== '1.5' || value.config.comparison_axis === 'memory_ablation')
   && (value.schema_version !== '1.6' || value.config.comparison_axis === 'planning')
   && (value.config.comparison_axis !== 'planning' || (value.schema_version === '1.6'
@@ -174,6 +230,19 @@ export const experimentArtifactSchema = z.looseObject({
     && value.config.baseline_agent.runtime_version === value.config.recovery_agent.runtime_version
     && value.config.baseline_agent.recovery_policy === (value.config.baseline_agent.runtime_strategy === 'handwritten_recovery' ? 'invalid_arguments_once' : 'none')
     && value.config.baseline_agent.recovery_policy === value.config.recovery_agent.recovery_policy
+    && value.metrics.retry_eligible_count == null && value.metrics.retry_recovery_count == null
+    && value.metrics.retry_recovery_rate == null
+    && value.pairs.every((pair) => pair.retry_eligible == null && !pair.recovered)))
+  && (value.config.comparison_axis !== 'reflection' || (value.schema_version === '1.8'
+    && value.config.baseline_agent?.reflection == null
+    && value.config.recovery_agent?.reflection?.algorithm_version === 'no-progress-revision-v1'
+    && value.config.baseline_agent?.context_policy?.mode === 'full'
+    && value.config.recovery_agent?.context_policy?.mode === 'full'
+    && value.config.baseline_agent.runtime_backend === value.config.recovery_agent.runtime_backend
+    && value.config.baseline_agent.runtime_strategy === 'handwritten'
+    && value.config.recovery_agent.runtime_strategy === 'handwritten'
+    && value.config.baseline_agent.recovery_policy === 'none'
+    && value.config.recovery_agent.recovery_policy === 'none'
     && value.metrics.retry_eligible_count == null && value.metrics.retry_recovery_count == null
     && value.metrics.retry_recovery_rate == null
     && value.pairs.every((pair) => pair.retry_eligible == null && !pair.recovered)))
@@ -242,6 +311,10 @@ export const episodeReviewResponseSchema = z.looseObject({ ...envelope, review: 
 export const episodeReviewListResponseSchema = z.looseObject({
   ...envelope, episode_id: uuid, reviews: z.array(episodeReviewSchema),
 });
+export const episodeReviewPartialListResponseSchema = z.looseObject({
+  schema_version: z.literal('1.1'), request_id: uuid, episode_id: uuid,
+  reviews: z.array(episodeReviewSchema), unreadable_count: count,
+});
 export const jobSchema = z.looseObject({ schema_version: z.literal('1.0'), experiment_id: uuid,
   status: z.enum(['queued', 'running', 'paused', 'cancelled', 'completed', 'failed', 'interrupted']),
   requested_action: z.nullable(z.enum(['pause', 'cancel'])), error_code: z.nullable(z.string()), updated_at: utc });
@@ -297,7 +370,7 @@ const progressArmSchema = z.object({
   : value.success === null && value.termination_reason === null, 'progress outcome mismatch'));
 export const experimentProgressSchema = z.object({
   schema_version: z.literal('1.0'), experiment_id: uuid,
-  comparison_axis: z.enum(['recovery_policy', 'runtime_backend', 'context_policy', 'memory_ablation', 'planning']),
+  comparison_axis: z.enum(['recovery_policy', 'runtime_backend', 'context_policy', 'memory_ablation', 'planning', 'reflection']),
   arms: z.array(progressArmSchema),
 }).check(z.refine(value => new Set(value.arms.map(arm => arm.episode_id)).size === value.arms.length,
   'duplicate progress ownership'));

@@ -1,5 +1,6 @@
 """API DTO schemas for AgentLabyrinth M1 Slice B Web Demo."""
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
@@ -7,6 +8,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from packages.application.experiment import ComparisonAxis, ExperimentArtifact
+from packages.application.gridworld_review import PairReview
 from packages.application.review import (
     EpisodeReviewArtifact,
     ReviewRating,
@@ -16,20 +18,29 @@ from packages.domain.models import (
     ContextPolicy,
     EpisodeArtifact,
     PlanningConfig,
+    ReflectionConfig,
     RuntimeBackend,
     RuntimeStrategy,
     TerminationReason,
     ToolCallMode,
 )
+from packages.environments.gridworld.environment import GRID_LAYOUTS, SOURCE_TOKEN_BUDGET
 
 ALLOWED_AIHUBMIX_MODELS: set[str] = {
     "coding-minimax-m2.7-free",
     "xiaomi-mimo-v2.5-pro-free",
 }
+GRIDWORLD_ALLOWED_MODEL_IDS: set[str] = {
+    "coding-minimax-m2.7-free",
+    "coding-minimax-m3-free",
+    "coding-glm-5.3-free",
+    "coding-glm-5.3-flash-free",
+}
 
 ALLOWED_FAKE_SCENARIOS: set[str] = {
     "clean",
     "success",
+    "illegal-action",
     "wrong-answer",
     "invalid-arguments",
     "invalid-then-success",
@@ -73,10 +84,14 @@ class TaskOption(BaseModel):
     description: str
     max_steps: int
     token_budget: int
-    suite: Literal["tool_lab_core", "bfcl_adapted", "bfcl_java_adapted"] = "tool_lab_core"
+    suite: Literal["tool_lab_core", "bfcl_adapted", "bfcl_java_adapted", "gridworld"] = (
+        "tool_lab_core"
+    )
     split: str = "development"
     supports_mcp: bool = False
     supports_planning: bool = False
+    supports_reflection: bool = False
+    allowed_model_ids: list[str] | None = None
 
 
 class MetaResponse(BaseModel):
@@ -98,17 +113,26 @@ class CreateEpisodeRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"] = "1.3"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"] = "1.3"
     tool_call_mode: ToolCallMode | None = None
     request_id: UUID = Field(default_factory=uuid4)
     provider: Literal["fake", "aihubmix"]
     model: str
     scenario: (
-        Literal["success", "wrong-answer", "invalid-arguments", "invalid-then-success", "max-steps"]
+        Literal[
+            "success",
+            "wrong-answer",
+            "invalid-arguments",
+            "invalid-then-success",
+            "max-steps",
+            "illegal-action",
+        ]
         | None
     ) = None
     task_id: str = "order-status-001"
-    suite: Literal["tool_lab_core", "bfcl_adapted", "bfcl_java_adapted"] = "tool_lab_core"
+    suite: Literal["tool_lab_core", "bfcl_adapted", "bfcl_java_adapted", "gridworld"] = (
+        "tool_lab_core"
+    )
     max_steps: int | None = Field(default=None, ge=1, le=20)
     max_execution_time_ms: int | None = Field(default=None, ge=1, le=3600000, strict=True)
     token_budget: int | None = Field(default=None, ge=100, le=20000)
@@ -118,6 +142,7 @@ class CreateEpisodeRequest(BaseModel):
     fault_profile: FaultProfile = "none"
     context_policy: ContextPolicy | None = None
     planning: PlanningConfig | None = None
+    reflection: ReflectionConfig | None = None
 
     @model_validator(mode="after")
     def context_revision(self) -> "CreateEpisodeRequest":
@@ -125,7 +150,7 @@ class CreateEpisodeRequest(BaseModel):
         if self.schema_version in ("1.4", "1.5"):
             if self.tool_call_mode is None:
                 raise ValueError("Tool call mode requires Episode request revision 1.4")
-        elif self.tool_call_mode is not None and self.schema_version not in ("1.6", "1.7"):
+        elif self.tool_call_mode is not None and self.schema_version not in ("1.6", "1.7", "1.8"):
             raise ValueError("Tool call mode requires Episode request revision 1.4")
         if self.context_policy is not None and self.schema_version not in (
             "1.3",
@@ -133,12 +158,56 @@ class CreateEpisodeRequest(BaseModel):
             "1.5",
             "1.6",
             "1.7",
+            "1.8",
         ):
             raise ValueError("Context policy requires Episode request revision 1.3")
-        if self.planning is not None and self.schema_version not in ("1.6", "1.7"):
+        if self.planning is not None and self.schema_version not in ("1.6", "1.7", "1.8"):
             raise ValueError("Planning requires Episode request revision 1.6")
-        if self.runtime_backend == "pydantic_ai" and self.schema_version != "1.7":
+        if self.reflection is not None and self.schema_version != "1.8":
+            raise ValueError("Reflection requires Episode request revision 1.8")
+        if self.reflection is not None and (
+            self.planning is not None
+            or (self.context_policy is not None and self.context_policy.mode != "full")
+            or self.runtime_strategy != "handwritten"
+            or self.tool_call_mode not in (None, "single")
+        ):
+            raise ValueError(
+                "Reflection requires full context and single calls without Planning or Recovery"
+            )
+        if self.runtime_backend == "pydantic_ai" and self.schema_version not in ("1.7", "1.8"):
             raise ValueError("PydanticAI backend requires Episode request revision 1.7")
+        if self.scenario == "illegal-action" and self.suite != "gridworld":
+            raise ValueError("The illegal-action Fake scenario is reserved for GridWorld")
+        if self.suite == "gridworld":
+            layout = GRID_LAYOUTS.get(self.task_id)
+            fixed_configuration = (
+                layout is not None
+                and self.max_steps in (None, layout.max_actions)
+                and self.max_execution_time_ms in (None, 300000)
+                and self.runtime_backend == "handwritten"
+                and self.runtime_strategy == "handwritten"
+                and self.tool_transport == "local"
+                and self.fault_profile == "none"
+                and self.tool_call_mode in (None, "single")
+                and self.context_policy is None
+                and self.planning is None
+                and self.reflection is None
+            )
+            fake_configuration = (
+                self.provider == "fake"
+                and self.scenario in (None, "success", "illegal-action", "max-steps")
+                and self.token_budget in (None, SOURCE_TOKEN_BUDGET)
+            )
+            real_configuration = (
+                self.provider == "aihubmix"
+                and self.model in GRIDWORLD_ALLOWED_MODEL_IDS
+                and self.scenario is None
+                and self.token_budget is None
+            )
+            if not fixed_configuration or not (fake_configuration or real_configuration):
+                raise ValueError(
+                    "GridWorld supports only its fixed Fake or approved real configuration"
+                )
         return self
 
 
@@ -150,6 +219,49 @@ class EpisodeResponse(BaseModel):
     schema_version: Literal["1.0"] = "1.0"
     request_id: UUID
     artifact: EpisodeArtifact
+
+
+class GridWorldComparisonRow(BaseModel):
+    episode_id: UUID
+    started_at: datetime
+    comparison_key: str
+    task_name: str
+    task_version: str
+    seed: int
+    model_id: str
+    provider: Literal["fake", "aihubmix"]
+    context_rounds: int | None
+    max_steps: int
+    token_budget: int
+    max_execution_time_ms: int | None
+    success: bool
+    termination: TerminationReason
+    detail: str
+    actions: int | None
+    illegal_actions: int | None
+    duration_ms: int
+    input_tokens: int | None
+    output_tokens: int | None
+    usage_complete: bool
+
+
+class GridWorldComparisonResponse(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    items: list[GridWorldComparisonRow]
+    skipped_count: int
+
+
+class CreateGridWorldReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["1.0"]
+    episode_ids: tuple[UUID, UUID]
+    judge_model: str = Field(min_length=1, max_length=200)
+
+
+class GridWorldReviewListResponse(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    reviews: list[PairReview]
+    skipped_count: int
 
 
 class HumanReviewInput(BaseModel):
@@ -221,13 +333,24 @@ class EpisodeReviewListResponse(BaseModel):
     reviews: tuple[EpisodeReviewArtifact, ...]
 
 
+class EpisodeReviewPartialListResponse(BaseModel):
+    """Explicitly requested history with an incomplete-source count."""
+
+    model_config = ConfigDict(frozen=True)
+    schema_version: Literal["1.1"] = "1.1"
+    request_id: UUID
+    episode_id: UUID
+    reviews: tuple[EpisodeReviewArtifact, ...]
+    unreadable_count: int = Field(ge=0)
+
+
 class CreateExperimentRequest(BaseModel):
     """Request payload to execute a paired comparison experiment."""
 
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[
-        "1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10"
+        "1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11"
     ] = "1.5"
     tool_call_mode: ToolCallMode | None = None
     request_id: UUID = Field(default_factory=uuid4)
@@ -273,7 +396,11 @@ class CreateExperimentRequest(BaseModel):
         if self.schema_version in ("1.7", "1.8"):
             if self.tool_call_mode is None:
                 raise ValueError("Tool call mode requires Experiment request revision 1.7")
-        elif self.tool_call_mode is not None and self.schema_version not in ("1.9", "1.10"):
+        elif self.tool_call_mode is not None and self.schema_version not in (
+            "1.9",
+            "1.10",
+            "1.11",
+        ):
             raise ValueError("Tool call mode requires Experiment request revision 1.7")
         if self.max_total_tokens is not None and self.schema_version not in (
             "1.4",
@@ -283,6 +410,7 @@ class CreateExperimentRequest(BaseModel):
             "1.8",
             "1.9",
             "1.10",
+            "1.11",
         ):
             raise ValueError("Global Token budget requires request revision 1.4")
         if self.schema_version == "1.6" and self.comparison_axis != "memory_ablation":
@@ -302,6 +430,18 @@ class CreateExperimentRequest(BaseModel):
             self.context_policy is not None and self.context_policy.mode != "full"
         ):
             raise ValueError("Planning challenge requires full context")
+        if self.schema_version == "1.11" and self.comparison_axis != "reflection":
+            raise ValueError("Request revision 1.11 supports only the reflection axis")
+        if self.comparison_axis == "reflection" and self.schema_version != "1.11":
+            raise ValueError("Reflection challenge requires Experiment request revision 1.11")
+        if self.comparison_axis == "reflection" and (
+            self.runtime_strategy != "handwritten"
+            or (self.context_policy is not None and self.context_policy.mode != "full")
+            or self.tool_call_mode not in (None, "single")
+        ):
+            raise ValueError(
+                "Reflection challenge requires full context and single calls without Recovery"
+            )
         if (
             self.context_policy is not None or self.comparison_axis == "context_policy"
         ) and self.schema_version not in ("1.5", "1.6", "1.7", "1.8", "1.9", "1.10"):
@@ -328,7 +468,7 @@ class CreateExperimentRequest(BaseModel):
             and self.schema_version != "1.10"
         ):
             raise ValueError("PydanticAI Runtime comparison requires request revision 1.10")
-        if self.runtime_backend == "pydantic_ai":
+        if self.runtime_backend == "pydantic_ai" and self.comparison_axis != "reflection":
             raise ValueError("PydanticAI is selected only as an explicit Runtime comparison target")
         return self
 

@@ -1,6 +1,321 @@
 # Current state
 
-更新：2026-10-28。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+更新：2026-11-16。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+
+## 2026-11-16 V0.4 单 Agent 阶段交付
+
+交付分支 `codex/v0.4-gridworld` 汇总两关 GridWorld、局部视野、三维回放、同配置四模型批次、双局 Judge 和本机 Blender MCP 演示。[演示启动与资产验证](../learning/blender-mcp-demo-20261111.md)。
+
+本机门禁已通过 826 项 Python、22 格回归零退化、54 项 Node、前端类型检查及构建，npm audit 为 0。Edge 首轮 93 通过、1 条旧断言失败（`8eb3c374-ea7c-427b-ae3e-ff02871d31ef`）。策略实验已默认折叠，更新回归后重跑该浏览器文件，3 条用例及代理身份检查全部通过。归档的角色 GLB 通过六段动作、15 个关节、根骨与发色校验，新增 Blender 演示脚本通过 Ruff 与 Mypy。
+
+双局真实 Judge 的既有超时和截断记录仍留档，本轮验证使用离线替身。远端 CI 由推送触发，以 GitHub 实际回执为准。
+
+## 2026-11-13 双局 Judge 复用原版狐狸动画
+
+等待区改为原版狐狸上移显形、五官显现和卷尾路径展开。现有生成器从同一原稿输出循环版，每次原动作后停留 670 ms。减少动效时使用静态标志。Edge 4 项、Web 类型检查和构建通过，另在 19922 预览以实际图片采样核对第二轮仍播放和减少动效时的静止画面。浏览器验证使用替身评审，未调用真实模型。
+
+## 2026-11-13 双局 Judge 等待与超时诊断
+
+用户两次评审失败均对应供应商 `REQUEST_TIMEOUT` 日志。双局请求超时从 30 秒调至 60 秒，新超时结果单独显示。提交后旧结果区由狐狸 Logo 等待动画替代，减少动效时用静态 Logo。返回后优先显示本次结果，旧记录收进默认折叠的历史区。70 项后端定向、8 项 Edge 定向及 Web 类型检查与构建通过。预览原三条评审回读一致，本轮未发真实评审请求。
+
+## 2026-11-13 四模型批次与 Judge 分析改进
+
+实验中心可显式启动回廊档案室的四模型串行批次，并只读查看各局状态、限定本批数据与选两局对比。新版双局 Judge 根据行动前的局部视野、探索增量和折返标记分析路线决策。初版评审仍可回查。实际验证、运行约束和操作步骤见集成工作区系统优化记录。
+
+## 2026-11-13 GridWorld 双局 Judge
+
+[ADR-050 第二阶段](../adr/ADR-050-gridworld-model-comparison.md#第二阶段-双局-judge) 已按负责人批准实施于集成工作区。实验中心在两张路线图下提供双局模型评审，按 A/B 公共轨迹分析并独立保存至 SQLite。74 项 Python、54 项 Web 单元、25 项 Edge 定向及前端构建通过。本地预览升级后原历史可读，真实历史的评审候选与只读回查已验证。实际真实评审由页面显式触发，开发未发真实 Judge。下一项为 ADR-050 第三阶段四模型批次。
+
+## 2026-11-13 GridWorld 模型对比第一阶段
+
+实验中心首页现读取 SQLite 最近 100 条完成的 GridWorld 运行，按保存配置分组，每个模型保留最新一局供选择。两局并排展示动作、拒绝、Token、耗时和公开路线，可进入原 3D 回放。策略实验收在同页可展开入口，旧详情地址保留。方案见 [ADR-050](../adr/ADR-050-gridworld-model-comparison.md)，验证和真实历史样本见[系统优化记录](../learning/system-optimization-log.md#2026-11-13-gridworld-模型对比)。双局 Judge 与同配置四模型批次待后续开发。本次未发模型推理或评审请求，未提交 Git。
+
+## 2026-11-12 GridWorld 首次推理超时
+
+第二关真实样本 8c425323-a39b-4f48-9041-88b68bdcb197 首次模型请求约 31 秒以 REQUEST_TIMEOUT 结束，未执行动作。第二关新真实默认配置的单次 AIHubMix HTTP 阈值由 30 秒调为 60 秒。旧用例先复现缺失参数，修正后 58 项离线检查及 Ruff、Mypy 通过。19922 已更新，原结果回读等值，真实上游表现待新样本。详情见[系统优化记录](../learning/system-optimization-log.md#首个模型请求超时)。
+
+## 2026-11-12 GridWorld 优化复测与日志
+
+GLM 5.3 Flash 第二关实跑输入降低 69.6%，停在 20 轮时离出口还剩 4 步。第二关的新真实默认配置放至 24 轮、330 秒，累计 Token 保持 160,000，新增公开行动提示。旧实现与新实现的 24 步回归、实际两局数据、验证及既有系统优化索引统一记录于 [系统优化记录](../learning/system-optimization-log.md)。19922 已更新，原失败记录回读等值。
+
+## 2026-11-12 回廊档案室真实上下文裁剪
+
+- [ADR-049](../adr/ADR-049-gridworld-loop-gallery.md) 新增外部方案比较及现有 ContextPolicy 复用说明。新建真实第二关使用最近两次完整工具轮次；最新公开观察包含已知格、位置、库存和可见目标。保留完整 Trace。新建第一关、Fake、旧历史与预算沿用原行为。
+- GLM 5.3 Flash 保存样本 3bd40bae-b2ac-4f7e-b3a0-2f6835e1b54a 离线重建 20 次 AIHubMix 消息体。完整 495,661 字节，两轮 132,486 字节，减少 73.3%。测量只计网关 JSON 消息体。原路线至少 21 轮。
+- 新用例在旧代码因缺少策略失败，接入后 111 Python、Ruff、Mypy、Web 类型检查和构建通过。19922 已更新，系统 Edge 确认第二关 GLM 配置展示两轮且选项操作零 POST。旧失败产物在服务重启前后回读等值。未新增真实推理。
+
+## 2026-11-12 回廊档案室 Blender 美术
+
+- 第二关采用沙岩地砖、青灰矮墙、铜边拱门、青釉门扇和出口灯环。参考《前进！奇诺比奥队长》的微缩关卡构图。按公开格逐一实例化 Blender 模块，坐标、遮挡、钥匙门规则与评分保持。第一关沿用原有道具。
+- 源码 scripts/blender_gallery_kit.py，沿用 blender_key_door_scene.py 的网格助手。本机 Blender 4.5.15 LTS 后台建模，GLB 86,272 字节、13 个根对象、24 个网格、2,164 三角面，重导入通过。可编辑工程在同级 AgentLabyrinth 的 artifacts/blender-mcp-demo/gallery-kit。
+- Ruff、Mypy、Web 类型与构建通过。独立 Edge 专项 4 项通过，验证旧 3D 舞台、二维回退、新道具加载、第二关 14 步通关及局部视野回放。截图证据 artifacts/playwright/75f81afc-3eb2-4cd4-b402-2a593b1d3f25。19922 预览已更新。
+- 需求 V0.6 §21 列出演示与交付物，课程任务卡只记约四个月，具体答辩日期待确认。现场先验笔记本启动、第一关真实记录和 Fake 备份，再安排投屏与录像。后续版本按 V0.5 MCP 工具资源、风险分级、人工审批与审计推进。
+
+## 2026-11-12 GridWorld 第二关「回廊档案室」
+
+- [ADR-049](../adr/ADR-049-gridworld-loop-gallery.md) 定义固定 9 × 7 地图、回廊探索任务、钥匙折返与开门后绕行。最短 14 个动作，经状态空间搜索验证；上限 20，原关 16。真实累计上限 160,000，单次输出 2,048，第二关累计输出 40,960。Fake 第二关累计总量 16,000。
+- 环境按任务绑定地图、各阶段最早动作计数、合法坐标和保存来源；公开 Trace 的形状沿用原契约。模型与三维舞台只看到已到达的局部观察。前端两关可选，复用原 Blender 资产。服务端入口是环境的 GRID_LAYOUTS、EpisodeService 的任务装配与 GridWorldKeyDoorEvaluator，Web 从 GridWorldMap 进入 GridWorldStage。
+- 59 Python、54 Node、6 Edge、Ruff、Mypy 定向 6 文件、类型检查与构建通过。Edge 浏览器截图见 artifacts/playwright/577da099-b8de-4626-8a6e-143bf5aceef3。Fake 验证 14 步通关、15 步撞墙后通关和 20 步上限。真实模型可选，第二关未发真实推理。19922 预览已切换到两关版本，旧真实 Episode e05472ff-140d-433f-8075-35249ba9d1fa 在重启前后回读等值。
+
+## 2026-11-12 GridWorld 真实三维运行
+
+- 按 ADR-047 增补开放真实运行预算。新建真实 Episode 冻结 temporary-real-160k-v2，累计 160,000、每次输出 2,048、累计输出 32,768，保留旧真实档案、Fake 预算与 16 轮 / 300 秒。
+- 正常 API 和隔离 SQLite 运行于 19921，前端 19922。目录返回四个可选真实型号。唯一真实请求链用 coding-minimax-m2.7-free，Episode e05472ff-140d-433f-8075-35249ba9d1fa，8 次请求、8 个动作通关，27144 + 245 Token、94.371 秒、网关费用未知。脚本结束后通过 GET 重开实际 Episode，确认三维终点 (5,2) 且历史无 POST。隔离记录目录 artifacts/gridworld-live-5e762c6e-821a-4db9-b718-b50aebfd5a52。
+- 55 Python、54 Node、5 Edge、Ruff、类型检查和生产构建通过。后端替身在 116,000 总量、单次 1,000 输出下通过，覆盖旧额度无法完成的情况。
+
+## 2026-11-12 GridWorld 三维舞台接入
+
+- 按 ADR-048 将尤诺最终 GLB 与 13 个 Blender 场景零件放入 `apps/web/public/gridworld/`。用同级 AgentLabyrinth 工作区的最终精修角色导出和 MCP 运行 `857457a0-3c2b-4c4e-ad52-9947920f42e4` 中的钥匙门工程。Three.js 0.180.0 仅在三维舞台按需加载。
+- `GridWorldMap.tsx` 从已到达的公开投影取状态，`gridWorldMotion.ts` 识别被接受且发生相应变化的动作，`gridWorldScene.ts` 在浏览器播放骨骼和物件动画。即时场景、历史自动播放、跳转、缩减动效与二维回退共享同一公开事件前缀。GridWorld 完成时保留当前舞台视口。
+- 构建、类型检查、54 项 Node 检查、11 项 Edge 定向检查通过。Edge 证据目录 `artifacts/playwright/a09e4755-362e-4c25-97cd-1c69479a6e69/`。Chrome 默认通道在本机无 Playwright Chromium，改用系统 Edge。npm 审计安装回执为 0 漏洞。真实模型请求路径使用本地替身验证，未产生真实推理。
+- [隔离 Fake 预览](http://127.0.0.1:19912/gridworld) 使用 API 19911。默认路线可体验通关，选择「先撞墙再通关」可核对规则拒绝。普通浏览器运行直接读取站点内 GLB。源 Blender 工程保留在同级工作区的 `artifacts/blender-mcp-demo`。
+
+## 2026-11-09 V0.4 阶段 2/3：GridWorld Fake 实时闭环、SQLite 恢复与历史回读
+
+- 阶段 2、阶段 3 已按批准的 [ADR-045](../adr/ADR-045-gridworld-key-door-first-slice.md) / [ADR-046](../adr/ADR-046-gridworld-visibility-and-budget.md) 完成；GridWorld 首片不再有未完成的阶段任务。新增固定 Fake 行动序列、API SSE 单次运行与实时地图/规则拒绝视图；历史 Replay 严格按当前事件前缀显示，不从最终状态补过去。
+- 最终完整质量门禁 `uv --cache-dir .uv-cache run --locked python -m scripts.check` 退出 0。运行前设置 `AGENTLABYRINTH_E2E_API_PORT=19800`、`AGENTLABYRINTH_E2E_WEB_PORT=19801`、`AGENTLABYRINTH_E2E_PROXY_API_PORT=19800`、`AGENTLABYRINTH_E2E_CHANNEL=msedge` 和 `NODE_OPTIONS=--max-old-space-size=512`。实测：Ruff format/check 与 Mypy 通过（132 source files）；Python 804 passed（1 条既有 Starlette/AnyIO 弃用 warning）；回归 22 格/0 regressions；Fake-only context ablation；Web typecheck/build 通过；Node 53/53；Edge 88/88（4.9 分钟）；npm audit 0 vulnerabilities。早先全门禁重跑分别因已有 E2E 页面加载超时和 Node 子进程 OOM 失败；最终在清理本任务失败运行遗留的 API/Web 服务并显式设置 Node heap 后通过。
+- 质量产物：`artifacts/quality/df5a1047-17eb-4806-b509-4f40e4848cd9/`；回归报告 `578a797a-de20-4a9d-ac2b-28a58b0cd973`（2 格）、`0ad9114b-580a-43f9-8ce6-be366d7fe238`（8 格）、`c5859f89-00b9-4aa2-8034-8b2f157075b9`（8 格）、`91ff3f07-d6bf-4bcb-9e5e-371f88054b65`（4 格），均 0 regressions。Edge 浏览器运行 `artifacts/playwright/b54dc936-e4fd-4768-becd-1c5c3cdcdc68/`；5 个截图覆盖 1440×900、1280×720、768×1024、640×450、390×844。
+- 最终真实浏览器（Fake Provider）产物：通关 Episode `31dc89a1-a446-446a-8717-220ee8ed89a7`（8 轮/59 事件）；先撞墙再通关 `91366fc5-26a7-40c1-bdac-d71478d9676c`（9 轮/66 事件/1 次规则拒绝）；预算停止 `1335ac3e-75a9-4ab4-a245-74512622552d`（16 轮/115 事件）。Network 断言为每场一次 `POST /api/v1/episodes/stream`（200），历史详情/刷新为 `GET`（200），没有浏览器错误或历史导航 POST。
+- SQLite 跨进程测试分别在持钥匙（3 个动作）及门已打开（5 个动作）时从子进程 checkpoint 后退出，新 EpisodeService 从原 ID 恢复；预算不重置、Trace 只追加。新增 Runtime 恢复一致性检查：从私有快照重建 `public_state()` 后，与最后一份已保存的公开 Trace 投影比较；合法但被篡改且与 Trace 不一致的探索知识会被拒绝，避免历史/继续执行的 Agent 视图分叉。SQLite 完成产物及普通 GET 只包含公开最终状态。
+- 定向门禁 `uv --cache-dir .uv-cache run --locked python -m pytest tests/integration/test_gridworld_product.py tests/unit/test_gridworld_environment.py tests/contract -q`：158 passed（1 条同上警告）；Mypy 全仓 132 个源文件通过。源码阅读顺序、调用链、失败处理及限制见 [V0.4 GridWorld 学习交接](../learning/V0.4-gridworld-key-door-first-slice-20261109.md)；任务验收矩阵见 [V0.4 开发任务卡](../tasks/V0.4-gridworld-development-spec-20261105.md)。
+- 边界：Fake 只证明冻结规则、事件/存储/恢复机制，不证明真实模型规划收益；未接 GridWorld Experiment、未执行真实模型/Judge、未迁移旧历史、未做 GitHub 写操作或远端 CI。V0.4 GridWorld 首片现可交负责人体验检查；之后新能力按新任务/ADR 处理。
+
+## 2026-11-09 V0.4 首阶段：批准 ADR 并完成 GridWorld 环境契约
+
+- 负责人明确批准 [ADR-045](../adr/ADR-045-gridworld-key-door-first-slice.md) 与 [ADR-046](../adr/ADR-046-gridworld-visibility-and-budget.md)，按送审稿实施。两份 ADR 已改为 Accepted；执行顺序仍是环境契约 → Fake 实时 API/Web → SQLite 跨进程恢复，不把批准等同于后两阶段完成。
+- 新增 `key-door-001-v1` 固定地图夹具、GridWorld Environment 与确定性 Evaluator。环境使用严格任务元数据校验、七个单动作工具、四射线局部视野、最后已知格记忆、私有版本化快照和独立 Agent 可见投影；恢复校验钥匙/门/终态/动作数/当前视野/已知格，不用服务端全图补探索记忆。
+- `Environment.public_state()` 已成为必需 Port；ToolLab 显式保持旧 Replay 投影等值、MCP ToolLab 继承、BFCL 显式提供原 Agent 已见状态。Runtime checkpoint 继续私有 `snapshot()`，Observation/Trace 使用公开状态；Runner 只在权威评估后投影最终 Episode，Evaluator/公开投影失败时不把私有快照作为兜底。累计 Token 等值当前动作完成后停止下个请求；累计超限/单次 801 完整记账并拒绝动作。
+- 新增 [GridWorld 首片学习交接](../learning/V0.4-gridworld-key-door-first-slice-20261109.md) 与 [环境/预算契约测试](../../tests/unit/test_gridworld_environment.py)。定向测试：37 passed；兼容/预算/时限测试命令 `uv --cache-dir .uv-cache run --locked python -m pytest tests/contract tests/unit/test_budget_tracker.py tests/contract/test_execution_time.py -q`：126 passed；全仓库严格 Mypy：130 source files，无问题。
+- 完整门禁 `uv --cache-dir .uv-cache run --locked python -m scripts.check` 已退出 0：798 Python passed（1 条既有 Starlette/AnyIO 弃用 warning）、130 文件 Ruff format/check 和 Mypy 通过、Regression 22 格 0 regressions、Fake-only context ablation、Web typecheck/build、Node 53/53、系统 Edge 87/87（4.4 分钟）、npm audit 0 vulnerabilities。使用隔离端口 API 19500/Web 19501 与 `AGENTLABYRINTH_E2E_CHANNEL=msedge`；不是远端 CI，也不是 GridWorld API/Web 产品闭环验收。
+- 质量产物：`artifacts/quality/0835601d-3303-40a9-92ba-7dd4b278f91d/`；Playwright run `artifacts/playwright/0d12aa3c-981f-47bf-a53f-4f19a45647b8/`。四个回归报告 ID：`854a738e-eb21-4704-af42-3b3f67d9b8bc`、`abb8e383-692b-41f7-8e8c-0c2cb63bc990`、`b97a96f6-d44f-4e27-912d-c2d0dd0c4528`、`8f39cdeb-9c8a-4721-9518-2b0093ca4274`。
+- 剩余工作：阶段 2 Fake 单次 API/真实追加事件/实时 Web 与预算终止闭环；阶段 3 私有安全点 SQLite 恢复、跨进程与只读历史回读。当前没有 GridWorld Web/API Episode ID 或跨进程恢复证据。未调用真实模型/Judge，未做 GitHub 写操作、提交/推送、SQLite Schema 迁移或旧历史改写；所有既有未提交成果保留。
+
+## 2026-11-09 V0.4 规范修改：Token 边界与共享 Environment 兼容（批准前记录）
+
+- 当时负责人确认 V0.4 设计交付通过验收，要求先按两项验收意见修订 ADR-046，再把 ADR-045/046 一并审阅；后续已明确批准并完成首阶段。V0.3 整版已签收。
+- 修订 [ADR-046](../adr/ADR-046-gridworld-visibility-and-budget.md)：累计 Token 恰好达限时允许当前通过 Schema/权限验证的一个动作完成（包括规则内拒绝），随后不再发 Provider 请求；累计超限时完整记录用量并拒绝执行当前动作。单次 completion 801 同样完整记账但拒绝该动作；800 可执行。新增事件/动作计数验收例，避免继续请求与边界动作混淆。
+- 补齐共享 `Environment.public_state()` Port 兼容矩阵：ToolLab、MCP ToolLab、BFCL、测试 Stub/Mock 和执行时限子类；不提供默认 snapshot 回退。增加 public_state/工具/Evaluator/恢复失败注入要求，公开产物仅可用最后安全投影或空状态，禁止退回私有 checkpoint。
+- [ADR-045](../adr/ADR-045-gridworld-key-door-first-slice.md) 和 [V0.4 任务卡](../tasks/V0.4-gridworld-development-spec-20261105.md) 已同步上述边界。两份 ADR 后已批准；后续顺序为固定地图与 Environment 契约测试 → Fake 实时演示 → Replay/SQLite 跨进程恢复。
+- 当时仅做文档修改与定向契约核对；当时未修改源码，也未重跑完整质量门禁。真实模型/Judge、GitHub 写入/提交/推送和历史迁移均无授权，后续首阶段仍保持此边界。
+
+## 2026-11-05 V0.3 整版签收与 V0.4 规范准备
+
+- 负责人确认 **V0.3 整版已签收**。此前 2026-11-04 记录的“待体验/签收”是当时状态，保留作历史，不再作为当前阻塞。
+- 当前执行入口为 [V0.4 GridWorld 开发规范与首片任务卡](../tasks/V0.4-gridworld-development-spec-20261105.md)。已补 [ADR-046 可见状态隔离与首切片预算](../adr/ADR-046-gridworld-visibility-and-budget.md)，并将预算与状态隔离阻塞连回 [ADR-045 GridWorld 环境提案](../adr/ADR-045-gridworld-key-door-first-slice.md)。
+- ADR-046 提议 checkpoint 使用私有权威快照，Provider/Observation/Trace/SSE/API/Replay/最终 Episode state 使用 Agent 可见投影；Evaluator 在服务端使用权威状态，完成评估后才投影最终产物。旧 ToolLab projection 必须与既有 snapshot 一致；不变更 Trace/API Schema、不迁移或重写历史。
+- 提议每 Episode 16 轮/模型调用/工具调用；单次 800 completion tokens；累计 16,000 tokens（prompt+completion）、12,800 completion；300,000ms（按现有契约使用 `Budget.schema_version=1.1`）；已知估算费用 USD 1.00。预算按现有累计边界核账，单次 800 使用请求上限并须显式验证；已发响应超限完整记账后停止，未知用量/费用不补零。估算费用不是发票硬上限。
+- 实施顺序及验收矩阵已列入任务卡：环境规则 → Fake 实时事件/UI → SQLite 保存、恢复和历史只读回读；涵盖隐藏状态扫描、非法动作、16轮与资源预算边界、跨进程恢复及 ToolLab 兼容。均是待批方案，不是已实现或已验证的产品功能。
+- **当前待负责人决策**：批准/修改 ADR-045 的地图/动作/部分可观测规则；批准/修改 ADR-046 的快照/Agent projection 协议和各预算值。批准之前不改 Runtime、Domain Port、Trace/API Schema 或 GridWorld 源码。无真实模型/Judge、GitHub 写操作或数据库迁移授权。
+
+## 2026-11-04 补充：Fake UI 三流程复核、Reflection 夹具与 ADR-045 参照
+
+- 在隔离集成工作区启动 Fake SQLite API/Web：首次服务身份 `f4149a31-4f4e-4e9a-b640-1ff340e5917d`，重启身份 `e2be9a6f-4ec1-4bfc-a87a-df0f8e0168c0`，仅使用 `artifacts/v03-owner-acceptance/f4149a31-4f4e-4e9a-b640-1ff340e5917d/`。未访问原工作区 SQLite、未调用真实模型/Judge。
+- A 实际 UI 运行 Fake 任务 `order-status-001`：Episode `61af2d80-4a9e-4929-813b-4c156c450aad`，终态 `SUCCESS`，17 个事件，最终交付 `shipped`、引用 `order:ORD-001`。从运行页回退至工作台、前进回运行、刷新后 URL/产物一致；稳定回读的网络采样全为 GET，未发现新的 Episode/Experiment POST。页面切换时有少量未完成的背景 GET 被浏览器中止，目标 Episode GET 完成且刷新后正常呈现。
+- B 首次按旧清单遗漏 Fake 场景设置，默认 `invalid-then-success` 导致两侧均以 `FAILED / INVALID_ARGUMENTS` 在第一轮终止；失败 Experiment `ae7a9e8b-7bdc-426d-87cf-95e581ea97ee`，Episode `317052d0-e638-56cd-8769-3f1b9d7ffe7e` 与 `3e8423d4-108d-571b-a0c8-9bf285c69493`。查阅既有 `reflectionChallenge.spec.ts` 后按产品固定夹具改用 `clean / success`，并将清空其他任务、选择正确场景写回验收清单。
+- B 用正确夹具实跑后通过：Experiment `2a8f1926-3761-4f73-87af-541e52b4e081`；Baseline Episode `2f101465-a15e-55be-833d-1f396d633dae` 为 `FAILED / MAX_STEPS`，有界 Reflection Episode `4d34ec65-3191-5b86-8394-6dc4db3c1eee` 为 `SUCCESS`；保存配置为 `reflection-stale-alias-001`、Seed 1/Repeat 1。按需回读两侧 Trace，确认一次反思触发、改用公开 ID `ORD-001`，刷新后仍是原 Experiment。结果只作为 Fake 机制/产品验收，不外推模型收益。
+- C 在同一隔离 SQLite 目录上停止仅由本次启动的 API 进程并用 `--reuse-artifacts-dir` 新身份重启；此次用指定 PID 结束空闲服务进程，验证的是跨进程（含非优雅退出）恢复，不等同于负责人按 Ctrl+C 的个人体验。重启后 Meta 为 200 且身份头为 `e2be9a6f-4ec1-4bfc-a87a-df0f8e0168c0`；Episode `61af2d80-4a9e-4929-813b-4c156c450aad` 与 Experiment `2a8f1926-3761-4f73-87af-541e52b4e081` 均 API GET 成功，Web 分别按 ID 回读正确终态/对照，采样请求全部 GET、无 POST，Vite 保持 200。专用 SQLite 预览目录按交接要求保留，未清理任何既有数据库。
+- 更新[负责人体验清单](./V0.3-owner-acceptance-checklist-20261104.md)明确 Reflection 固定使用 `clean / success`，避免默认纠错夹具把两侧提前终止；扩充[ADR-045](../adr/ADR-045-gridworld-key-door-first-slice.md)引用 MiniGrid、AgentWorld、VirT-Lab、Collab-Overcooked 的研究范围和非目标，区分研究参照与依赖/移植/效果证据。复核还发现现有 Runtime 会把 `environment.snapshot()` 写入 `ENVIRONMENT_UPDATED.state`；若含隐藏地图，需在 GridWorld 实现前通过独立协议 ADR 或兼容方案解决。ADR-045 继续 Proposed，并补明 StepResult 非法游戏行动回执语义和未冻结的 Token/时间/费用额度。
+- 最终在隔离端口 `19400/19401`、`AGENTLABYRINTH_E2E_CHANNEL=msedge` 重跑完整 `uv --cache-dir .uv-cache run --locked python -m scripts.check`，退出 **0 / Quality gate passed**：Python **761 passed**（1 条 Starlette/AnyIO 弃用 warning）、126 文件 Ruff/Mypy、回归 **22 格零退化**、上下文消融、Web typecheck/build、Node **53/53**、系统 Edge **87/87（4.4 分钟）**、npm audit **0 vulnerabilities**。质量证据 `artifacts/quality/8f102bb7-4b0d-40fe-bc95-00f0dc1cfe13/`，Playwright run `artifacts/playwright/eebacbcc-8d8b-42f4-97a6-cddabeb78946/`；保留 Rollup 依赖注释与大 bundle warning。前两次门禁分别因原有 `8000` 被占用、默认 Chromium 二进制缺失而未通过；未停止或更改原服务，改用独立端口及已安装 Edge 后通过。仅本机验证，不是远端 CI。
+- 上述浏览器/API流程由本助手执行，不是负责人个人体验或 V0.3 整版签收。待负责人检查：按清单亲自体验 A/B/C（尤其 Ctrl+C 的有序重启），确认或暂缓 V0.3 整版签收；审阅并单独批准/修改 ADR-045；确定实现所需固定资源预算。GridWorld 尚未实现；本轮无 Git/远端操作、无真实模型/Judge 请求。
+
+## 2026-11-04 后续：V0.3 体验清单、SQLite 重启回读与 GridWorld 提案收口
+
+- Playwright 新增 `api-identity` setup 依赖：隔离 Fake API 用每次运行唯一 UUID 返回 `X-AgentLabyrinth-Test-Run-ID`，Playwright 经 Web base URL/Vite 代理读取 `/api/v1/meta` 并核对。所有 browser 项目依赖身份检查，错指代理时先失败、业务测试不启动。
+- 正常身份检查 1/1 通过，run ID `3b490552-a031-4d15-9b67-990c6dd09ad2`，隔离 API/Web `19020/19021`。故意误指本地替代服务 `19024` 的负例中，身份检查按预期失败，86 个 browser 测试未运行，替代服务收到 **0 POST**；run ID `88f3f218-187f-4886-a653-f8a9d82a02e9`。负例仅证明 fail-closed，不是产品业务失败。
+- 在集成工作区执行完整 `uv --cache-dir .uv-cache run --locked python -m scripts.check`，API/Web/代理端口 `19030/19031/19030`、系统 Edge，最终退出 **0**：761 Python（1 条 Starlette 弃用 warning）、126 文件 Ruff/Mypy、22 回归格零退化、53 Node、87 Edge、Web typecheck/build 通过、npm audit 0 vulnerabilities。Playwright run `artifacts/playwright/7fd3642c-56f3-46d7-9903-e8981d7e68e7/`；质量证据 `artifacts/quality/f8f8d6e6-8261-4911-a389-5a7507dc33c3/`。一次 Ruff 格式检查失败后已格式化并最终全门禁通过。本机结果不是远端 CI。
+- 一次初始门禁因 shell 未切换至集成工作区而在原工作区执行，并因其 `127.0.0.1:8000` 服务占用在 E2E 阶段退出 1；确认原工作区 Git 状态未变化。此结果不计入集成门禁；成功的完整门禁明确在集成工作区运行。未清理原服务/数据库。
+- 原 SQLite 的负责人保留只读复核报告：北京时间 `11:08:50–11:17:40` 按 `updated_at_ns` 找到 86 条候选（66 个结束 Episode、1 个安全点、13 个 Experiment 结果、4 个 Fake Review、1 条计划和 1 个 Job 的顶层 Provider 未取到）。请求与 ID 直接匹配 1 个 Fake Experiment、1 个 Fake Episode；其他候选仍未逐条归因，不能把 86 条全称为早期 E2E 写入。盘点副本 `quick_check=ok`，主库/WAL复核前后哈希相同；原始审计产物留在原工作区忽略目录、不复制入库。本轮未访问、修改或清理原库，也未读取未关联实验原始产物；清理仍需负责人明确授权。
+- 新增[负责人 Fake 体验签收清单](./V0.3-owner-acceptance-checklist-20261104.md)，覆盖实时运行到最终交付/历史只读回读、`reflection-stale-alias-001` 成对对照及隔离 SQLite 服务重启后按 Episode/Experiment ID 回读。`scripts.web_test_server` 新增 opt-in `--sqlite` 与严格的 `--reuse-artifacts-dir`：仅允许当前工作区 `artifacts` 下的新建专用子目录；复用要求数据库及该服务写入的专用标记均存在；原 E2E 默认 JSON/Fake 行为不变。上述是待负责人执行的体验步骤，尚未代执行/签收。
+- SQLite 重启定向冒烟实际通过：Fake 反思 Experiment `8ec0f28a-839b-4e67-9c42-446547a21210`，Episodes `1dc59bf3-97a8-56f5-a682-aa092e84f3ba` 与 `87e25dc4-8143-587a-b77a-d8a194a64410`。专用 API `19340` 首次 run ID `da7e8e0d-f359-4707-bd7e-7b3268712427`；停止后以 run ID `7f7f899d-3c23-4a66-9afd-af2643fe4de6` 复用同一隔离 SQLite 目录。重启后 Experiment 哈希与创建时一致（SHA-256 `9B87B01A61845382557FBCBDB8AFADF8C7E12035FED20E41419C428F775BB072`），两条 Episode 按 ID GET，重启后只发 GET、无 POST，身份头匹配新进程。缺失 DB 或缺少本服务专用标记的 `--reuse-artifacts-dir` 均按预期退出 2 且未启动服务。测试专用 SQLite 目录已清理；未访问原工作区 SQLite。该 API 冒烟不替代清单中的负责人 UI 体验。
+- 含专用 SQLite 标记保护的最终代码后重新运行完整门禁：`uv --cache-dir .uv-cache run --locked python -m scripts.check`，Microsoft Edge，API/Web `19060/19061`，退出 **0**。Python **761 passed**；126 文件 Ruff/Mypy 通过；固定回归 **22 格/0 regressions**；上下文消融完成；Web typecheck/build 通过；Node **53/53**；Edge **87/87**；npm audit **0 vulnerabilities**；`git diff --check` 通过。质量证据 `artifacts/quality/e7aa0652-7dc6-4ddc-8726-d613db957a7d/`，Playwright run `d36b2d03-6ebf-4453-8d6b-1d6403eac07d`。非阻断 warning：1 条 Starlette/AnyIO `BlockingPortal` 弃用提示，Rollup 提示依赖注释位置及 JS chunk >500KB。仅本机验证，远端 CI/PR Checks 未运行；无真实模型/Judge 请求。
+- ADR-045 仍为 Proposed，并已明确 16 个环境动作对应 `TaskSpec.max_steps=16`、`Budget.max_steps=16`、`max_model_calls=16`、`max_tool_calls=16`；第 16 个动作未成功时，`call_model` 在任何第 17 次 Provider 请求前终止为 `MAX_STEPS / max_steps_reached`，不额外请求。权威快照与 Agent 可见 Observation/Trace 分离；若现有接口无法实现该隔离，先提核心接口/事件 ADR。开门后射线仍最多两格、已探索动态信息只保留最后已知状态和 8 动作通关路径保持。GridWorld 没有实现。
+- 待负责人检查：原库窗口内除两个匹配记录外候选逐条归因；执行上述三条 Fake 体验并确认或暂缓 V0.3 整版签收；单独审阅/批准或修改 ADR-045。远端 CI/PR Checks、提交/推送/PR、真实模型/Judge、SQLite 清理均未执行/授权。
+
+## 2026-11-04 本地 V0.3 集成与离线门禁
+
+按[集成交接记录](./V0.3-main-integration-review-20261104.md)从 `origin/main` `392cd133b265` 建立 `codex/v0.3-main-integration-20261104`，普通合并 `edc7e629c06d`，本地集成提交 `02ea18dc86edf513de699897fdea99fa9410e938`。已验证 #5 Reflection/SQLite、#6 Judge 和 #7 工作区交付的代表提交均为集成提交祖先；106 个文件，5979 insertions / 772 deletions。未改写 `main`，未提交/推送/创建 PR。
+
+此前无身份前置项目的基线 `scripts.check` 在隔离 Fake 数据目录、Microsoft Edge、专用端口 19010/19011 退出 **0**：761 Python（1 条 Starlette 弃用 warning）、126 文件 Ruff/Mypy、固定回归 22 格/0 退化、上下文消融、Web typecheck/build、53 Node、86 Edge、npm audit 0 vulnerabilities；`git diff --check` 通过。Python/回归证据 `artifacts/quality/17cb4e7c-7e39-46ed-8ae2-60724cfae38c/`，日志 `artifacts/quality/scripts-check-final.log`，Playwright 运行目录 `artifacts/playwright/60dc5d70-ec11-4b54-bbf7-9db08826d9f6/`。现最新全量结果及87 Edge见上节；本机结果不是远端 CI。
+
+测试为适应现有本机 8000/5173 服务增加可选 E2E API/Web 端口；默认端口仍不复用、冲突即失败。**数据影响已经完成只读复核但仍有未归因记录**：一次较早的临时端口 E2E 运行只改了测试 API 端口、未同步 Vite 代理，导致代理仍指向现有 `127.0.0.1:8000`，56/86 通过后失败。负责人保留的只读复核将一个 Fake Episode 和一个 Fake Experiment 与请求 ID 匹配到该运行；86 条更新时间窗口候选中其余项目仍需逐条归因。原库/WAL复核前后哈希相同。未停止现有服务，未读取、清理或修改原库；最终全量门禁已正确代理到隔离 Fake 服务。早期错误路由不用于证明原服务未收到目录请求。
+
+V0.3 验收矩阵已更新为 Reflection 已实现、SQLite/四工作区 UI 已集成；新增 [ADR-045 GridWorld 首片提案](../adr/ADR-045-gridworld-key-door-first-slice.md)，状态 Proposed。负责人对新增整合流程的体验签收仍待完成；GridWorld 未实现，须先确认 V0.3 再单独批准 ADR。PR 模板正文已在集成交接记录中准备；远端 CI、提交、推送、建 PR、合并及真实模型调用均未执行。
+
+## 2026-11-03 GitHub分组交付
+
+负责人明确要求提交GitHub，本次授权覆盖当前已验证源码/测试/文档和公开模拟UI审查截图，不延伸为后续自动推送、合并main、真实模型调用或历史迁移。保留全部既有提交，发现7701fee/c304ae6此前尚未推送，本次一并交付。按CONTRIBUTING分组：[#5持久化与反思](https://github.com/fate222miracle/AgentLabyrinth/pull/5)依赖原#3，[#6 Judge截断修复](https://github.com/fate222miracle/AgentLabyrinth/pull/6)依赖#5，UI分支继承#6；合并顺序#3→#5→#6→UI，不自动合并或重写历史。Judge提交add700b。UI审查截图仅公开任务和Fake结果，见docs/design/ui-workspaces-20261103；原始产物/密钥/本机配置/缓存不纳入。
+
+本轮完整scripts.check实际退出0：761Python、126文件Ruff/Mypy、53Node、86系统Edge（4.6分钟）、22格零退化、上下文消融、typecheck/build与audit0全部通过。执行日志artifacts/github-delivery-20261103-quality.log，证据artifacts/quality/cfaba8f3-ef41-4f5c-9597-8b28104a02db；最终集成源码的门禁不冒称每个中间分支独立实跑，也不冒称远端CI。GitHub CLI未安装，使用Git已有凭据在内存中调用本仓库API创建PR，未打印/保存凭据；PR均关联当前聊天。
+
+实际远端交付：持久化/反思c304ae6→PR#5，Judge add700b→PR#6，UI de65652→[#7](https://github.com/fate222miracle/AgentLabyrinth/pull/7)。三个PR均成功创建并关联本聊天，尚未合并。暂存区56个UI/文档/截图路径检查无排除目录或常见密钥格式；二进制PNG不当UTF-8扫描。暂存检查另发现新增taskPresentation.ts尾部多空行，首个UI提交命令未因该检查退出码中止，随后仅删除多余空行并重新核对提交范围；未改运行逻辑，无须重复整套门禁。该格式修正与本回执以新的跟进提交保留，不改写已推送历史。远端CI以实际Checks为准；本机API/Web在测试后恢复，MCP保留。
+
+## 2026-11-02 UI第三批：演示主线收口
+
+负责人同意优先实时执行→最终交付。共享RunDelivery覆盖流程/结果分析，先实际答案/函数提议、引用、规则与来源，再资源指标；完成后焦点交付且不重播。当前行动/工具反馈/资料去重，输入诊断折叠、调用导航单行跟随、资料可回到Agent最近关联；事件前缀/失败/BFCL不执行边界保持，空正文不误报已返回。桌面行动/画布/右侧资料与窄屏顺序、全屏当前节点适配已接入。UI规范1.16，源码、演示步骤及证据见[主线交接](../learning/ui-demo-mainline-20261102.md)。
+
+实际typecheck/build、53Node、**85Edge完整/4.6分钟**通过，证据`2522f685-e6bc-4b59-be87-330ebd9118ea/`；随后补空正文用例，主线3项/15秒及最终类型/构建通过，证据`55ba1365-0f78-4128-9262-e6482f23d56c/`，不是86项全量。已目视1440交付截图，五视口/全屏/减少动效/长答案/只读来源保持有测试。本轮后端无改动未重跑Python/远端CI；无真实模型/Judge/Git同步，保留全部既有工作。接手时API/Web未监听，测试后已恢复HTTP200、原Episode哈希保持；MCP检查也未监听，已另行启动原服务。日志`artifacts/ui-demo-mainline-20261102/`，本批待负责人体验。
+
+## 2026-11-02 UI第二批：任务阅读与准备态
+
+负责人要求继续UI优化。任务库改为桌面列表/右侧完整详情、窄屏顺序堆叠；查看/关闭有焦点交接，筛选清除旧预览，加载/失败/无匹配分开，失败数量不补零。未运行舞台取消32rem最低高度及重复等待卡，保留实际目标和未开始说明；模型目录提示仅在配置/Judge出现，完整meta失败仍全局可重读。实验中心先看板、后ID/历史恢复工具，已有Job时控制继续前置。源码与行为见[第二批交接](../learning/ui-workspace-polish-20261102.md)、[任务卡](../tasks/ui-workspace-polish-20261102.md)，UI规范1.15。
+
+实际typecheck/build、53Node及**83系统Edge/4.4分钟**通过，证据`artifacts/playwright/1ab37833-67a1-45a6-9766-de549e3c15b6/`。首轮定向19/20失败为select隐式label定位，按combobox名称修测试；完整之后补目录失败数量文案与断言，最终**3专项/11.4秒**及构建通过，证据`f342f3c1-8648-4caf-90fc-0b22fe69ec34/`，不是最后一行后再次跑83项。五视口/焦点/减少动效/零POST浏览已测；目视1440任务详情、1280准备态、390详情。后端未改无新Python/远端CI，原Episode哈希保持。隔离测试后恢复API/Web，MCP保持，日志`artifacts/ui-workspace-polish-20261102/`；无真实模型/Judge、Git同步、依赖或新公开协议，全部既有成果保留。本批待负责人体验，完整数据库运行列表等边界保持。
+
+## 2026-11-02 UI工作区重编排第一批完成
+
+负责人评估后授权开始优化。四个稳定入口已接入：任务库`/tasks`（新根路径默认）、执行工作台`/workbench`、运行记录`/runs`、实验中心`/experiments`；保存Episode/Experiment/Job有详情路径，新建实验独立配置。旧查询链接继续可读，刷新/前进后退只GET。任务预览和配置只更新独立草稿，不自动运行；历史不被草稿覆盖。保存运行默认执行过程，结果分析/模型评审独立视图，评审不会再挤在Trace前；实验Job控制/保存进度仍保留，配置下一次进入独立页。
+
+本机最近访问记录最多5条，明确不是数据库全量历史；全量分页仍须具体ADR。运行中沿用单次不可切离边界，没有新增后台跨页运行/自动重连。无新后端接口、依赖、真实调用或Git提交，全部先前成果保留。设计使用design-taste-frontend/app-screen、ui-ux-pro-max并复用原品牌/CSS/History；不创建空管理菜单。
+
+实际typecheck/build、**53 Node、80系统Edge（4.3分钟）全部通过**，最终证据`artifacts/playwright/30fd3180-e3e6-4d79-833f-35d52773494c/`。首轮完整72/80发现实验Job控制随配置移出被隐藏，已共享提取修复，其余旧视图/URL断言适配；首轮及定向失败证据保留。五视口、旧URL/前后导航、错误ID、草稿隔离、实时、来源保持及减少动效通过；不是新完整Python/远端CI。1280×720同一历史Trace起点约2621→409px，仅该案例布局改善。API/Web恢复，五条新路径与原Episode GET200，MCP8765保持监听，日志`artifacts/ui-workspace-navigation-20261102/`。源码、操作、失败和后续边界见[交接](../learning/ui-workspace-navigation-20261102.md)与[执行卡](../tasks/ui-workspace-navigation-20261102.md)。本批待负责人体验。
+
+## 2026-11-02 UI信息架构评估（未实施重设计）
+
+负责人要求先评估UI并讨论多页面重编排。本轮使用design-taste-frontend/app-screen与ui-ux-pro-max，实际浏览新建/展开配置/保存Episode/对照配置并核对需求§17；没有启动任务/恢复/Judge、修改UI或提交Git。主要结论：多个工作目标共享长页面，Judge堆在回放前、记录依赖UUID/最近五条、实验配置和分析混合；单SPA本身不是问题。1280×720的一条多评审历史实测Judge区约1702px、Trace从文档2621px起，不外推全部历史。App约3180/CSS2629行仅作职责集中证据，不能据此断言性能或质量。
+
+候选四区为任务库/执行工作台/运行记录/实验中心，运行和实验各有详情路由；先运行详情线框和状态、再逐切片迁移，保留品牌、真实流、旧链接只GET及未知指标。完整Episode分页摘要GET目前没有，须具体ADR，不能仅靠localStorage冒充数据库列表；不新建空管理菜单或自动模型调用。评估、来源、路由草案、边界与验收建议见[UI信息架构报告](../research/ui-information-architecture-audit-20261102.md)。设计抽样为framed-sheet候选（seed483685059、品牌palette/type保持），未采纳成正式规范；本轮仅文档与忽略的技能草案，不宣称新门禁或新界面交付。
+
+## 2026-11-02 启动本地MCP
+
+负责人要求启动本地MCP。确认8765原未监听后，隐藏后台启动`.venv/Scripts/python.exe -m packages.environments.tool_lab.mcp`，启动器PID39160，固定地址`http://127.0.0.1:8765/mcp`；日志`artifacts/mcp-start-20261102/`。用正常MCP Client实际握手，并对配送模拟任务调用search_documents及read_document均成功。未调用模型、未重跑失败Episode、未修改功能或Git提交；前后端保持原服务。选择支持MCP的文档任务并显式运行即可使用，普通浏览器直接GET端点不作为服务健康判据。
+
+## 2026-11-02 Judge截断修复与配置原位全宽展开
+
+负责人要求立即修复截断，随后明确取消左侧长配置栏。ADR-040§7记录新真实Judge统一4096输出上限，内部采用已有ModelConfig1.1/single保留异常报告用量；截断归已有INVALID_JUDGE_OUTPUT，安全日志记录OUTPUT_TRUNCATED，网页说明回复可能不完整/达到上限。仍一次无工具、30秒、13秒间隔、v2严格JSON/引用校验，无额外请求/重试，不扩公开字段/CSV或修改旧失败。修复后尚无新真实评审，不能保证GLM必成功。
+
+配置默认收起，顶部摘要及运行/修改入口始终保留；编辑在其正下方全宽展开，桌面任务/常用项并列，高级设置整行，窄屏堆叠，取消整个配置的sticky/固定高度内部滚动。选题、启动、读取历史、切换工作区收起配置。未运行或运行中无指标/评审，结束取得产物后显示；编辑时暂藏旧指标/评审，结束编辑仍为原保存结果，草稿不覆盖历史，不自动POST。
+
+实际**89专项Python、三文件Ruff/格式/Mypy、Web typecheck/build、50 Node通过**。首次浏览器74/77，两处旧断言与“编辑时隐藏结果”新需求冲突，另发现工作区切回历史保留编辑状态，已修共享切换入口；最终系统Edge **77/77、4.7分钟、退出0**，证据`artifacts/playwright/e81dd7e8-26b2-4c02-b66d-67ec19615616/`，首轮`947bbbbd…`保留。全宽展开桌面及390px默认折叠截图已查看，四视口/640等效窄视口/动态减少动效通过；不冒充Windows系统设置或完整后端/远端CI。受限进程的临时目录/子进程权限错误及处理见[源码与验证交接](../learning/V0.3-judge-truncation-and-config-layout-20261102.md)。无新真实模型请求或Git提交，既有所有工作保留；测试后恢复本地API/Web，启动日志`artifacts/judge-fix-20261102/`。
+
+恢复后本地Web5173及原Episode GET均HTTP200。原Episode以严格JSON模式回读并核对哈希保持`e5305cc1…`；初次只读检查误用Python模式验证JSON字典被严格类型拒绝，改为model_validate_json后通过，没有修改业务校验或数据。
+
+## 2026-11-02 四模型各一次真实Judge诊断
+
+负责人明确要求每个模型各调用一次评审。对当前正常目录四个真实候选，以同一已成功Episode `e762c985…`、原v2提示词/800输出Token/30秒/13秒间隔，经正常Review service保存四条SQLite评审。MiniMax M2.7与M3 completed/pass；GLM5.3与Flash均返回length、输出800、不完整JSON，底层OUTPUT_TRUNCATED确证。每模型恰好一次、无额外探针/重试；合计上游48069报告Token，费用未知；源哈希保持，原失败Review仍存在。完整ID、条件、事实与候选修复见[诊断交接](../learning/V0.3-judge-model-diagnostics-20261102.md)。两款MiMo当前不在页面目录，未测。
+
+发现平台共性缺口：Review统一包装JUDGE_PROVIDER_ERROR丢失exc.code；Judge使用ModelConfig1.0，Provider在截断时仅1.1保留usage，导致GLM实际已报告11628/800却在失败评审中显示未知。本轮只诊断留档，不改生产协议/校验/预算或历史；四次授权已消费，不自动增加输出预算再跑或提交Git，不把两次完成称为准确率证据。旧完整门禁仍属于前端收口，未冒充本轮新全套。
+
+## 2026-11-01 选择任务即进入全宽舞台
+
+负责人要求选完任务后隐藏任务栏和配置栏。沿现有原生details与舞台布局接入：正常任务卡及课堂快捷选择均只更新草稿，然后收起整个配置面板（折叠标题也隐藏），将焦点移交舞台摘要。唯一运行按钮从配置面板移到始终可见的舞台顶部，同处保留任务/模型/Runtime/上下文/步数/时限/Token说明及“修改任务与配置”。显式编辑可恢复原搜索与全部参数；选择任务零POST、不新增自动运行。历史实际结果与下次运行草稿继续分开，历史回读不执行。没有后端、协议、评分或依赖变化。
+
+定向首次13通过/1失败：新测试在选完后仍用默认排除隐藏元素的角色定位器读取已收起任务，改为通过显式编辑入口展开后验证选中态；没有更改自动收起行为。最终实际typecheck/build、**50 Node、77 Edge（4.0分钟）全部通过**，包括自动隐藏/全宽扩展、焦点交接、重新编辑保持、零POST选择、原运行/历史/模型准入、四视口和动态减少动效。新证据`artifacts/playwright/da7b5eba-4983-4162-b251-144ea2542020/`；`usability-task-goals-*`的`stage-focused.png`及`workbench-390.png`已实际查看。无Python改动未重跑后端门禁；保留既有构建chunk/Zod提示。不新增真实模型/Judge或Git同步。分支`codex/ui-workbench-polish`保留全部前轮未提交成果。
+
+## 2026-11-01 首屏与任务阅读续接
+
+负责人同意继续改善信息布局。保留此前全部未提交成果，当前分支`codex/ui-workbench-polish`。课堂场景改为紧凑横向清单，仅当前草稿已选场景强调，来源和预算保留，详细说明按需展开；缩短页头，标题按新建/实时/历史切换。单次及对照任务目录以中文目标优先、英文ID次要显示，中文别名可搜索；请求、历史与导出仍使用原ID。修复搜索过滤时从筛选结果查已选任务导致摘要/能力/推荐预算消失，改为从当前任务集完整目录查选中项。实时侧栏先行动反馈后资料，取消逐事件摘要的重复入场动画。UI规范§16同步，未改后端/契约/评分/依赖。
+
+首次浏览器回归75通过/2失败：一处旧用例依赖ID与类别的连续文字排列，另一处新增测试误把模型名称`fake-model`当目录选项ID`fake`；均修正测试假设，没有放宽产品校验。最终复验记录随后补在本节。运行仅隔离Fake，无真实模型/Judge或Git同步。
+
+舞台接入首轮定向13通过/1失败：平滑滚动中跨帧读取矩形导致旧布局位置误报，改为同帧读取任务/选项/高级组位置；随后11项定向通过。最终冻结源码完整前端复验：typecheck、生产build、**50 Node、77 Edge（4.2分钟）全部通过**；证据`artifacts/playwright/4b35a6c9-b5b0-4209-acb5-fa3de1a4f340/`，`usability-task-goals-*`含`workbench-1440/1280/768/390.png`和`stage-focused.png`，`documentEvidence-*`含实际依据侧栏、`executionPath-*`含逐段实时输入与完成终点截图。没有重跑Python，后端无改动；构建保留既有大chunk和Zod注释提示。本轮未提交/推送。
+
+负责人随后明确选择“执行舞台：流程居中、配置可收起、依据在右侧”。已接入单次页面：桌面左侧可收起的独立滚动配置面板、中央目标/待机舞台，启动后配置自动收起、实时流程占满可用宽度；原资料与行动反馈侧栏继续使用已收到Trace。没有产物时不显示空结果看板。课堂快捷入口移到单次工作区下方；1100px及以下恢复文档流、640px以下单列。新的准备态不制造模型/工具事件，收起/展开不发POST。对照实验保留原公平对照工作流，本轮舞台先覆盖单次执行，不冒称所有页面均已改版。
+
+## 2026-11-01 工作台视觉收口
+
+负责人要求使用已安装的`redesign-existing-projects`技能优化现有前端。审计确认现有Geist、暖色单强调色、狐狸品牌、语义结构、键盘焦点、减少动效和响应式均保留；只修首屏层级与模板化卡片。顶部导航改为距视口8px的浮动sticky表面；主标题使用有纯色回退的黑灰文字渐变；目录失败提示压成两行且保留原因、下一步和重读；三张同权课堂场景改为首项略宽、内部无重复边框及编号序列，场景按钮降为配置/文字入口，实际运行仍是唯一填充主操作。单次操作区和实验任务目录减少嵌套边框；位移动效统一500ms、颜色与透明度300ms、同一缓动曲线，减少动效继续即时关闭。
+
+没有改API、Schema、评分、运行/历史只读语义、模型准入或依赖。实际`npm typecheck`、生产build、Node **50/50**通过；系统Edge定向 **16/16** 通过，覆盖课堂场景真实Fake闭环、配置保持、四视口1440/1280/768/390无横向溢出、紧凑设置、连续切换、键盘与动态减少动效。浏览器证据`artifacts/playwright/23df23cd-0901-47cf-b02d-ba3505772a05/`，桌面/窄屏截图在其`classroomScenarios-*`目录。既有Zod注释和大chunk构建提示未新增。本轮未跑Python/完整76Edge，因为后端无改动；未调用真实模型/Judge。分支`codex/ui-workbench-polish`仅本地未提交，不沿用10月31日一次性Git授权。
+
+## 2026-10-31 ADR-044有界Reflection成品闭环
+
+负责人明确确认按ADR-044实施，并要求开发结束后提交GitHub。新 `no-progress-revision-v1` 只在连续两次完全相同的成功只读调用且无证据增长后触发；复用同 Provider，不提供工具，只接受 `diagnosis/revised_goal` 两个不超过200字的严格JSON字段。每Episode最多一次，请求/Token/费用/时延计入原预算；格式错误、Provider错误、超时或预算不足都保留原失败语义并禁止重试。
+
+产品闭环包括 AgentSpec1.5/SessionState1.3、Episode请求1.8、Experiment请求1.11/计划1.6/结果1.8、`REFLECTION_PRODUCED/REJECTED`、Handwritten/LangGraph/PydanticAI共用Session边界、SQLite安全点与跨进程恢复、单次/实时/历史/正式对照、Replay、两侧行为审查和CSV。新公开任务`reflection-stale-alias-001`中，Fake基线保留停滞失败，开启侧只使用任务公开的规范ID完成。反思输入不含私有`goal_conditions`；串行批次显式拒绝，防止与安全点语义冲突。源码阅读、主链路、状态和失败见[Reflection学习交接](../learning/V0.3-reflection-challenge-20261031.md)。
+
+首次完整门禁在Python/Node/回归/audit已通过后，旧规划Edge用例因假设“规划算法永远是CSV最后一列”而失败（75/76）；改为按表头定位，没有回退新列或改生产数据。最终`scripts.check` 退出0：**749 Python**、Ruff/Mypy **126文件**、固定**22格零退化**、上下文消融、Web typecheck/build、**50 Node**、**76 Edge**、npm audit **0漏洞**。证据`artifacts/quality/f10ae5a2-9a87-448c-8359-9e20029b6752/`及最新`artifacts/playwright/`。无真实模型/Judge、无真实历史迁移/删除。Fake成功只证机制，不声称真实收益；V0.3工程功能齐备不等于整版体验或研究效果已签收。
+
+## 2026-10-30 SQLite新数据全链路与V0.3续接
+
+负责人要求借鉴Pi设计思想但不引入依赖，并全力推进V0.3剩余功能。对账确认Planning、Memory、Recovery、Context、PydanticAI、消融和真实Judge已有产品闭环；唯一未实施核心项为Reflection，现有ADR-037只批准证据门槛，尚无可直接编码的算法/任务/公开契约。PydanticAI A1为已接受并披露的边界，不重写Runtime凑“纯框架驱动”。
+
+本轮先完成Accepted ADR-043阶段2剩余成品：Alembic `0002_experiment_records`及同一SQLite Store保存新Experiment计划/结果、Job和Review，成对Episode也走数据库。计划+初始Job、结果+计划退役分别同事务提交；模型/工具在事务外。旧JSON只读回退，同ID冲突失败，无独立双写。新进程可回读实验/评审/Job并从冻结计划继续Fake成对运行；在线备份自动包含新表。源码阅读、主链路、失败与边界见[学习交接](../learning/V0.3-sqlite-experiment-persistence-20261030.md)。
+
+首次完整门禁暴露Dashboard在损坏文件名处提前抛错（732通过/1失败），修复逐文件隔离计数后最终完整门禁通过：**733 Python**、Ruff/Mypy **124文件**、固定**22格零退化**、上下文消融、Web typecheck/build、**48 Node**、**74 Edge**、audit 0漏洞。证据`artifacts/quality/18961e47-e430-420c-84f4-07a662e46157/`及最新`artifacts/playwright/`。定向回归还修正无关丢失源Review阻挡目标列表的问题。无真实模型、Judge、真实历史迁移或Git提交/推送。
+
+Reflection最小方案已收敛为[ADR-044 Proposed](../adr/ADR-044-no-progress-reflection-challenge.md)：针对重复成功但无进展的工具调用，仅允许一次计入原预算的结构化行动修正，并以公开旧别名题做单变量对照。该方案会新增配置、事件和任务，按需求§0.3须负责人确认后编码；当前尚未实现或调用模型。阶段3真实JSON迁移仍须停写、备份、隔离导入、逐项回读及负责人明确确认。
+
+## 2026-10-29 SQLite单Episode成品闭环
+
+负责人批准开始并要求完成当前整项工作后统一汇报。ADR-043现为Accepted，首个单Episode成品切片Implemented：新增Application `EpisodeStore` Port、Infrastructure SQLAlchemy Adapter和Alembic `0001_episode_records`；产品默认服务延迟创建`artifacts/agentlabyrinth.sqlite3`。新单次/实时Episode的安全点、完整Trace、Fake来源和最终结果由同一数据库行权威保存，短事务验证前缀后完成转换；模型/工具调用在事务外。结束记录不可由不同内容覆盖，读取核验摘要、身份、来源和Trace链；跨进程退出可从数据库原生恢复。旧JSON只读回退且同ID冲突失败，不自动迁移、删除或改写真实历史。在线备份入口`scripts.backup_sqlite`拒绝覆盖并验证完整性。早期标准库候选和重复准入测试已删除，正式实现见`packages/infrastructure/sqlite_episode_store.py`。
+
+实际完整验证：**732 Python**、Ruff/Mypy **123文件**、固定**22格0退化**、上下文消融24格、Web typecheck/build、**48 Node**、npm audit **0漏洞**。完整脚本默认Chromium阶段因本机缺少Playwright Chromium可执行文件非产品失败而退出；随后使用仓库支持的系统Microsoft Edge实测 **74/74** 通过。证据`artifacts/quality/4211b89c-e9e2-4bce-a295-9fc8e0b79280/`及最新`artifacts/playwright/`；专项覆盖迁移版本、重复升级、拒绝破坏性降级、正常/重启读取、跨进程恢复、旧历史兼容、冲突/篡改和在线备份恢复。无真实模型、Judge、真实数据迁移或Git提交/推送。
+
+Experiment计划/Job/成对Episode及Review仍以原JSON为权威，是ADR-043后续独立切片；不能把本轮描述成所有对象已数据库化。实际迁移真实历史、删除旧文件或切换其权威仍需负责人另行明确确认，先停写和恢复验证备份。完整交接见[SQLite单Episode成品交接](../learning/V0.3-sqlite-episode-persistence-20261029.md)。
+
+## 2026-10-29 Episode数据库迁移版本起步
+
+负责人要求推进SQLite持久化。新增`packages/infrastructure/migrations/`中首个Alembic版本`0001_episode_records`及显式连接入口，仅在独立临时库测试：首次升级、重复升级、版本记录和拒绝破坏性降级并保留数据；连同SQLAlchemy/标准库SQLite隔离准入6项通过，Ruff/格式/Linux目标Mypy四文件通过。本轮没有调用真实模型、迁移真实历史、提交或推送；未重跑完整门禁。
+
+**本轮尚未完成正式SQLite接入**：存储Port、SQLAlchemy Adapter、单次/实时运行与数据库原生Checkpoint恢复、历史迁移/切换均未实现；现有系统仍使用原JSON。首迁移版本仅为开发期隔离切片，未批准直接对现有数据运行；必须继续完成ADR-043的来源/原子性/兼容与完整门禁，不将独立建表当成产品能力。
+
+## 2026-10-29 正式技术栈准入
+
+负责人要求开始按需求基线实施SQLite。已在pyproject/uv.lock加入SQLAlchemy `>=2.0,<2.1`及Alembic `>=1.13,<2`，本机锁定SQLAlchemy 2.0.55、Alembic 1.20.1及其新增依赖；未见原包锁项目删除。隔离Fake测试`tests/integration/test_sqlalchemy_sqlite_admission.py`用Alembic Operations建表、SQLAlchemy事务写入、重复ID失败回滚、引擎重开回读并核对原JSON；与原SQLite准入共5项通过，Ruff/格式及Linux目标Mypy通过。此测试不是正式Alembic版本迁移，也未把数据库接入产品或运行真实模型；未重跑完整门禁、未提交/推送Git。
+
+ADR-043新增首个切片方向：Application存储Port、Infrastructure SQLAlchemy Adapter及Alembic版本迁移，单Episode覆盖实时Trace、Checkpoint、完成和数据库原生恢复；继续保护文件历史和禁止独立双写。当前尚未实现上述成品及历史迁移，先前标准库候选仅为隔离验证，不能称SQLite接入已完成。
+
+## 2026-10-28 SQLite Episode候选组件
+
+负责人要求继续。新增`packages/application/sqlite_episode_candidate.py`，仅隔离候选，不接产品API、Runtime或真实历史。SQLite中同一行保存一个完整安全点或完成产物；安全点校验身份/来源和前缀，拒绝旧状态及已结束覆盖；完成转换在短事务中核验安全点、来源及Trace前缀，读取检查摘要、身份、配置哈希和Trace链。新增候选测试覆盖进程退出后安全点读回、Fake通过既有JSON恢复生成的结果转入候选、来源/轨迹冲突、重复完成和篡改摘要。SQLite准入与原跨进程恢复共10项通过；Ruff/格式及Linux目标Mypy两文件通过。尚未运行完整门禁、真实模型或Git同步。
+
+此组件为标准库SQLite的内部候选，不是需求§16 SQLAlchemy/Alembic成品实现；未接正常单次/实时/Experiment/MCP/BFCL、数据库原生恢复、迁移或用户入口，不能声称成品完成。尚需针对并发写入、磁盘故障、SQLite版本/锁参数、迁移和真实历史兼容补验证；需要落实正式存储选择和不混合双写，再按ADR-043推进完整链路。
+
+## 2026-10-28 SQLite准入与关联核查续接
+
+负责人要求继续。只读核查56个Experiment及396条Episode引用：已有读取器核验下未发现缺失Episode、重复成员或Pair/ID集合不一致；5个Job的已完成结果/未结束计划基本关联未发现缺失。此为有限关系核查，不代表完整来源核验、所有历史可恢复或实际性能合格。另15份顶层非UUID JSON已逐份复制并核对SHA到`artifacts/api-error-disclosure-20261028/other-json-backup-5a72debe-9d97-42ce-b72a-7eb7ea04d85c/`；与此前663份分开且在同设备，不包含其他子目录、不等同异地完整备份。
+
+隔离SQLite测试增加子进程在未提交事务中退出、SQLite `max_page_count`模拟容量耗尽：此前提交数据仍可读，完整性检查通过。连同Fake读取/安全点导出恢复、锁/只读/关联错误共4项通过；Ruff及Linux目标Mypy通过。容量限制不等同真实磁盘满或意外断电。尚未接入产品SQLite或迁移历史，未重跑完整门禁、未真实模型/Git操作；下一步沿ADR-043推进具体成品切片，保持JSON/现有数据与故障边界。
+
+## 2026-10-28 SQLite隔离准入起步
+
+负责人要求开始执行ADR-043路线。只读盘点`artifacts/`下UUID命名JSON：Episode 594、Experiment 56、计划4、Job 5、Review 4；语法可解析共663，另15个非UUID顶层JSON未纳入，Episode安全点目录无UUID JSON。663份也通过各自既有读取器的Schema及身份核验（Review含来源哈希、Experiment含配置哈希）；并非完整关联或孤立记录审核。清单和分类结果在被忽略的`artifacts/api-error-disclosure-20261028/`，不含正文。663份范围内历史复制到`artifacts/api-error-disclosure-20261028/history-backup-454b206e-3689-4da4-b129-60f1701bc118/`，逐份比较备份与盘点时及复制后原件SHA，一份Episode从备份解析与源对象一致；15个非UUID JSON及其他资产不在此备份范围，备份在同一设备不等于异地备份。历史没有迁移或改写。
+
+新增隔离Fake准入测试`tests/integration/test_sqlite_persistence_admission.py`，使用临时SQLite WAL/FULL、外键、版本号，验证单Episode原始字节与事件ID顺序、新Python进程回读、重复ID回滚、写事务中读取未提交隔离、在线备份恢复和无效JSON校验；另验证Fake进程中断后产生的安全点经SQLite存取、导出为现有JSON后完成恢复，源安全点不变；锁竞争、只读写入和外键失败不会改变已提交记录。实际3项通过、Ruff与Linux目标Mypy通过。该夹具使用Python标准库、非正式数据库实现；不等于从数据库直接恢复，未覆盖磁盘满/崩溃、迁移、非UUID文件备份或Web接入，阶段0/1尚未完整通过，不能称数据库成品或替换JSON。上轮727/48/74不是本轮全套门禁。本轮不调用真实模型、不提交Git。下一步补实际历史关联只读核验、非UUID资产备份策略与数据库故障注入，再做具体成品设计，按负责人要求最小验证后继续成品开发。
+
+## 2026-10-28 持久化优化路线规划
+
+负责人要求规划数据持久化优化。新增[ADR-043 Proposed](../adr/ADR-043-sqlite-persistence-roadmap.md)，对照需求§16及现有JSON/Checkpoint/Job/Review实际情况，规划SQLite隔离验证→现有功能成品闭环→无损历史迁移与验证→切换、备份和回滚，列明单一权威、事务、未知值、来源哈希、故障注入及单进程边界。首切片、具体表结构、存储位置及真实历史切换仍待确定；本轮只有文档规划，没有新增数据库/依赖、真实模型调用、数据迁移或Git同步。727/48/74为上轮代码实跑，非本轮新测试。
+
+## 2026-10-28 持久化存量问题收口
+
+负责人要求连续处理已知问题并统一汇报。依[ADR-042](../adr/ADR-042-partial-review-history.md)增加显式1.1部分评审读取：旧1.0遇损坏仍失败；新页面保留核验通过的评审并说明无法核验记录的归属可能未知，禁用完整CSV；实验评审不完整时不计算覆盖/一致性。损坏的恢复列表返回明确失败；新增直接恢复Experiment Job时已有最终结果的保护，执行前和最终写入前均拒绝覆盖。存在正常最终结果且残留计划时也保守停止，须先查看既有结果；本地单进程不等于多进程原子排他。
+
+最终完整`scripts.check`退出0：**727Python/102.94秒、Ruff/Mypy116文件、48Node、74Edge/2.9分钟、固定22格零退化、上下文消融、Web构建、audit0漏洞**。证据`artifacts/quality/11287605-1d7e-44cf-b5fa-6beaaac1a6f2/`、`artifacts/playwright/c9f680fb-846a-45cc-b632-c995a398277d/`、日志`artifacts/api-error-disclosure-20261028/quality-result-guard.log`。此前门禁5项失败为旧恢复测试依赖损坏文件覆盖；已补保留原件/拒绝调用断言及正常恢复测试，初次浏览器夹具未匹配新查询造成1项失败后已修复并重新通过。原21题与原真实失败Episode共22份SHA保持；没有真实推理、Judge、恢复或Git同步。
+
+目前恢复列表遇单项损坏整体不可用，错误可见但仍不能同时展示其他可恢复项；评审完整性是全目录不确定计数而非目标Episode归属判断。大目录性能未测，跨文件事务、多进程调度、备份和自由文本脱敏仍是持久化设计边界。下一步以具体ADR设计SQLite及非破坏性迁移，不声称所有潜在问题已消除。
+
+## 2026-10-28 恢复列表损坏提示
+
+负责人要求先完成存量修复再优化持久化。Episode、Experiment及Job恢复列表遇到无法校验或读取的记录不再静默返回不完整列表，而是走现有安全错误响应；原Web已有列表读取失败提示。Experiment计划额外校验完整性和身份；损坏结束文件不再冒充可恢复。正常跨进程恢复与损坏保护并测，相关83项通过，Ruff/格式及Linux目标Mypy三文件通过；初次回归发现旧测试依赖覆盖损坏结果，已调整为先验证保留和报错，再只删除隔离测试夹具以验证正常恢复。未重跑完整门禁、未调用真实模型或Git同步。
+
+完全无法解析的评审归属未知，现仍返回409，不能声称该问题已完成。要同时显示有效记录和明确提示不完整，需设计可兼容的公开响应及前端处理；SQLite优化待存量问题完成后再做。
+
+## 2026-10-28 评审历史隔离
+
+负责人要求继续修复存量问题。已复现并修复：评审文件可解析且身份可核对，但其所属Episode丢失时，不再阻挡其他Episode的评审列表；目标Episode仍逐条核对来源，直接读取受损评审仍409。相关评审/历史/Job 63项通过，Ruff/格式及Linux目标Mypy两文件通过。本轮未跑完整门禁、真实模型或Git同步。完全无法解析或身份不可信的评审仍会阻挡列表，不能静默跳过；可恢复列表异常可见性也未完成，需要明确不完整提示方案和兼容处理；SQLite尚未实施。
+
+## 2026-10-28 损坏结果保护
+
+负责人要求先解决已有问题，再优化持久化。隔离测试复现损坏Episode结果被当作不存在，可能沿安全点覆盖原文件；已令单Episode和Experiment臂遇到损坏结果直接停止，不触发恢复覆盖。原结果和安全点字节保持；修复前定向1项失败，修复后相关历史/Job/进度/预算64项通过，Ruff/格式及Linux目标Mypy三文件通过。未重跑完整门禁，未触碰真实历史、调用真实模型或Git同步。评审损坏隔离、可恢复列表错误可见性仍未完成；SQLite方案须在存量问题处理后具体设计，不能宣称本轮全部完成。
+
+## 2026-10-28 持久化检查
+
+负责人要求分析现有持久化问题及优化路线。证据与建议见[持久化检查](../learning/V0.3-persistence-review-20261028.md)：隔离Fake确认无关损坏评审会让另一Episode评审列表从200变409；目录发现跳过异常、跨文件缺少统一事务、损坏最终结果可能被恢复重写、全量扫描和单进程等边界分别标明证据等级。建议先修数据保护和错误可观测性，再经具体ADR评估SQLite与可验证迁移；本轮未迁移、未改核心协议或真实历史，未做负载测试/真实模型调用/Git同步。保留现有未提交改动。
+
+## 2026-10-28 API错误信息检查
+
+继续检查发现损坏的保存记录或任务目录经Pydantic校验失败后，部分接口将含原始输入的异常文本返回页面；复核源文件在读取时消失也可能暴露本机路径。普通HTTP错误统一屏蔽校验、文件及编码异常的原文，实时Episode错误流同步处理；保留状态码、错误码和一般业务提示。离线复现7项修复前失败，修复后历史、评审、Job、进度和API相关 **93项通过**；Ruff格式/检查及Linux目标Mypy两文件通过。首次测试夹具遗漏必填字段，以及一次pytest收集阶段MemoryError均保留日志，修正夹具后重新复现，不能把它们当产品缺陷。详细日志在`artifacts/api-error-disclosure-20261028/`，本轮未重跑完整门禁；下文713/48/73是上轮结果。
+
+本轮工作位于`codex/fix-api-error-disclosure`，基于5066436并保留上轮未提交修复与交接；没有真实模型调用或Git提交/推送。静态阅读还发现评审列表遍历所有评审并在任意一份损坏时整体失败，尚未复现或修复；需进一步确认如何提示不完整结果，不能静默跳过损坏记录。既有单进程调度、真实模型效果及网络稳定性边界仍在。
+
+## 2026-10-28 只读API响应性优化
+
+负责人要求继续处理存量问题。当前任务[源码/失败与交接](../learning/V0.3-readonly-api-responsiveness-20261028.md)：四个恢复列表/Job状态GET原来在async主循环同步读盘；复用线程读取，并保留Job请求开始时的活动事实。两端都不活动且读到运行快照时最多额外复核一次，避免任务在整个读取区间内启动又结束被误报中断。不改POST运行/控制临界段、公开协议、评分或CSV。修复前4失败/1对照通过；补充完整区间竞态在仅开始标记版本复现1失败/1通过，最终33项历史/Job/进度专项、两文件Linux Mypy与Ruff通过。
+
+最终完整门禁实际 **713Python/99.60秒、Ruff/Mypy116文件、48Node、73Edge/2.9分钟、旧22格零退化、上下文消融、Web类型/构建、audit0漏洞**，Quality gate passed。证据`artifacts/quality/6ffe8878-c6dc-4d5f-a895-51e1bfa75aab/`、`artifacts/playwright/de67be9c-b99e-43de-9a22-37218c5f8eeb/`及`artifacts/readonly-api-20261028/quality-final.log`；此前712项为补充竞态修复前的中间门禁，不作最终证明。21题及原368937f4…失败Episode共22份SHA保持；API8000/Web5173恢复，页面及代理回读原Episode均GET200。Starlette弃用及大chunk提示仍在，无依赖升级。
+
+分支codex/fix-readonly-api-responsiveness基于5066436，不退回较早main丢弃PR#3成果。没有新真实推理/Judge/恢复或Git提交/推送/合并；上轮一次性Git授权已消费。只读快照仍可能过期，不宣称事务一致性或所有同步I/O已解决；真实网络稳定性、研究收益、A1缺口与暂停新增机制安排保持。
 
 ## 2026-10-28 GitHub分组交付回执
 

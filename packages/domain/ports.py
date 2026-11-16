@@ -85,7 +85,11 @@ class Environment(Protocol):
         ...
 
     def snapshot(self) -> dict[str, JsonValue]:
-        """Return an independent JSON-compatible state copy."""
+        """Return private JSON-compatible state needed only for recovery."""
+        ...
+
+    def public_state(self) -> dict[str, JsonValue]:
+        """Return a validated Agent-visible projection, never a recovery fallback."""
         ...
 
     def restore(self, snapshot: dict[str, JsonValue]) -> None:

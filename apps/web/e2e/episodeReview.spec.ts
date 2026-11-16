@@ -43,8 +43,8 @@ test('real Judge requires explicit selection and exactly one click; refresh only
   } });
   const history = [seed.review];
   await showRealModel(page);
-  await page.route(`**/api/v1/episodes/${id}/reviews`, route => route.fulfill({
-    json: { schema_version: '1.0', request_id: seed.request_id, episode_id: id, reviews: history },
+  await page.route(`**/api/v1/episodes/${id}/reviews?*`, route => route.fulfill({
+    json: { schema_version: '1.1', request_id: seed.request_id, episode_id: id, reviews: history, unreadable_count: 0 },
   }));
   const posts: unknown[] = [];
   let releaseReply: () => void = () => { throw new Error('No pending request'); };
@@ -54,7 +54,7 @@ test('real Judge requires explicit selection and exactly one click; refresh only
     history.push(result.review);
     await route.fulfill({ json: result });
   });
-  await page.goto(`/?episode_id=${id}`);
+  await page.goto(`/?episode_id=${id}&section=review`);
   const panel = page.locator('.episode-review-card');
   await expect(panel.getByRole('heading', { name: '大模型评审' })).toBeVisible();
   await expect(panel.getByRole('button', { name: '评审本次结果' })).toBeDisabled();
@@ -108,14 +108,14 @@ test('saved model versions, unknown usage and legacy CSV remain readable without
       reviewer_label: '=SUM(1,2)', rationale: '说明含"引号"\n第二行' },
   ];
   await showRealModel(page);
-  await page.route(`**/api/v1/episodes/${id}/reviews`, route => route.fulfill({
-    json: { schema_version: '1.0', request_id: seed.request_id, episode_id: id, reviews },
+  await page.route(`**/api/v1/episodes/${id}/reviews?*`, route => route.fulfill({
+    json: { schema_version: '1.1', request_id: seed.request_id, episode_id: id, reviews, unreadable_count: 0 },
   }));
   const writes: string[] = [];
   page.on('request', value => {
     if (value.url().includes('/api/') && value.method() !== 'GET') writes.push(value.url());
   });
-  await page.goto(`/?episode_id=${id}`);
+  await page.goto(`/?episode_id=${id}&section=review`);
   const panel = page.locator('.episode-review-card');
   await expect(panel.locator('.review-item')).toHaveCount(2);
   await expect(panel.locator('.review-item').first()).toContainText('证据存在疑点');
@@ -155,6 +155,21 @@ test('saved model versions, unknown usage and legacy CSV remain readable without
   expect(writes).toEqual([]);
 });
 
+test('incomplete review history warns and cannot be exported as complete', async ({ page, request }) => {
+  const artifact = await savedEpisode(request);
+  const id = artifact.episode.episode_id;
+  const seed = await fakeReview(request, id);
+  await page.route(`**/api/v1/episodes/${id}/reviews?*`, route => route.fulfill({
+    json: { schema_version: '1.1', request_id: seed.request_id, episode_id: id,
+      reviews: [seed.review], unreadable_count: 1 },
+  }));
+  await page.goto(`/?episode_id=${id}&section=review`);
+  const panel = page.locator('.episode-review-card');
+  await expect(panel.getByRole('alert')).toContainText('列表可能不完整');
+  await expect(panel.getByRole('button', { name: '导出全部记录 CSV' })).toHaveCount(0);
+  await expect(panel.getByText('尚无大模型评审', { exact: false })).toHaveCount(0);
+});
+
 test('experiment review summary counts only saved real model reviews and stays read-only', async ({ page, request }) => {
   await page.goto('/?mode=experiment');
   await page.getByRole('button', { name: '清空', exact: true }).click();
@@ -166,8 +181,9 @@ test('experiment review summary counts only saved real model reviews and stays r
   const pair = experiment.pairs[0];
   const reviewedId = pair.recovery_success ? pair.recovery_episode_id : pair.baseline_episode_id;
   const seed = await fakeReview(request, reviewedId);
-  await page.route(`**/api/v1/episodes/${reviewedId}/reviews`, route => route.fulfill({ json: {
-    schema_version: '1.0', request_id: seed.request_id, episode_id: reviewedId,
+  let unreadable = 0;
+  await page.route(`**/api/v1/episodes/${reviewedId}/reviews?*`, route => route.fulfill({ json: {
+    schema_version: '1.1', request_id: seed.request_id, episode_id: reviewedId, unreadable_count: unreadable,
     reviews: [seed.review, { ...seed.review, review_id: '10000000-0000-4000-8000-000000000029',
       provider: 'aihubmix', model: MODEL, verdict: 'pass' }],
   } }));
@@ -176,6 +192,11 @@ test('experiment review summary counts only saved real model reviews and stays r
   await page.locator('.experiment-review-summary > summary').click();
   await expect(page.locator('.experiment-review-summary')).toContainText(`1 / ${experiment.episode_ids.length}`);
   await expect(page.locator('.review-summary-grid > div').nth(1).locator('strong')).toHaveText('1');
+  unreadable = 1;
+  await page.reload();
+  await page.locator('.experiment-review-summary > summary').click();
+  await expect(page.locator('.experiment-review-summary [role="alert"]')).toContainText('评审记录不完整');
+  await expect(page.locator('.review-summary-grid')).toHaveCount(0);
   expect(writes).toEqual([]);
 });
 
@@ -183,7 +204,7 @@ test('no final submission or real model never falls back to a simulated Judge', 
   const artifact = await savedEpisode(request, 'invalid-arguments');
   const writes: string[] = [];
   page.on('request', value => { if (value.url().includes('/api/') && value.method() !== 'GET') writes.push(value.url()); });
-  await page.goto(`/?episode_id=${artifact.episode.episode_id}`);
+  await page.goto(`/?episode_id=${artifact.episode.episode_id}&section=review`);
   const panel = page.locator('.episode-review-card');
   await expect(panel.getByRole('button', { name: '评审本次结果' })).toBeDisabled();
   await expect(panel.getByText('本次没有已保存的最终提交，暂不能进行模型评审。')).toBeVisible();
@@ -207,7 +228,7 @@ test('Judge network and strict-output failures never retry or become task failur
         status: 'failed', verdict: null, answer_correctness: null, evidence_support: null,
         process_safety: null, rationale: null, failure_code: 'INVALID_JUDGE_OUTPUT' } } });
   });
-  await page.goto(`/?episode_id=${id}`);
+  await page.goto(`/?episode_id=${id}&section=review`);
   const panel = page.locator('.episode-review-card');
   await page.getByLabel('评审模型').selectOption(MODEL);
   await panel.getByRole('button', { name: '评审本次结果' }).click();
@@ -215,6 +236,8 @@ test('Judge network and strict-output failures never retry or become task failur
   expect(calls).toBe(1);
   await panel.getByRole('button', { name: '评审本次结果' }).click();
   await expect(panel.locator('.review-item')).toContainText('复核失败：INVALID_JUDGE_OUTPUT');
+  await expect(panel.locator('.review-item')).toContainText('可能达到输出上限');
+  await expect(panel.getByText(/最多输出 4096 Token/)).toBeVisible();
   await expect(panel.getByText('规则评分：通过')).toBeVisible();
   await expect(panel.locator('.review-agreement')).toHaveCount(0);
   expect(calls).toBe(2);

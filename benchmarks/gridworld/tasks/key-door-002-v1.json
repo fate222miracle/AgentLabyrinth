@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.0",
+  "id": "2d70465a-2b9e-4c8f-8f2f-7f07d5ad4f9c",
+  "name": "key-door-002-v1",
+  "version": "1.0.0",
+  "category": "gridworld",
+  "description": "Explore the archive corridors, retrieve the matching key, return to the main door, and find a route to the exit.",
+  "initial_state": {
+    "map_id": "key-door-002-v1",
+    "start": [1, 3]
+  },
+  "goal_conditions": {
+    "rule_id": "collect-key-open-matching-door-enter-goal-v1"
+  },
+  "constraints": [
+    "Use one environment action per model response.",
+    "Only act on targets identified by your observations."
+  ],
+  "expected_tools": ["move_up", "move_down", "move_left", "move_right", "inspect", "pickup", "use"],
+  "forbidden_tools": [],
+  "max_steps": 20,
+  "token_budget": 16000,
+  "evaluator_config": {
+    "name": "gridworld_key_door_v1",
+    "split": "development",
+    "origin": "native"
+  }
+}

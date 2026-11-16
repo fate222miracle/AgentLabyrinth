@@ -1,0 +1,116 @@
+.gridworld-panel {
+  display: grid;
+  gap: 0.8rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-secondary);
+}
+
+.gridworld-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.gridworld-heading h3,
+.gridworld-panel h3 {
+  font-size: 1rem;
+}
+
+.gridworld-heading p,
+.gridworld-panel > p {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.gridworld-heading > span {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.gridworld-board {
+  display: grid;
+  width: min(100%, 34rem);
+  gap: 0.25rem;
+  overflow-x: auto;
+}
+
+.gridworld-view-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.gridworld-view-control button[aria-pressed="true"] {
+  border-color: var(--border-control);
+  background: var(--color-surface);
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.gridworld-stage {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  aspect-ratio: 17 / 9;
+  max-height: 35rem;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: #182b3a;
+}
+
+.gridworld-stage[data-ready="false"] { display: none; }
+.gridworld-stage canvas { display: block; width: 100%; height: 100%; }
+
+.gridworld-cell {
+  display: grid;
+  min-width: 0;
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px dashed var(--border-highlight);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.gridworld-cell.is-visible {
+  border-style: solid;
+  border-color: var(--border-control);
+}
+
+.gridworld-cell.kind-wall { background: var(--border-color); color: var(--text-primary); }
+.gridworld-cell.kind-key { background: var(--warn-bg); color: var(--warn-text); }
+.gridworld-cell.kind-closed_door,
+.gridworld-cell.kind-open_door { background: var(--info-soft); color: var(--info-text); }
+.gridworld-cell.kind-goal { background: var(--success-bg); color: var(--success-text); }
+.gridworld-cell.is-agent { outline: 2px solid var(--brand-action); outline-offset: 1px; }
+
+.gridworld-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.8rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.gridworld-legend b { color: var(--text-primary); font-family: var(--font-mono); }
+.gridworld-feedback { color: var(--success-text) !important; }
+.gridworld-feedback.is-rejected { color: var(--warn-text) !important; }
+.gridworld-error { color: var(--fail-text) !important; }
+.gridworld-rejections { color: var(--warn-text); font-size: 0.82rem; }
+.gridworld-rejections ul { margin-left: 1.25rem; }
+
+@media (max-width: 640px) {
+  .gridworld-panel { padding: 0.75rem; }
+  .gridworld-heading { flex-direction: column; }
+  .gridworld-heading > span { flex-basis: auto; }
+  .gridworld-board { max-width: 100%; }
+  .gridworld-stage { aspect-ratio: 4 / 3; }
+}

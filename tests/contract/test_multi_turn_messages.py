@@ -5,6 +5,8 @@ from datetime import UTC
 from pathlib import Path
 from uuid import uuid4
 
+from pydantic import JsonValue
+
 from packages.domain.models import (
     AgentSpec,
     Message,
@@ -108,10 +110,13 @@ class DummyMockEnvironment:
             )
         return StepResult(observation=Observation(content={}), done=False)
 
-    def snapshot(self) -> dict[str, object]:
+    def snapshot(self) -> dict[str, JsonValue]:
         return {"done": self.done}
 
-    def restore(self, snapshot: dict[str, object]) -> None:
+    def public_state(self) -> dict[str, JsonValue]:
+        return {"done": self.done}
+
+    def restore(self, snapshot: dict[str, JsonValue]) -> None:
         pass
 
 

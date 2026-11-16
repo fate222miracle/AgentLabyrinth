@@ -72,6 +72,10 @@ class BFCLEnvironment:
             "proposed_call": cast(JsonValue, self._call),
         }
 
+    def public_state(self) -> dict[str, JsonValue]:
+        """Expose only BFCL state already visible to its agent and scorer."""
+        return self.snapshot()
+
     def restore(self, snapshot: dict[str, JsonValue]) -> None:
         task_id = snapshot.get("task_id")
         if task_id != (str(self._task_id) if self._task_id else None):

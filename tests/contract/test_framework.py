@@ -75,6 +75,10 @@ class StubEnvironment:
         """Return a fresh inert state."""
         return {}
 
+    def public_state(self) -> dict[str, JsonValue]:
+        """Return the inert state visible to this test runtime."""
+        return {}
+
     def restore(self, snapshot: dict[str, JsonValue]) -> None:
         """No state is maintained by this test witness."""
 

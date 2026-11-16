@@ -1,7 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
+import { ProductNavigation } from './ProductNavigation';
+import { TaskLibrary } from './TaskLibrary';
+import { RunRecords } from './RunRecords';
+import { areaFor, canonicalLocation, routeParams, sectionFor, workspaceFor, type WorkspaceArea, type EpisodeSection } from './workspaceNavigation';
+import { taskDescription, taskTitle, taskCategoryLabels } from './taskPresentation';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { explainFailure, changedStateFields, groupTraceByStep, keyFields, toolFeedbackFields, stepOutcome, stepTitle } from './traceSteps';
 import { ReadableFields, fieldLabels } from './ReadableFields';
 import { McpFlowReplay } from './McpFlowReplay';
+import { GridWorldMap } from './GridWorldMap';
+import { GridWorldComparison } from './GridWorldComparison';
 import { summarizeEpisode, type EpisodeHistorySummary, type ExperimentDashboardItem } from './historySummary';
 import { ExperimentDashboard } from './ExperimentDashboard';
 import { readEpisodeStream } from './streamEpisode';
@@ -15,6 +22,7 @@ import { ExperimentCharts } from './ExperimentCharts';
 import { ExperimentReviewSummary } from './ExperimentReviewSummary';
 import { MemoryPairReview } from './MemoryPairReview';
 import { PlanningPairReview } from './PlanningPairReview';
+import { ReflectionPairReview } from './ReflectionPairReview';
 import { ExperimentProgressReader } from './ExperimentProgressReader';
 import { ContextSettings, contextInput, contextLabel, type ContextChoice } from './ContextSettings';
 import { metaSchema, dashboardSchema, resumableIdsSchema,
@@ -22,34 +30,8 @@ import { metaSchema, dashboardSchema, resumableIdsSchema,
   type PairComparison, type ExperimentArtifact, type ExperimentJobState } from './apiContracts';
 import { readApi, readEpisode, readExperiment, readJob, requireOk } from './apiClient';
 
-const bfclDescriptions: Record<string, string> = {
-  'bfcl-simple_python_0': '求底边长为 10、高为 5 的三角形面积。',
-  'bfcl-simple_python_1': '使用数学函数计算 5 的阶乘。',
-  'bfcl-simple_python_2': '已知直角三角形的两条直角边分别为 4 和 5，求斜边长度。',
-  'bfcl-simple_python_3': '求二次方程的根，系数为 a=1、b=-3、c=2。',
-  'bfcl-simple_python_4': '求解系数为 a=2、b=6、c=5 的二次方程。',
-  'bfcl-simple_python_5': '求二次方程的所有根，系数为 a=3、b=-11、c=-4。',
-  'bfcl-simple_python_6': '求系数为 a=2、b=5、c=3 的二次方程的根。',
-  'bfcl-simple_python_7': '求半径为 4 英寸的圆的周长。',
-  'bfcl-simple_java_6': '刷新数据库表格视图的元数据、追加已有数据，并保留当前状态。',
-  'bfcl-simple_java_18': '查询系统角色数量的第 3 页，每页 20 条。',
-  'bfcl-simple_java_53': '构造谓词：判断 Join 是否为完整主节点，且状态早于本地接受的任期 42、版本 7。',
-  'bfcl-simple_java_74': '在 XML 序列化中处理高代理值 55357、低代理值 56832；内容不在 CDATA 内。',
-  'bfcl-simple_java_76': '以宽 800、高 600 的尺寸更新开场动画画面。',
-};
-
-const taskCategoryLabels: Record<string, string> = {
-  tool_selection: '工具选择',
-  parameter_generation: '参数生成',
-  multi_step_planning: '多步规划',
-  evidence_chain: '跨文档证据链 · 自建仿真',
-  error_recovery: '错误恢复',
-  bfcl_single_call: '单次函数调用',
-};
-
-function taskDescription(task: TaskOption): string {
-  return task.suite !== 'tool_lab_core' ? bfclDescriptions[task.id] ?? task.description : task.description;
-}
+const gridworldRealBudget = { total: '160,000', perCall: 2048 };
+const gridworldRealGalleryDefaults = { taskId: 'key-door-002-v1', maxSteps: 24, seconds: 330 };
 
 const experimentJobLabels: Record<ExperimentJobState['status'], string> = {
   queued: '排队中', running: '运行中', paused: '已暂停', cancelled: '已取消',
@@ -118,7 +100,7 @@ function experimentCsv(experiment: ExperimentArtifact): string {
     'tool_argument_validity_rate', 'pair_retry_eligible', 'pair_recovered', 'context_mode', 'context_max_tool_rounds',
     'model_id', 'provider', 'task_name',
     'context_algorithm_version', 'context_memory_max_bytes',
-    'tool_call_mode', 'runtime_version', 'planning_algorithm_version',
+    'tool_call_mode', 'runtime_version', 'planning_algorithm_version', 'reflection_algorithm_version',
   ];
   const axis = typeof experiment.config.comparison_axis === 'string'
     ? experiment.config.comparison_axis : 'recovery_policy';
@@ -128,7 +110,7 @@ function experimentCsv(experiment: ExperimentArtifact): string {
   type CsvValue = string | number | boolean | null | undefined;
   const rows = experiment.pairs.flatMap((pair): CsvValue[][] => [
     [experiment.experiment_id, experiment.config_hash, axis, pair.task_id, pair.seed,
-      pair.repeat_index ?? 1, axis === 'context_policy' ? 'full' : axis === 'memory_ablation' ? 'recent_window' : axis === 'planning' ? 'no_plan' : axis === 'runtime_backend' ? 'reference' : 'baseline',
+      pair.repeat_index ?? 1, axis === 'context_policy' ? 'full' : axis === 'memory_ablation' ? 'recent_window' : axis === 'planning' ? 'no_plan' : axis === 'reflection' ? 'no_reflection' : axis === 'runtime_backend' ? 'reference' : 'baseline',
       pair.baseline_episode_id, pair.baseline_success,
       pair.baseline_termination_reason, pair.baseline_steps, pair.baseline_model_calls,
       pair.baseline_tool_calls, pair.baseline_tokens, pair.baseline_duration_ms,
@@ -140,9 +122,10 @@ function experimentCsv(experiment: ExperimentArtifact): string {
       savedModel, experiment.config.provider, pair.task_name,
       experiment.config.baseline_agent?.context_policy?.algorithm_version, experiment.config.baseline_agent?.context_policy?.memory_max_bytes, savedCallMode,
       experiment.config.baseline_agent?.runtime_version,
-      experiment.config.baseline_agent?.planning?.algorithm_version],
+      experiment.config.baseline_agent?.planning?.algorithm_version,
+      experiment.config.baseline_agent?.reflection?.algorithm_version],
     [experiment.experiment_id, experiment.config_hash, axis, pair.task_id, pair.seed,
-      pair.repeat_index ?? 1, axis === 'context_policy' ? 'recent_tool_rounds' : axis === 'memory_ablation' ? 'recent_window_with_memory' : axis === 'planning' ? 'declared_plan' : axis === 'runtime_backend' ? experiment.config.recovery_agent?.runtime_backend ?? 'langgraph' : 'recovery',
+      pair.repeat_index ?? 1, axis === 'context_policy' ? 'recent_tool_rounds' : axis === 'memory_ablation' ? 'recent_window_with_memory' : axis === 'planning' ? 'declared_plan' : axis === 'reflection' ? 'bounded_reflection' : axis === 'runtime_backend' ? experiment.config.recovery_agent?.runtime_backend ?? 'langgraph' : 'recovery',
       pair.recovery_episode_id, pair.recovery_success,
       pair.recovery_termination_reason, pair.recovery_steps, pair.recovery_model_calls,
       pair.recovery_tool_calls, pair.recovery_tokens, pair.recovery_duration_ms,
@@ -154,7 +137,8 @@ function experimentCsv(experiment: ExperimentArtifact): string {
       savedModel, experiment.config.provider, pair.task_name,
       experiment.config.recovery_agent?.context_policy?.algorithm_version, experiment.config.recovery_agent?.context_policy?.memory_max_bytes, savedCallMode,
       experiment.config.recovery_agent?.runtime_version,
-      experiment.config.recovery_agent?.planning?.algorithm_version],
+      experiment.config.recovery_agent?.planning?.algorithm_version,
+      experiment.config.recovery_agent?.reflection?.algorithm_version],
   ]);
   return `\uFEFF${[headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
 }
@@ -171,6 +155,8 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   TOOL_FAILED: '工具执行失败',
   ENVIRONMENT_UPDATED: '环境状态更新',
   PLAN_UPDATED: '更新计划声明',
+  REFLECTION_PRODUCED: '生成行动修正',
+  REFLECTION_REJECTED: '反思结果被拒绝',
   EPISODE_RESUMED: '从存档恢复',
   EPISODE_FINISHED: '运行结束',
 };
@@ -191,7 +177,12 @@ function parseSeedList(value: string): number[] | null {
   return new Set(seeds).size === seeds.length ? seeds : null;
 }
 
-function comparisonLabel(pair: PairComparison, axis: 'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation' | 'planning'): string {
+function comparisonLabel(pair: PairComparison, axis: 'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation' | 'planning' | 'reflection'): string {
+  if (axis === 'reflection') {
+    if (pair.baseline_success && pair.recovery_success) return '有无反思均通过';
+    if (!pair.baseline_success && !pair.recovery_success) return '有无反思均未通过';
+    return pair.baseline_success ? '仅无反思通过' : '仅有界反思通过';
+  }
   if (axis === 'planning') {
     if (pair.baseline_success && pair.recovery_success) return '有无声明均通过';
     if (!pair.baseline_success && !pair.recovery_success) return '有无声明均未通过';
@@ -242,22 +233,38 @@ async function copyTextToClipboard(value: string, label: string): Promise<string
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'single' | 'experiment'>('experiment');
+  const [workspace, setWorkspace] = useState(() => workspaceFor(new URL(window.location.href)));
+  const [episodeSection, setEpisodeSection] = useState<EpisodeSection>(() => sectionFor(new URL(window.location.href)));
+  const [activeTab, setActiveTab] = useState<'single' | 'experiment'>(() => areaFor(workspace) === 'experiments' ? 'experiment' : 'single');
   const [meta, setMeta] = useState<MetaResponse | null>(null);
   const [metadataLoading, setMetadataLoading] = useState(false);
   const [metadataError, setMetadataError] = useState<string | null>(null);
 
   // Single Episode states
-  const [selectedModel, setSelectedModel] = useState<string>('');
-  const [selectedScenario, setSelectedScenario] = useState<string>('success');
+  const isGridWorldWorkspace = areaFor(workspace) === 'gridworld';
+  const [workbenchModel, setSelectedModel] = useState<string>('');
+  const [workbenchScenario, setSelectedScenario] = useState<string>('success');
   const [singleFaultProfile, setSingleFaultProfile] = useState<string>('none');
-  const [selectedSingleTask, setSelectedSingleTask] = useState<string>('');
-  const [selectedSuite, setSelectedSuite] = useState<TaskOption['suite']>('tool_lab_core');
+  const [workbenchTask, setSelectedSingleTask] = useState<string>('');
+  const [workbenchSuite, setSelectedSuite] = useState<Exclude<TaskOption['suite'], 'gridworld'>>('tool_lab_core');
+  const [gridworldModel, setGridworldModel] = useState('');
+  const [gridworldTask, setGridworldTask] = useState('');
+  const [gridworldScenario, setGridworldScenario] = useState('success');
+  const selectedSuite = isGridWorldWorkspace ? 'gridworld' : workbenchSuite;
+  const selectedScenario = isGridWorldWorkspace ? gridworldScenario : workbenchScenario;
+  const selectedModel = isGridWorldWorkspace
+    ? (gridworldModel || meta?.models.find((model) => model.provider === 'fake')?.id) ?? ''
+    : workbenchModel;
+  const selectedSingleTask = isGridWorldWorkspace
+    ? (meta?.tasks.find((task) => task.suite === 'gridworld' && task.id === gridworldTask)
+      ?? meta?.tasks.find((task) => task.suite === 'gridworld'))?.id ?? ''
+    : workbenchTask;
   const [singleTaskQuery, setSingleTaskQuery] = useState('');
   const [maxSteps, setMaxSteps] = useState<number>(6);
   const [artifact, setArtifact] = useState<EpisodeArtifact | null>(null);
+  const [singleConfigOpen, setSingleConfigOpen] = useState(false);
   const [liveRun, setLiveRun] = useState<{
-    events: TraceEvent[]; episodeId: string | null; model: string;
+    events: TraceEvent[]; episodeId: string | null; model: string; provider?: string;
     environmentVersion: string; status: 'running' | 'interrupted' | 'completed';
   } | null>(null);
   const [recentEpisodeIds, setRecentEpisodeIds] = useState<string[]>([]);
@@ -270,6 +277,11 @@ export default function App() {
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
   const [eventTypeFilter, setEventTypeFilter] = useState<string>('ALL');
   const [replayIndex, setReplayIndex] = useState<number>(0);
+  const [gridReplayMotion, setGridReplayMotion] = useState(false);
+  const selectFlowReplayEvent = useCallback((index: number, auto: boolean) => {
+    setGridReplayMotion(auto);
+    setReplayIndex(index);
+  }, []);
   const [replayPlaying, setReplayPlaying] = useState<boolean>(false);
   const [replaySpeedMs, setReplaySpeedMs] = useState<number>(1000);
   const [replayView, setReplayView] = useState<'flow' | 'story' | 'events'>('flow');
@@ -293,9 +305,10 @@ export default function App() {
   const [memoryAxisBytes, setMemoryAxisBytes] = useState(8192);
   const [singleContextChoice, setSingleContextChoice] = useState<ContextChoice>('full');
   const [singlePlanning, setSinglePlanning] = useState(false);
+  const [singleReflection, setSingleReflection] = useState(false);
   const [singleContextWindow, setSingleContextWindow] = useState(2);
   const [singleMemoryBytes, setSingleMemoryBytes] = useState(8192);
-  const [comparisonAxis, setComparisonAxis] = useState<'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation' | 'planning'>('recovery_policy');
+  const [comparisonAxis, setComparisonAxis] = useState<'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation' | 'planning' | 'reflection'>('recovery_policy');
   const [expRuntimeBackend, setExpRuntimeBackend] = useState<'handwritten' | 'langgraph'>('handwritten');
   const [expRuntimeTarget, setExpRuntimeTarget] = useState<'langgraph' | 'pydantic_ai'>('langgraph');
   const [expRuntimeStrategy, setExpRuntimeStrategy] = useState<'handwritten' | 'handwritten_recovery'>('handwritten_recovery');
@@ -368,8 +381,66 @@ export default function App() {
     setLoadingMessage('');
   };
 
+  const commitLocation = (input: URL, replace = false) => {
+    const url = canonicalLocation(input);
+    const nextWorkspace = workspaceFor(url);
+    setWorkspace(nextWorkspace);
+    setEpisodeSection(sectionFor(url));
+    setActiveTab(areaFor(nextWorkspace) === 'experiments' ? 'experiment' : 'single');
+    window.history[replace ? 'replaceState' : 'pushState']({}, '', url.toString());
+  };
+
+  const navigateWorkspace = (area: WorkspaceArea | 'experiment-new') => {
+    if (isLoading && loadingActivity === 'run' && !activeJobId) return;
+    pageRequests.current.begin();
+    if (loadingActivity === 'history') finishLoading();
+    setErrorMsg(null);
+    setSingleConfigOpen(false);
+    setReplayPlaying(false);
+    const url = new URL(window.location.origin);
+    if (area === 'workbench' || area === 'gridworld') {
+      url.pathname = area === 'gridworld' ? '/gridworld' : '/workbench';
+      if (area === 'workbench') url.searchParams.set('mode', 'single');
+      setArtifact(null);
+      setLiveRun(null);
+    } else if (area !== 'experiment-new') url.searchParams.set('page', area);
+    else { url.searchParams.set('mode', 'experiment'); setExperiment(null); setActiveJobId(null); }
+    commitLocation(url);
+    requestAnimationFrame(() => {
+      mainMotionRef.current?.focus({ preventScroll: true });
+      mainMotionRef.current?.scrollIntoView({ block: 'start' });
+    });
+  };
+
+  const selectLibraryTask = (task: TaskOption) => {
+    if (isLoading || metadataLoading || task.suite === 'gridworld') return;
+    pageRequests.current.begin();
+    setArtifact(null);
+    setLiveRun(null);
+    setErrorMsg(null);
+    setSelectedSuite(task.suite);
+    setSelectedSingleTask(task.id);
+    setSingleTaskQuery('');
+    setMaxSteps(task.max_steps);
+    setSingleTokenBudget(task.token_budget);
+    setSingleToolTransport('local');
+    setSingleFaultProfile('none');
+    setSingleConfigOpen(false);
+    const url = new URL('/workbench?mode=single', window.location.origin);
+    commitLocation(url);
+    requestAnimationFrame(() => document.getElementById('single-stage-controls')?.focus());
+  };
+
+  const selectEpisodeSection = (section: EpisodeSection) => {
+    const url = new URL(window.location.href);
+    if (section === 'process') url.searchParams.delete('section');
+    else url.searchParams.set('section', section);
+    commitLocation(url, true);
+  };
+
   const switchTab = (next: 'single' | 'experiment') => {
-    if (next === activeTab || (isLoading && loadingActivity === 'run' && !activeJobId)) return;
+    if (isLoading && loadingActivity === 'run' && !activeJobId) return;
+    setSingleConfigOpen(false);
     pageRequests.current.begin();
     if (loadingActivity === 'history') finishLoading();
     setErrorMsg(null);
@@ -379,13 +450,15 @@ export default function App() {
     url.searchParams.delete('experiment_id');
     url.searchParams.delete('experiment_job_id');
     url.searchParams.delete('mode');
+    url.searchParams.delete('page');
     if (next === 'single' && artifact) url.searchParams.set('episode_id', artifact.episode.episode_id);
     else if (next === 'single') url.searchParams.set('mode', 'single');
     if (next === 'experiment') {
+      url.searchParams.set('page', 'experiment-new');
       if (activeJobId) url.searchParams.set('experiment_job_id', activeJobId);
       else if (experiment) url.searchParams.set('experiment_id', experiment.experiment_id);
     }
-    window.history.pushState({}, '', url.toString());
+    commitLocation(url);
   };
 
   useEffect(() => {
@@ -412,7 +485,7 @@ export default function App() {
             url.searchParams.set('experiment_id', activeJobId);
             url.searchParams.delete('experiment_job_id');
             url.searchParams.delete('mode');
-            window.history.replaceState({}, '', url.toString());
+            commitLocation(url, true);
           }
           setActiveJobId(null);
           finishLoading();
@@ -476,9 +549,18 @@ export default function App() {
       const initialModel = data.models.find(model => model.provider === 'fake')?.id ?? '';
       setSelectedModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : initialModel);
       setExpModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : initialModel);
-      if (initializeDefaults && data.tasks.length > 0) {
-        const initialTask = data.tasks.find((task) => task.id === data.default_task)
-          ?? data.tasks.find((task) => task.suite === 'tool_lab_core') ?? data.tasks[0];
+      const gridworldTask = data.tasks.find(task => task.suite === 'gridworld');
+      const gridworldAllowedModels = new Set(gridworldTask?.allowed_model_ids ?? []);
+      const gridworldModels = data.models.filter(model =>
+        model.provider === 'fake' || gridworldAllowedModels.has(model.id));
+      const initialGridworldModel = gridworldModels.find(model => model.provider === 'fake')?.id ?? '';
+      setGridworldModel(current =>
+        !initializeDefaults && gridworldModels.some(model => model.id === current)
+          ? current : initialGridworldModel);
+      const workbenchTasks = data.tasks.filter(task => task.suite !== 'gridworld');
+      const initialTask = workbenchTasks.find((task) => task.id === data.default_task)
+        ?? workbenchTasks.find((task) => task.suite === 'tool_lab_core') ?? workbenchTasks[0];
+      if (initializeDefaults && initialTask && initialTask.suite !== 'gridworld') {
         setSelectedSuite(initialTask.suite);
         setSelectedSingleTask(initialTask.id);
         const initialExperimentTask = initialTask.suite === 'tool_lab_core' && initialTask.category !== 'evidence_chain'
@@ -494,7 +576,7 @@ export default function App() {
 
   // 1. Fetch Metadata and parse initial query parameters
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    const params = routeParams(new URL(window.location.href));
     const expId = params.get('experiment_id');
     const epId = params.get('episode_id');
     const jobId = params.get('experiment_job_id');
@@ -540,7 +622,11 @@ export default function App() {
     }
 
     const handlePopState = () => {
-      const next = new URLSearchParams(window.location.search);
+      const nextUrl = new URL(window.location.href);
+      setWorkspace(workspaceFor(nextUrl));
+      setEpisodeSection(sectionFor(nextUrl));
+      setSingleConfigOpen(false);
+      const next = routeParams(nextUrl);
       const nextExpId = next.get('experiment_id');
       const nextEpId = next.get('episode_id');
       const nextJobId = next.get('experiment_job_id');
@@ -560,7 +646,7 @@ export default function App() {
         loadEpisodeById(nextEpId, false);
       } else {
         setActiveJobId(null);
-        setActiveTab(next.get('mode') === 'single' ? 'single' : 'experiment');
+        setActiveTab(areaFor(workspaceFor(nextUrl)) === 'experiments' ? 'experiment' : 'single');
         pageRequests.current.begin();
         setExperiment(null);
         setArtifact(null);
@@ -637,6 +723,8 @@ export default function App() {
   // Load an existing episode by ID
   const loadEpisodeById = async (id: string, updateUrl = true) => {
     if (!id || id.trim().length === 0) return;
+    setActiveTab('single');
+    setSingleConfigOpen(false);
     setActiveJobId(null);
     const requestId = pageRequests.current.begin();
     setLiveRun(null);
@@ -649,7 +737,7 @@ export default function App() {
       url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
       url.searchParams.delete('experiment_job_id');
-      window.history.pushState({}, '', url.toString());
+      commitLocation(url);
     }
     try {
       const res = await fetch(`/api/v1/episodes/${encodeURIComponent(id.trim())}`);
@@ -657,6 +745,13 @@ export default function App() {
       if (!pageRequests.current.isCurrent(requestId)) return;
       setArtifact(data.artifact);
       addRecentEpisodeId(id.trim());
+      const url = new URL(window.location.href);
+      const isGridWorldEpisode = data.artifact.run_config.environment_version === 'gridworld-key-door-v1';
+      if ((areaFor(workspaceFor(url)) === 'gridworld') !== isGridWorldEpisode) {
+        url.pathname = isGridWorldEpisode ? '/gridworld' : '/runs';
+        url.searchParams.set('episode_id', id.trim());
+        commitLocation(url, true);
+      }
 
     } catch (err: unknown) {
       if (!pageRequests.current.isCurrent(requestId)) return;
@@ -670,6 +765,7 @@ export default function App() {
   // Load an existing experiment by ID
   const loadExperimentById = async (id: string, updateUrl = true) => {
     if (!id || id.trim().length === 0) return;
+    setActiveTab('experiment');
     setActiveJobId(null);
     const requestId = pageRequests.current.begin();
     setLiveRun(null);
@@ -682,7 +778,7 @@ export default function App() {
       url.searchParams.delete('mode');
       url.searchParams.delete('episode_id');
       url.searchParams.delete('experiment_job_id');
-      window.history.pushState({}, '', url.toString());
+      commitLocation(url);
     }
     try {
       const res = await fetch(`/api/v1/experiments/${encodeURIComponent(id.trim())}`);
@@ -702,16 +798,23 @@ export default function App() {
 
   // Execute single episode
   const handleRunEpisode = async () => {
+    setSingleConfigOpen(false);
+    setEpisodeSection('process');
     const requestId = pageRequests.current.begin();
     beginLoading('正在运行，Trace 节点会随事件出现。');
     setErrorMsg(null);
     setArtifact(null);
     const runningUrl = new URL(window.location.href);
+    runningUrl.pathname = isGridWorldWorkspace ? '/gridworld' : '/workbench';
+    runningUrl.searchParams.set('mode', 'single');
+    runningUrl.searchParams.delete('page');
+    runningUrl.searchParams.delete('section');
     runningUrl.searchParams.delete('episode_id');
     runningUrl.searchParams.delete('experiment_id');
-    window.history.pushState({}, '', runningUrl.toString());
-    setLiveRun({ events: [], episodeId: null, model: selectedModel,
-      environmentVersion: selectedSuite !== 'tool_lab_core' ? 'bfcl-adapted-single-call-v1'
+    commitLocation(runningUrl);
+    setLiveRun({ events: [], episodeId: null, model: selectedModel, provider: currentSingleModelMeta?.provider,
+      environmentVersion: selectedSuite === 'gridworld' ? 'gridworld-key-door-v1'
+        : selectedSuite !== 'tool_lab_core' ? 'bfcl-adapted-single-call-v1'
         : selectedSingleTaskMeta?.supports_mcp && singleToolTransport === 'mcp' ? 'tool-lab-mcp-v1' : 'tool-lab-m0-v1',
       status: 'running' });
     requestAnimationFrame(() => {
@@ -723,14 +826,32 @@ export default function App() {
       const currentModelObj = meta?.models.find((m) => m.id === selectedModel);
       const isFake = selectedModel === 'fake' || currentModelObj?.provider === 'fake';
 
-      const payload = {
-        schema_version: singleRuntimeBackend === 'pydantic_ai'
+      const payload = selectedSuite === 'gridworld' ? {
+        schema_version: '1.3',
+        provider: isFake ? 'fake' : 'aihubmix',
+        model: isFake ? 'fake-model' : selectedModel,
+        scenario: isFake ? selectedScenario : null,
+        task_id: selectedSingleTask,
+        suite: selectedSuite,
+        max_steps: gridworldRealGallery ? null : gridworldMaxSteps,
+        max_execution_time_ms: gridworldRealGallery ? null : gridworldSeconds * 1000,
+        token_budget: isFake ? gridworldTaskMeta?.token_budget ?? 16000 : null,
+        runtime_backend: 'handwritten',
+        runtime_strategy: 'handwritten',
+        tool_transport: 'local',
+        fault_profile: 'none',
+      } : {
+        schema_version: singleReflection && selectedSingleTaskMeta?.supports_reflection
+          ? '1.8'
+          : singleRuntimeBackend === 'pydantic_ai'
           ? '1.7'
           : singlePlanning && selectedSingleTaskMeta?.supports_planning ? '1.6' : '1.5',
-        ...(singlePlanning && selectedSingleTaskMeta?.supports_planning
+        ...(singleReflection && selectedSingleTaskMeta?.supports_reflection
+          ? { reflection: { schema_version: '1.0', algorithm_version: 'no-progress-revision-v1' } }
+          : singlePlanning && selectedSingleTaskMeta?.supports_planning
           ? { planning: { schema_version: '1.0', algorithm_version: 'plan-update-v1' } } : {}),
-        tool_call_mode: selectedSuite === 'tool_lab_core' ? singleCallMode : 'single',
-        ...(singleContextChoice !== 'full' ? { context_policy: contextInput(singleContextChoice, singleContextWindow, singleMemoryBytes) } : {}),
+        tool_call_mode: singleReflection ? 'single' : selectedSuite === 'tool_lab_core' ? singleCallMode : 'single',
+        ...(!singleReflection && singleContextChoice !== 'full' ? { context_policy: contextInput(singleContextChoice, singleContextWindow, singleMemoryBytes) } : {}),
         provider: isFake ? 'fake' : 'aihubmix',
         model: isFake ? 'fake-model' : selectedModel,
         scenario: isFake ? selectedScenario : null,
@@ -740,7 +861,7 @@ export default function App() {
         max_execution_time_ms: executionSeconds * 1000,
         token_budget: isFake ? null : singleTokenBudget,
         runtime_backend: singleRuntimeBackend,
-        runtime_strategy: singleRuntimeStrategy,
+        runtime_strategy: singleReflection ? 'handwritten' : singleRuntimeStrategy,
         tool_transport: selectedSingleTaskMeta?.supports_mcp
           ? singleToolTransport : 'local',
         fault_profile: isFake && selectedSuite === 'tool_lab_core'
@@ -766,7 +887,7 @@ export default function App() {
       const newArtifact = data.artifact;
       setArtifact(newArtifact);
       setLiveRun((current) => current ? { ...current, events: newArtifact.events,
-        model: newArtifact.agent.model.model,
+        model: newArtifact.agent.model.model, provider: newArtifact.agent.model.provider,
         environmentVersion: newArtifact.run_config.environment_version ?? current.environmentVersion,
         episodeId: newArtifact.episode.episode_id, status: 'completed' } : current);
       addRecentEpisodeId(newArtifact.episode.episode_id);
@@ -775,7 +896,7 @@ export default function App() {
       url.searchParams.set('episode_id', newArtifact.episode.episode_id);
       url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
-      window.history.replaceState({}, '', url.toString());
+      commitLocation(url, true);
     } catch (err: unknown) {
       if (!pageRequests.current.isCurrent(requestId)) return;
       const message = err instanceof Error ? err.message : '运行失败';
@@ -805,10 +926,11 @@ export default function App() {
       setResumableEpisodeIds((previous) => previous.filter((item) => item !== id));
       addRecentEpisodeId(id);
       const url = new URL(window.location.href);
+      if (data.artifact.run_config.environment_version === 'gridworld-key-door-v1') url.pathname = '/gridworld';
       url.searchParams.set('episode_id', id);
       url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
-      window.history.pushState({}, '', url.toString());
+      commitLocation(url);
     } catch (err: unknown) {
       if (!pageRequests.current.isCurrent(requestId)) return;
       setErrorMsg(err instanceof Error ? err.message : '恢复失败');
@@ -836,7 +958,7 @@ export default function App() {
       url.searchParams.set('experiment_id', id);
       url.searchParams.delete('mode');
       url.searchParams.delete('episode_id');
-      window.history.pushState({}, '', url.toString());
+      commitLocation(url);
     } catch (err: unknown) {
       if (!pageRequests.current.isCurrent(requestId)) return;
       setErrorMsg(err instanceof Error ? err.message : '实验恢复失败');
@@ -865,7 +987,7 @@ export default function App() {
       url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
       url.searchParams.delete('experiment_job_id');
-      window.history.pushState({}, '', url.toString());
+      commitLocation(url);
     } catch (error) {
       if (!pageRequests.current.isCurrent(requestId)) return;
       setErrorMsg(error instanceof Error ? error.message : '失败 Episode 重跑失败');
@@ -898,7 +1020,7 @@ export default function App() {
     setActiveJobId(null);
     setExperimentJob(null);
     setExperiment(null);
-    beginLoading(`正在串行执行${comparisonAxis === 'context_policy' ? '上下文' : comparisonAxis === 'memory_ablation' ? '工具记忆' : comparisonAxis === 'runtime_backend' ? 'Runtime' : comparisonAxis === 'planning' ? '规划' : '恢复策略'}对照，预计 ${episodeCount} 个 Episode。`);
+    beginLoading(`正在串行执行${comparisonAxis === 'context_policy' ? '上下文' : comparisonAxis === 'memory_ablation' ? '工具记忆' : comparisonAxis === 'runtime_backend' ? 'Runtime' : comparisonAxis === 'planning' ? '规划' : comparisonAxis === 'reflection' ? '有界反思' : '恢复策略'}对照，预计 ${episodeCount} 个 Episode。`);
     setErrorMsg(null);
     let started = false;
     try {
@@ -928,12 +1050,12 @@ export default function App() {
         comparison_axis: comparisonAxis,
         ...(comparisonAxis === 'context_policy' ? { context_policy: contextInput(contextChoice, contextWindow, memoryBytes) } : {}),
         ...(comparisonAxis === 'memory_ablation' ? { context_policy: contextInput('memory', memoryAxisWindow, memoryAxisBytes) } : {}),
-        schema_version: comparisonAxis === 'runtime_backend'
+        schema_version: comparisonAxis === 'reflection' ? '1.11' : comparisonAxis === 'runtime_backend'
           ? '1.10' : comparisonAxis === 'planning' ? '1.9' : '1.8',
-        tool_call_mode: expCallMode,
-        runtime_backend: comparisonAxis === 'runtime_backend' ? 'handwritten' : expRuntimeBackend,
+        tool_call_mode: comparisonAxis === 'reflection' ? 'single' : expCallMode,
+        runtime_backend: comparisonAxis === 'runtime_backend' || comparisonAxis === 'reflection' ? 'handwritten' : expRuntimeBackend,
         ...(comparisonAxis === 'runtime_backend' ? { runtime_target: expRuntimeTarget } : {}),
-        runtime_strategy: expRuntimeStrategy,
+        runtime_strategy: comparisonAxis === 'reflection' ? 'handwritten' : expRuntimeStrategy,
         fault_profile: isFake ? expFaultProfile : 'none',
       };
 
@@ -956,7 +1078,7 @@ export default function App() {
       url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
       url.searchParams.delete('episode_id');
-      window.history.pushState({}, '', url.toString());
+      commitLocation(url);
     } catch (err: unknown) {
       if (!pageRequests.current.isCurrent(requestId)) return;
       const message = err instanceof Error ? err.message : '对照实验运行失败';
@@ -1005,7 +1127,7 @@ export default function App() {
         url.searchParams.delete('mode');
         url.searchParams.delete('experiment_id');
         url.searchParams.delete('episode_id');
-        window.history.pushState({}, '', url.toString());
+        commitLocation(url);
       } else if (data.status === 'cancelled') {
         setResumableJobIds((ids) => ids.filter((id) => id !== targetId));
       }
@@ -1027,6 +1149,15 @@ export default function App() {
     setExpTasks((prev) =>
       prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId]
     );
+  };
+
+  const focusExecutionStage = () => {
+    setSingleConfigOpen(false);
+    requestAnimationFrame(() => {
+      const controls = document.getElementById(artifact ? 'episode-detail-controls' : 'single-stage-controls');
+      controls?.focus({ preventScroll: true });
+      controls?.scrollIntoView({ block: 'start' });
+    });
   };
 
   const configureClassroomScenario = (task: TaskOption, target: 'single' | 'experiment') => {
@@ -1071,7 +1202,8 @@ export default function App() {
     const launcher = document.querySelector<HTMLDetailsElement>('.classroom-scenarios');
     if (launcher) launcher.open = false;
     requestAnimationFrame(() => {
-      const panel = document.getElementById(target === 'single' ? 'config-panel' : 'exp-config-panel');
+      if (target === 'single') { focusExecutionStage(); return; }
+      const panel = document.getElementById('exp-config-panel');
       const details = panel instanceof HTMLDetailsElement ? panel : panel?.querySelector('details');
       if (details) details.open = true;
       const summary = details?.querySelector('summary');
@@ -1081,22 +1213,35 @@ export default function App() {
   };
 
   const currentSingleModelMeta = meta?.models.find((m) => m.id === selectedModel);
+  const gridworldTaskMeta = meta?.tasks.find((task) => task.suite === 'gridworld' && task.id === selectedSingleTask);
+  const gridworldRealGallery = selectedSingleTask === gridworldRealGalleryDefaults.taskId
+    && currentSingleModelMeta?.provider === 'aihubmix';
+  const gridworldMaxSteps = gridworldRealGallery ? gridworldRealGalleryDefaults.maxSteps : gridworldTaskMeta?.max_steps ?? 16;
+  const gridworldSeconds = gridworldRealGallery ? gridworldRealGalleryDefaults.seconds : 300;
+  const gridworldOutputPerCall = currentSingleModelMeta?.provider === 'fake' ? 800 : gridworldRealBudget.perCall;
+  const gridworldOutputTotal = (gridworldMaxSteps * gridworldOutputPerCall).toLocaleString('en-US');
+  const gridworldAllowedModels = new Set(gridworldTaskMeta?.allowed_model_ids ?? []);
+  const gridworldModelOptions = meta?.models.filter(model =>
+    model.provider === 'fake' || gridworldAllowedModels.has(model.id)) ?? [];
   const currentExpModelMeta = meta?.models.find((m) => m.id === expModel);
-  const experimentTasks = meta?.tasks.filter((task) => task.suite === 'tool_lab_core') ?? [];
+  const experimentTasks = meta?.tasks.filter((task) => task.suite === 'tool_lab_core'
+    && (comparisonAxis !== 'reflection' || task.supports_reflection)) ?? [];
   const singleTasks = meta?.tasks.filter((task) => task.suite === selectedSuite) ?? [];
   const filteredSingleTasks = singleTasks.filter((task) => {
-    const query = singleTaskQuery.trim().toLocaleLowerCase();
-    return !query || `${task.name} ${task.id} ${task.category} ${taskCategoryLabels[task.category] ?? ''} ${task.description} ${taskDescription(task)}`
+    const query = isGridWorldWorkspace ? '' : singleTaskQuery.trim().toLocaleLowerCase();
+    return !query || `${taskTitle(task)} ${task.name} ${task.id} ${task.category} ${taskCategoryLabels[task.category] ?? ''} ${task.description} ${taskDescription(task)}`
       .toLocaleLowerCase().includes(query);
   });
   const bfclTaskCount = meta?.tasks.filter((task) => task.suite === 'bfcl_adapted').length ?? 0;
-  const selectedSingleTaskMeta = filteredSingleTasks.find((task) => task.id === selectedSingleTask);
+  const selectedSingleTaskMeta = singleTasks.find((task) => task.id === selectedSingleTask);
   const defaultSingleMaxSteps = selectedSingleTaskMeta?.max_steps ?? (selectedSuite !== 'tool_lab_core' ? 1 : 6);
-  const defaultSingleTokenBudget = selectedSingleTaskMeta?.category === 'evidence_chain' ? selectedSingleTaskMeta.token_budget : 8000;
+  const defaultSingleTokenBudget = selectedSingleTaskMeta?.category === 'evidence_chain'
+    || selectedSuite === 'gridworld' ? selectedSingleTaskMeta?.token_budget ?? 16000 : 8000;
   const singleAdvancedChangeCount = [
     singleRuntimeStrategy !== 'handwritten',
     singleContextChoice !== 'full',
     singlePlanning && Boolean(selectedSingleTaskMeta?.supports_planning),
+    singleReflection && Boolean(selectedSingleTaskMeta?.supports_reflection),
     singleToolTransport === 'mcp' && Boolean(selectedSingleTaskMeta?.supports_mcp),
     maxSteps !== defaultSingleMaxSteps,
     executionSeconds !== 300,
@@ -1182,6 +1327,8 @@ export default function App() {
     ? 'memory_ablation'
     : experiment?.config.comparison_axis === 'planning'
     ? 'planning'
+    : experiment?.config.comparison_axis === 'reflection'
+    ? 'reflection'
     : experiment?.config.comparison_axis === 'runtime_backend'
     ? 'runtime_backend'
     : experiment?.config.comparison_axis === 'recovery_policy'
@@ -1190,11 +1337,13 @@ export default function App() {
   const armLeftLabel = activeComparisonAxis === 'context_policy' ? '完整历史'
     : activeComparisonAxis === 'memory_ablation' ? '近期窗口（无记忆）'
     : activeComparisonAxis === 'planning' ? '无声明计划'
+    : activeComparisonAxis === 'reflection' ? '无反思'
     : activeComparisonAxis === 'runtime_backend' ? 'Reference Runtime' : 'Baseline Policy';
   const armRightLabel = activeComparisonAxis === 'context_policy'
     ? experiment?.config.recovery_agent?.context_policy?.memory_max_bytes !== undefined ? '近期窗口 + 工具记忆' : '最近完整工具轮次'
     : activeComparisonAxis === 'memory_ablation' ? '近期窗口 + 工具记忆'
     : activeComparisonAxis === 'planning' ? '声明计划'
+    : activeComparisonAxis === 'reflection' ? '有界反思'
     : activeComparisonAxis === 'runtime_backend'
       ? `${experiment?.config.recovery_agent?.runtime_backend === 'pydantic_ai' ? 'PydanticAI' : 'LangGraph'} Runtime`
       : 'Recovery Policy';
@@ -1202,7 +1351,9 @@ export default function App() {
     expTasks.length * (parsedExpSeeds?.length ?? 0) * expRepeatCount * 2;
   const isExperimentRunReady = Boolean(meta) && Boolean(expModel) && expTasks.length > 0 &&
     parsedExpSeeds !== null && expRepeatCount >= 1 && expRepeatCount <= 10 && !isLoading;
-  const isSingleRunReady = Boolean(meta) && Boolean(selectedModel) && Boolean(selectedSingleTaskMeta) && !isLoading;
+  const isSingleRunReady = Boolean(meta) && Boolean(selectedModel) && Boolean(selectedSingleTaskMeta)
+    && (selectedSuite !== 'gridworld'
+      || gridworldModelOptions.some(model => model.id === selectedModel)) && !isLoading;
   const singleRunHint = !meta ? '正在读取任务与模型目录，完成后即可配置运行。'
     : !selectedModel ? '请先选择评测模型。' : !selectedSingleTaskMeta ? '请先选择一个任务。'
       : isLoading ? loadingMessage : null;
@@ -1213,6 +1364,89 @@ export default function App() {
           : isLoading ? loadingMessage : null;
 
   const hasExperimentResult = Boolean(experiment) || experimentJob?.status === 'failed';
+  const experimentOperations = <div className="experiment-operations">
+      {activeJobId && experimentJob?.experiment_id === activeJobId && (
+        <div className="resumable-panel" role="status" aria-live="polite">
+          <div className="card-title">实验任务：{experimentJobLabels[experimentJob.status]}</div>
+          <p className="card-desc"><code>{activeJobId}</code> · 控制请求在当前 Episode 结束后生效。</p>
+          <div className="resumable-list">
+            <button type="button" className="btn-secondary" onClick={() => setProgressId(activeJobId)}>查看保存进度</button>
+            {['queued', 'running'].includes(experimentJob.status) && !experimentJob.requested_action && (
+              <>
+                <button className="btn-secondary" onClick={() => handleControlExperimentJob('pause')}>暂停</button>
+                <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消</button>
+              </>
+            )}
+            {experimentJob.requested_action && <span>已请求{experimentJob.requested_action === 'pause' ? '暂停' : '取消'}，等待安全点。</span>}
+            {['paused', 'interrupted'].includes(experimentJob.status) && (
+              <>
+                <button className="btn-secondary" onClick={() => handleControlExperimentJob('resume')}>从安全点恢复</button>
+                <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消实验</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {resumableJobIds.some((id) => id !== activeJobId) && (
+        <section className="resumable-panel" aria-labelledby="resumable-job-title">
+          <div className="card-title" id="resumable-job-title">可恢复的实验任务</div>
+          <p className="card-desc">原计划和已完成 Episode 均保留；继续运行可能重新发送中断中的模型请求。</p>
+          <div className="resumable-list">
+            {resumableJobIds.filter((id) => id !== activeJobId).map((id) => (
+              <span className="resumable-list" key={id}>
+              <button type="button" className="btn-secondary" aria-label={`查看 Job 保存进度 ${id}`} onClick={() => setProgressId(id)}>查看保存进度</button>
+              <button className="btn-secondary" disabled={isLoading}
+                onClick={() => handleControlExperimentJob('resume', id)}>
+                恢复 Job <code>{id}</code>
+              </button>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {resumableExpIds.length > 0 && (
+        <section className="resumable-panel" aria-labelledby="resumable-exp-title">
+          <div className="card-title" id="resumable-exp-title">待恢复的对照实验</div>
+          <p className="card-desc">继续原实验并复用已完成结果；中断中的模型请求可能重新发送。</p>
+          <div className="resumable-list">
+            {resumableExpIds.map((id) => (
+              <span className="resumable-list" key={id}>
+              <button type="button" className="btn-secondary" aria-label={`查看 Experiment 保存进度 ${id}`} onClick={() => setProgressId(id)}>查看保存进度</button>
+              <button className="btn-secondary" disabled={isLoading}
+                onClick={() => handleResumeExperiment(id)}>
+                恢复 Experiment <code>{id}</code>
+              </button>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {progressId && <ExperimentProgressReader key={progressId} id={progressId} onClose={() => setProgressId(null)} />}
+
+      {/* Recent Experiments History */}
+      {recentExpIds.length > 0 && (
+        <div className="history-panel">
+          <div className="history-panel-title">
+            最近实验历史：
+          </div>
+          <div className="history-list">
+            {recentExpIds.map((rid) => (
+              <button
+                key={rid}
+                className="btn-secondary history-button"
+                onClick={() => loadExperimentById(rid)}
+              >
+                {rid}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+  </div>;
+
   const experimentConfigPanel = (
     <section className="card" id="exp-config-panel">
       <details className="experiment-draft" open={!experiment}>
@@ -1242,7 +1476,16 @@ export default function App() {
           id="comparison-axis"
           className="form-select"
           value={comparisonAxis}
-          onChange={(e) => setComparisonAxis(e.target.value as 'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation' | 'planning')}
+          onChange={(e) => {
+            const next = e.target.value as 'recovery_policy' | 'runtime_backend' | 'context_policy' | 'memory_ablation' | 'planning' | 'reflection';
+            setComparisonAxis(next);
+            if (next === 'reflection') {
+              setExpTasks(current => current.filter(id => meta?.tasks.find(task => task.id === id)?.supports_reflection));
+              setExpRuntimeBackend('handwritten');
+              setExpRuntimeStrategy('handwritten');
+              setExpCallMode('single');
+            }
+          }}
           disabled={isLoading}
         >
           <option value="recovery_policy">恢复策略：关闭 vs 一次参数纠错</option>
@@ -1250,6 +1493,7 @@ export default function App() {
           <option value="context_policy">上下文：完整历史 vs 最近完整工具轮次</option>
           <option value="memory_ablation">工具记忆：相同近期窗口 vs 相同窗口+记忆</option>
           <option value="planning">规划：无声明 vs 声明计划</option>
+          <option value="reflection">反思：无反思 vs 停滞后一次行动修正</option>
         </select>
       </div>
 
@@ -1340,6 +1584,15 @@ export default function App() {
             <p className="form-help">两侧固定完整上下文，仅规划组件变化：左侧无 <code>update_plan</code> 工具、不注入计划；右侧可用 <code>update_plan</code> 声明计划并每轮注入。计划是声明的子目标，不计为已执行。</p>
             <details className="context-help"><summary>策略说明与限制</summary>
               <p>计划声明仅记录与回填，真实完成仍由 <code>submit_answer</code> 与环境核验；额外调用与 Token 全部计入右侧自身预算，不另送免费调用。</p>
+            </details>
+          </> : comparisonAxis === 'reflection' ? <>
+            <div className="strategy-summary" aria-label="有界反思对照">
+              <div><strong>无反思</strong><span>重复读取后仍按原路径执行</span></div>
+              <div><strong>有界反思</strong><span>连续两次相同无进展读取后，仅修正一次行动目标</span></div>
+            </div>
+            <p className="form-help">两侧固定完整上下文、单工具、无参数纠错和同一手写 Runtime；反思请求不能调用工具，仅允许一次，Token 计入本侧预算。</p>
+            <details className="context-help"><summary>触发与限制</summary>
+              <p>只在同一只读工具、相同参数和相同返回连续出现两次时触发。格式错误、供应商错误或预算不足均终止，不自动重试。</p>
             </details>
           </> : <div className="strategy-summary" aria-label="恢复策略对照">
             <div><strong>Baseline</strong><span>参数错误后终止</span></div>
@@ -1452,7 +1705,8 @@ export default function App() {
                 disabled={isLoading}
               />
               <div>
-                <div className="task-name">{task.name}</div>
+                <div className="task-name">{taskTitle(task)}</div>
+                <div className="task-code">{task.name}</div>
                 <div className="task-meta">
                   {task.description}
                 </div>
@@ -1575,86 +1829,6 @@ export default function App() {
 
       </details>
 
-      {activeJobId && experimentJob?.experiment_id === activeJobId && (
-        <div className="resumable-panel" role="status" aria-live="polite">
-          <div className="card-title">实验任务：{experimentJobLabels[experimentJob.status]}</div>
-          <p className="card-desc"><code>{activeJobId}</code> · 控制请求在当前 Episode 结束后生效。</p>
-          <div className="resumable-list">
-            <button type="button" className="btn-secondary" onClick={() => setProgressId(activeJobId)}>查看保存进度</button>
-            {['queued', 'running'].includes(experimentJob.status) && !experimentJob.requested_action && (
-              <>
-                <button className="btn-secondary" onClick={() => handleControlExperimentJob('pause')}>暂停</button>
-                <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消</button>
-              </>
-            )}
-            {experimentJob.requested_action && <span>已请求{experimentJob.requested_action === 'pause' ? '暂停' : '取消'}，等待安全点。</span>}
-            {['paused', 'interrupted'].includes(experimentJob.status) && (
-              <>
-                <button className="btn-secondary" onClick={() => handleControlExperimentJob('resume')}>从安全点恢复</button>
-                <button className="btn-secondary" onClick={() => handleControlExperimentJob('cancel')}>取消实验</button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {resumableJobIds.some((id) => id !== activeJobId) && (
-        <section className="resumable-panel" aria-labelledby="resumable-job-title">
-          <div className="card-title" id="resumable-job-title">可恢复的实验任务</div>
-          <p className="card-desc">原计划和已完成 Episode 均保留；继续运行可能重新发送中断中的模型请求。</p>
-          <div className="resumable-list">
-            {resumableJobIds.filter((id) => id !== activeJobId).map((id) => (
-              <span className="resumable-list" key={id}>
-              <button type="button" className="btn-secondary" aria-label={`查看 Job 保存进度 ${id}`} onClick={() => setProgressId(id)}>查看保存进度</button>
-              <button className="btn-secondary" disabled={isLoading}
-                onClick={() => handleControlExperimentJob('resume', id)}>
-                恢复 Job <code>{id}</code>
-              </button>
-              </span>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {resumableExpIds.length > 0 && (
-        <section className="resumable-panel" aria-labelledby="resumable-exp-title">
-          <div className="card-title" id="resumable-exp-title">待恢复的对照实验</div>
-          <p className="card-desc">继续原实验并复用已完成结果；中断中的模型请求可能重新发送。</p>
-          <div className="resumable-list">
-            {resumableExpIds.map((id) => (
-              <span className="resumable-list" key={id}>
-              <button type="button" className="btn-secondary" aria-label={`查看 Experiment 保存进度 ${id}`} onClick={() => setProgressId(id)}>查看保存进度</button>
-              <button className="btn-secondary" disabled={isLoading}
-                onClick={() => handleResumeExperiment(id)}>
-                恢复 Experiment <code>{id}</code>
-              </button>
-              </span>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {progressId && <ExperimentProgressReader key={progressId} id={progressId} onClose={() => setProgressId(null)} />}
-
-      {/* Recent Experiments History */}
-      {recentExpIds.length > 0 && (
-        <div className="history-panel">
-          <div className="history-panel-title">
-            最近实验历史：
-          </div>
-          <div className="history-list">
-            {recentExpIds.map((rid) => (
-              <button
-                key={rid}
-                className="btn-secondary history-button"
-                onClick={() => loadExperimentById(rid)}
-              >
-                {rid}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
     </section>
   );
 
@@ -1686,26 +1860,9 @@ export default function App() {
           </a>
 
           <div className="header-actions">
-            <nav className="nav-tabs" data-active={activeTab} aria-label="工作区模式">
-              <button
-                id="tab-experiment"
-                className={`nav-tab ${activeTab === 'experiment' ? 'active' : ''}`}
-                aria-pressed={activeTab === 'experiment'}
-                onClick={() => switchTab('experiment')}
-                disabled={isLoading && loadingActivity === 'run' && !activeJobId}
-              >
-                对照实验 <span className="nav-english">Agent Comparison</span>
-              </button>
-              <button
-                id="tab-single"
-                className={`nav-tab ${activeTab === 'single' ? 'active' : ''}`}
-                aria-pressed={activeTab === 'single'}
-                onClick={() => switchTab('single')}
-                disabled={isLoading && loadingActivity === 'run' && !activeJobId}
-              >
-                单次运行 <span className="nav-english">Single Episode</span>
-              </button>
-            </nav>
+            <ProductNavigation active={areaFor(workspace)}
+              disabled={isLoading && loadingActivity === 'run' && !activeJobId}
+              onNavigate={navigateWorkspace} />
 
           </div>
         </div>
@@ -1713,22 +1870,22 @@ export default function App() {
 
       {/* Main Content */}
       <main id="main-content" tabIndex={-1}
-        className={`main-container ${activeTab === 'single' && artifact ? 'viewing-episode' : ''}`} ref={mainMotionRef}>
+        className={`main-container ${activeTab === 'single' ? 'stage-mode' : ''} ${activeTab === 'single' && artifact ? 'viewing-episode' : ''}`} ref={mainMotionRef}>
         <section className="page-intro" aria-labelledby="page-title">
           <div>
             <div className="page-eyebrow">Agent 评测工作台</div>
             <h1 id="page-title">
-              {activeTab === 'experiment' ? '比较策略差异' : '审查一次完整运行'}
+              {isGridWorldWorkspace ? artifact ? 'GridWorld 运行详情' : 'GridWorld' : workspace === 'tasks' ? '选择下一项探索' : workspace === 'runs' ? '运行记录' : workspace === 'experiments' ? '实验中心' : activeTab === 'experiment' ? experiment ? '对照实验结果' : '比较策略差异' : artifact ? '运行详情' : liveRun ? 'Agent 正在执行' : '运行一个 Agent 任务'}
             </h1>
             <p>
-              {activeTab === 'experiment'
+              {isGridWorldWorkspace ? '在局部视野内探索地图，拾取钥匙，开启门并抵达目标。' : workspace === 'tasks' ? '浏览任务目标、交付要求与工具能力，再进入工作台配置。' : workspace === 'runs' ? '找到本机最近访问的任务，核查结果与执行依据。' : workspace === 'experiments' ? '从同一配置中选择两局，比较模型的迷宫路线、用量和耗时。' : activeTab === 'experiment'
                 ? '固定任务、模型、种子与预算，每次比较上下文、恢复策略或 Runtime 中的一项。'
                 : '运行一个任务，核查评测结论、环境状态与完整 Trace。'}
             </p>
           </div>
-          <span className="workspace-status">
+          {(workspace === 'workbench' || workspace === 'experiment-new') && <span className="workspace-status">
             {meta ? `${meta.tasks.length} 个可用任务` : '正在读取任务目录'}
-          </span>
+          </span>}
         </section>
 
         {/* Error Alert Box */}
@@ -1741,7 +1898,8 @@ export default function App() {
             <div>{errorMsg}</div>
           </div>
         )}
-        {(metadataError || meta?.model_catalog_status === 'unavailable') && (
+        {(metadataError || (meta?.model_catalog_status === 'unavailable'
+          && (workspace === 'workbench' || workspace === 'experiment-new' || (workspace === 'episode' && episodeSection === 'review')))) && (
           <div className="alert-box alert-error" role="status">
             <span className="alert-label">模型目录暂不可用</span>
             <div>
@@ -1752,17 +1910,57 @@ export default function App() {
             </div>
           </div>
         )}
-        {meta?.model_catalog_status === 'live' && meta.models.some((model) => model.provider === 'aihubmix') && (
+        {(workspace === 'workbench' || workspace === 'experiment-new' || (workspace === 'episode' && episodeSection === 'review'))
+          && meta?.model_catalog_status === 'live' && meta.models.some((model) => model.provider === 'aihubmix') && (
           <div className="model-catalog-caution" role="note">
             网关目录仅表示模型 ID 可见，不能验证当前 Key 的调用权限、额度或通道。真实可用性以实际运行结果为准。
           </div>
         )}
 
-        <ClassroomScenarios tasks={meta?.tasks ?? []} disabled={isLoading || metadataLoading || !meta}
-          hasSavedResult={Boolean(artifact || experiment || activeJobId)} onConfigure={configureClassroomScenario} />
+        {(workspace === 'experiment-new' || workspace === 'experiment') && <ClassroomScenarios tasks={meta?.tasks ?? []} disabled={isLoading || metadataLoading || !meta}
+          selectedTaskNames={(meta?.tasks ?? []).filter((task) => expTasks.includes(task.id)).map((task) => task.name)}
+          hasSavedResult={Boolean(artifact || experiment || activeJobId)} onConfigure={configureClassroomScenario} />}
+
+        <div hidden={workspace !== 'tasks'}><TaskLibrary tasks={meta?.tasks.filter(task => task.suite !== 'gridworld') ?? []} loading={metadataLoading || (!meta && !metadataError)} unavailable={Boolean(metadataError && !meta)}
+          disabled={isLoading || metadataLoading || !meta} onSelect={selectLibraryTask} /></div>
+        <div hidden={workspace !== 'runs'}><RunRecords ids={recentEpisodeIds} summaries={episodeHistorySummaries}
+          value={inputEpisodeId} busy={isLoading} onChange={setInputEpisodeId} onRead={loadEpisodeById} /></div>
+            {workspace === 'runs' && resumableEpisodeIds.length > 0 && (
+              <section className="card resumable-panel" aria-labelledby="resumable-title">
+                <div className="card-title" id="resumable-title">待恢复的单次运行</div>
+                <p className="card-desc">
+                  仅列出上次后端进程留下的运行。恢复可能重新发送中断中的模型请求并产生额外用量。
+                </p>
+                <div className="resumable-list">
+                  {resumableEpisodeIds.map((id) => (
+                    <button key={id} className="btn-secondary" disabled={isLoading}
+                      onClick={() => handleResumeEpisode(id)}>
+                      恢复 Episode <code>{id}</code>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+        {workspace === 'experiments' && <section className="experiment-index" aria-label="实验中心">
+          <GridWorldComparison models={meta?.models ?? []} />
+          {activeJobId && experimentOperations}
+          <details className="comparison-strategies">
+          <summary>策略实验</summary>
+          <div className="workspace-page-actions"><p>比较上下文、规划或恢复策略。</p>
+            <button className="btn-primary" onClick={() => navigateWorkspace('experiment-new')} disabled={isLoading}>新建对照实验</button></div>
+          <ExperimentDashboard items={dashboardItems} loading={dashboardLoading} error={dashboardError}
+            skipped={dashboardSkipped} activeId={experiment?.experiment_id}
+            onRefresh={refreshExperimentDashboard} onOpen={loadExperimentById} />
+          <section className="experiment-archive" aria-label="按 ID 查找与恢复">
+            <h2>按 ID 查找与恢复</h2><p className="metric-sub">读取指定实验，或查看中断实验的保存进度。</p>
+            <HistoryReader kind="exp" value={inputExpId} busy={isLoading} onChange={setInputExpId} onRead={loadExperimentById} />
+            {!activeJobId && experimentOperations}
+          </section>
+          </details>
+        </section>}
 
         {/* TAB 1: EXPERIMENT MODE */}
-        {activeTab === 'experiment' && (
+        {(workspace === 'experiment-new' || workspace === 'experiment') && (
           <div>
             {/* Persistent ID Bar */}
             <div className="persistence-bar persistence-bar-spaced">
@@ -1817,6 +2015,7 @@ export default function App() {
               </div>
             )}
 
+            {experimentOperations}
             <details className="history-disclosure">
               <summary>实验历史与趋势 <span>{dashboardLoading ? '读取中' : `${dashboardItems.length} 条记录`}</span></summary>
             <ExperimentDashboard items={dashboardItems} loading={dashboardLoading} error={dashboardError}
@@ -1846,6 +2045,8 @@ export default function App() {
                       ? '左右窗口相同，只切换单任务工具记忆；比较成功率、工具调用、已报告 Token 与耗时，不计算纠错挽救率。'
                       : activeComparisonAxis === 'planning'
                       ? '两侧固定完整上下文，只切换规划组件（是否可声明并注入计划）；比较成功率、工具调用、已报告 Token 与耗时，不计算纠错挽救率。'
+                      : activeComparisonAxis === 'reflection'
+                      ? '两侧只切换停滞后的一次有界反思；比较成功率、工具调用、已报告 Token 与耗时，不将反思声明冒充实际执行。'
                       : activeComparisonAxis === 'runtime_backend'
                       ? '比较两个 Runtime 在相同模型、任务、预算和恢复策略下的成功率、用量与耗时。'
                       : '比较恢复策略的成功率、参数错误挽救转化率与额外用量。'}
@@ -1856,6 +2057,7 @@ export default function App() {
                       {activeComparisonAxis === 'context_policy' && <p className="model-note-box" aria-label="已保存上下文对照">完整历史 vs {contextLabel(experiment.config.recovery_agent?.context_policy)} · 保存结果，不随草稿改变</p>}
                       {activeComparisonAxis === 'memory_ablation' && <p className="model-note-box" aria-label="已保存工具记忆对照">相同窗口：{contextLabel(experiment.config.baseline_agent?.context_policy)} vs {contextLabel(experiment.config.recovery_agent?.context_policy)} · 保存结果，不随草稿改变</p>}
                       {activeComparisonAxis === 'planning' && <p className="model-note-box" aria-label="已保存规划对照">两侧完整上下文：{contextLabel(experiment.config.baseline_agent?.context_policy)} · 左侧无声明，右侧 {experiment.config.recovery_agent?.planning?.algorithm_version ?? '声明计划'} · 保存结果，不随草稿改变</p>}
+                      {activeComparisonAxis === 'reflection' && <p className="model-note-box" aria-label="已保存反思对照">左侧无反思；右侧 {experiment.config.recovery_agent?.reflection?.algorithm_version ?? '有界反思'} · 最多一次、无工具、无重试 · 保存结果，不随草稿改变</p>}
                       <div className="episode-provenance" aria-label="已保存实验来源">
                         <span>工具调用：{typeof experiment.config.model === 'object' && experiment.config.model?.tool_call_mode === 'serial' ? '多工具 · 顺序执行' : '单工具'}（两侧相同）</span>
                         <strong>{typeof experiment.config.model === 'string'
@@ -1893,6 +2095,15 @@ export default function App() {
                             {experiment.config.provider === 'fake' ? ' Fake 结果只验证机制。' : ' 单次小样本不足以证明稳定优胜。'}</p>
                         </div>
                       )}
+                      {activeComparisonAxis === 'reflection' && (
+                        <div className="classroom-result-reading" aria-label="反思实验解读">
+                          <strong>这一场实验说明什么</strong>
+                          <p>同一模型、任务、预算与执行配置，只切换停滞后一次行动修正。无反思通过 {experiment.metrics.baseline_success_count} / {experiment.metrics.total_pairs}，
+                            有界反思通过 {experiment.metrics.recovery_success_count} / {experiment.metrics.total_pairs}。</p>
+                          <p>反思只输出停滞诊断和修正目标，不能调用工具；是否真正改变行为必须对照后续 Trace。
+                            {experiment.config.provider === 'fake' ? ' Fake 结果只验证机制。' : ' 单次小样本不足以证明稳定收益。'}</p>
+                        </div>
+                      )}
                       {experiment.config.max_total_tokens != null && (
                         <p className="experiment-reading-note" aria-label="已保存全局 Token 预算">
                           全局 Token 边界预算：{experiment.config.max_total_tokens} · 已报告累计：
@@ -1911,6 +2122,8 @@ export default function App() {
                       {activeComparisonAxis === 'memory_ablation' && <MemoryPairReview key={experiment.experiment_id}
                         pairs={experiment.pairs} labels={[armLeftLabel, armRightLabel]} />}
                       {activeComparisonAxis === 'planning' && <PlanningPairReview key={experiment.experiment_id}
+                        pairs={experiment.pairs} labels={[armLeftLabel, armRightLabel]} />}
+                      {activeComparisonAxis === 'reflection' && <ReflectionPairReview key={experiment.experiment_id}
                         pairs={experiment.pairs} labels={[armLeftLabel, armRightLabel]} />}
                       <div>
                         {/* Retry Recovery Count & Rate */}
@@ -2206,16 +2419,17 @@ export default function App() {
                   )}
                 </section>
               </div>
-              {hasExperimentResult && experimentConfigPanel}
+              {hasExperimentResult && <div className="next-experiment-action"><p>此处显示已保存的实验。下一次实验使用独立草稿。</p>
+                <button className="btn-secondary" onClick={() => navigateWorkspace('experiment-new')}>配置下一次实验</button></div>}
             </div>
           </div>
         )}
 
         {/* TAB 2: SINGLE EPISODE MODE */}
-        {activeTab === 'single' && (
+        {(workspace === 'workbench' || workspace === 'episode' || isGridWorldWorkspace) && (
           <div>
             {/* Persistent ID Bar */}
-            <div className="persistence-bar persistence-bar-spaced">
+            {(artifact || liveRun) && <div className="persistence-bar persistence-bar-spaced">
               <div className="persistence-cluster">
                 <span className="persistence-label">当前 Episode:</span>
                 <span className="persistence-value">
@@ -2243,7 +2457,9 @@ export default function App() {
                     >
                       导出 JSON
                     </button>
-                    {!artifact.evaluation.success && (
+                    {!artifact.evaluation.success
+                      && !(artifact.run_config.environment_version === 'gridworld-key-door-v1'
+                        && artifact.agent.model.provider === 'aihubmix') && (
                       <button className="btn-secondary" disabled={isLoading}
                         onClick={handleRerunFailedEpisode}>
                         单独重跑失败 Episode
@@ -2252,23 +2468,79 @@ export default function App() {
                   </>
                 )}
               </div>
-              <HistoryReader kind="episode" value={inputEpisodeId} busy={isLoading}
-                onChange={setInputEpisodeId} onRead={loadEpisodeById} />
-            </div>
+              {artifact && !artifact.evaluation.success
+                && artifact.run_config.environment_version === 'gridworld-key-door-v1'
+                && artifact.agent.model.provider === 'aihubmix' && (
+                  <p className="metric-sub">真实模型 GridWorld 结果只读；本版本不支持恢复或重跑，请检查已保存的 Trace 与用量。</p>
+                )}
+              {artifact && !singleConfigOpen && <button className="btn-secondary" disabled={isLoading}
+                onClick={() => {
+                  setSingleConfigOpen(true);
+                  selectEpisodeSection('process');
+                  requestAnimationFrame(() => document.querySelector<HTMLElement>('#config-panel > summary')?.focus());
+                }}>修改任务与配置</button>}
+            </div>}
+            {artifact && <p className="saved-run-context">已保存运行 · {artifact.task.name} · {artifact.agent.model.model} · {artifact.agent.runtime_backend ?? 'Runtime 未记录'}</p>}
             {copyNotice && (
               <div className="copy-feedback" role="status" aria-live="polite">
                 {copyNotice}
               </div>
             )}
 
+            {artifact && !singleConfigOpen && <div id="episode-detail-controls" className="episode-detail-navigation" tabIndex={-1}>
+              <nav aria-label="运行详情视图">
+                {([{ id: 'process', label: '执行过程' }, { id: 'results', label: '结果分析' }, { id: 'review', label: '模型评审' }] as const).map(section =>
+                  <button type="button" key={section.id} aria-pressed={episodeSection === section.id}
+                    className={episodeSection === section.id ? 'active' : ''} onClick={() => selectEpisodeSection(section.id)}>{section.label}</button>)}
+              </nav>
+              <span id="eval-badge" className={`badge ${artifact.evaluation.success ? 'badge-green' : 'badge-red'}`}>
+                {artifact.evaluation.success ? '评测通过 (SUCCESS)' : '评测未通过 (FAILED)'}</span>
+            </div>}
+
             <div className={`dashboard-grid single-dashboard ${artifact ? 'has-artifact' : liveRun ? 'streaming' : 'configuring'}`}>
-              <details className="card config-panel" id="config-panel" open={!artifact}>
+              <div className="execution-stage">
+                <div hidden={Boolean(artifact && !singleConfigOpen)} id="single-stage-controls" className="single-launch-bar stage-launch-bar" tabIndex={-1} aria-label="舞台运行配置">
+                  <div className="single-launch-summary" aria-live="polite">
+                    <small>{artifact ? '下次运行草稿 · 不修改当前保存结果' : '当前运行配置'}</small>
+                    <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
+                    <span>{selectedSuite === 'gridworld'
+                      ? `${currentSingleModelMeta?.name ?? '请选择模型'} · ${currentSingleModelMeta?.provider === 'fake' ? 'Fake 离线试玩' : '真实模型实验性运行'}`
+                      : `${currentSingleModelMeta?.name || selectedModel || '请选择模型'} · ${singleRuntimeBackend === 'langgraph' ? 'LangGraph' : singleRuntimeBackend === 'pydantic_ai' ? 'PydanticAI' : 'Reference'} · ${singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp ? 'MCP HTTP' : selectedSuite === 'tool_lab_core' ? '本地工具' : '本地函数调用提议评测'}`}</span>
+                    <span className="single-parameter-summary">{selectedSuite === 'gridworld'
+                      ? `最多 ${gridworldMaxSteps} 轮 · 单次 ${gridworldOutputPerCall.toLocaleString('en-US')} 输出 Token · 累计 ${currentSingleModelMeta?.provider === 'fake' ? '16,000' : gridworldRealBudget.total} Token · 累计输出 ${gridworldOutputTotal} · ${gridworldSeconds} 秒`
+                      : `${singleContextChoice === 'full' ? '完整历史' : `近期 ${singleContextWindow} 轮${singleContextChoice === 'memory' ? ` · 记忆 ${singleMemoryBytes} 字节` : ''}`} · 最多 ${maxSteps} 步 · ${executionSeconds} 秒 · ${selectedModel === 'fake' || currentSingleModelMeta?.provider === 'fake' ? 'Token 模拟用量' : `Token 预算 ${singleTokenBudget ?? '未设置'}`}`}</span>
+                    <small>{!meta || !selectedModel ? '目录就绪后可开始运行' : selectedSuite === 'gridworld'
+                      ? currentSingleModelMeta?.provider === 'fake'
+                        ? 'Fake 离线模拟'
+                        : '仅点击“开始运行 Episode”后才发起真实模型请求'
+                      : selectedModel === 'fake' ? 'Fake 离线模拟' : '将发起真实模型请求'}</small>
+                  </div>
+                  <div className="single-launch-action">
+                    <button type="button" className="btn-secondary" aria-controls="config-panel"
+                      aria-expanded={singleConfigOpen} disabled={isLoading}
+                      onClick={() => {
+                        if (singleConfigOpen) { focusExecutionStage(); return; }
+                        setSingleConfigOpen(true);
+                        requestAnimationFrame(() => {
+                          const panel = document.getElementById('config-panel');
+                          panel?.querySelector<HTMLElement>('summary')?.focus({ preventScroll: true });
+                          panel?.scrollIntoView({ block: 'start' });
+                        });
+                      }}>{singleConfigOpen ? '完成配置' : '修改任务与配置'}</button>
+                    <button id="run-button" className="btn-primary" onClick={handleRunEpisode} disabled={!isSingleRunReady}
+                      aria-describedby={singleRunHint ? 'single-run-hint' : undefined}>
+                      {isLoading ? <><div className="spinner" /><span>{loadingActivity === 'history' ? '正在读取历史记录…' : '正在运行 Episode…'}</span></> : <span>开始运行 Episode</span>}
+                    </button>
+                    {singleRunHint && !isLoading && <p id="single-run-hint" className="inline-note" role="status">{singleRunHint}</p>}
+                    {isLoading && <p id="single-run-hint" className="loading-note" role="status" aria-live="polite">{loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span></p>}
+                  </div>
+                </div>
+              <details className="card config-panel" id="config-panel" open={singleConfigOpen}
+                onToggle={(event) => setSingleConfigOpen(event.currentTarget.open)}>
                 <summary className="card-title config-panel-summary">
                   <span>{artifact ? '下次运行配置' : '配置单次运行'}</span>
                   <span className="config-summary-meta">
-                    {artifact
-                      ? `${selectedSingleTaskMeta?.name ?? '选择任务'} · ${currentSingleModelMeta?.name ?? (selectedModel || '选择模型')}`
-                      : `${singleTasks.length} 个可用任务`}
+                    {`${selectedSingleTaskMeta ? taskTitle(selectedSingleTaskMeta) : '选择任务'} · ${currentSingleModelMeta?.name ?? (selectedModel || '选择模型')}`}
                   </span>
                 </summary>
                 <div className="config-panel-content">
@@ -2282,7 +2554,7 @@ export default function App() {
                         <span className="task-picker-count">{filteredSingleTasks.length} 个</span>
                       </div>
 
-                      <fieldset className="suite-choice" disabled={isLoading || !meta}>
+                      {!isGridWorldWorkspace && <fieldset className="suite-choice" disabled={isLoading || !meta}>
                         <legend className="form-label">任务集</legend>
                         <div className="suite-choice-options">
                           <label className={selectedSuite === 'tool_lab_core' ? 'selected' : ''}>
@@ -2339,18 +2611,41 @@ export default function App() {
                             <small>固定改编题</small>
                           </label>
                         </div>
-                      </fieldset>
-                      {selectedSuite !== 'tool_lab_core' && (
+                      </fieldset>}
+                      {selectedSuite === 'gridworld' && (
+                        <div className="suite-provenance">
+                          <strong>{currentSingleModelMeta?.provider === 'fake'
+                            ? '离线 Fake 试玩'
+                            : `${currentSingleModelMeta?.name ?? selectedModel} · 实验性真实运行`}</strong>
+                          <p>{currentSingleModelMeta?.provider === 'fake'
+                            ? `固定路线离线试玩。最多 ${gridworldMaxSteps} 轮、累计 16,000 Token 和 300 秒。`
+                            : `仅新建 Episode 可用；${gridworldMaxSteps} 轮、每次最多 ${gridworldOutputPerCall.toLocaleString('en-US')} 输出 Token、累计输入 + 输出 ${gridworldRealBudget.total} Token、累计输出 ${gridworldOutputTotal} Token 和 ${gridworldSeconds} 秒。调用费用仍可能未知。`}</p>
+                          {gridworldRealGallery
+                            && <p>模型保留任务目标和最近 2 轮工具记录，最新观察包含已探索地图。</p>}
+                          {currentSingleModelMeta?.provider === 'fake' && <>
+                            <label htmlFor="gridworld-scenario" className="form-label">Fake 场景</label>
+                            <select id="gridworld-scenario" className="form-select" value={selectedScenario}
+                              onChange={(event) => setGridworldScenario(event.target.value)} disabled={isLoading}>
+                              <option value="success">固定路线通关</option>
+                              <option value="illegal-action">规则内非法行动后通关</option>
+                              <option value="max-steps">达到 16 轮预算后停止</option>
+                            </select>
+                          </>}
+                        </div>
+                      )}
+                      {selectedSuite !== 'tool_lab_core' && selectedSuite !== 'gridworld' && (
                         <p className="suite-provenance">
                           BFCL V4 固定上游提交的 AgentLabyrinth 改编子集；任务卡为中文说明，模型接收英文原题。仅本地精确匹配函数调用提议，非官方分数。
                         </p>
                       )}
 
+                      {!isGridWorldWorkspace && <>
                       <label htmlFor="single-task-search" className="form-label task-search-label">搜索任务</label>
                       <input id="single-task-search" className="form-input task-search" type="search"
                         value={singleTaskQuery} placeholder="名称、类别或目标"
                         onChange={(event) => setSingleTaskQuery(event.target.value)}
                         disabled={isLoading || !meta} />
+                      </>}
 
                       <div className="task-option-list" role="group" aria-label="评测任务">
                         {!meta && <p className="task-list-message">正在读取可用任务…</p>}
@@ -2362,23 +2657,36 @@ export default function App() {
                             className={`task-option ${selectedSingleTask === task.id ? 'selected' : ''}`}
                             aria-pressed={selectedSingleTask === task.id}
                             onClick={() => {
+                              if (isGridWorldWorkspace) {
+                                setGridworldTask(task.id);
+                                focusExecutionStage();
+                                return;
+                              }
                               if (maxSteps === defaultSingleMaxSteps) setMaxSteps(task.max_steps);
-                              if (singleTokenBudget === defaultSingleTokenBudget) setSingleTokenBudget(task.category === 'evidence_chain' ? task.token_budget : 8000);
+                              if (singleTokenBudget === defaultSingleTokenBudget) {
+                                setSingleTokenBudget(task.suite === 'gridworld' || task.category === 'evidence_chain'
+                                  ? task.token_budget : 8000);
+                              }
                               setSelectedSingleTask(task.id);
                               setSingleToolTransport('local');
                               setSingleFaultProfile('none');
+                              focusExecutionStage();
                             }}
                             disabled={isLoading}>
                             <span className="task-option-topline">
-                              <strong>{task.name}</strong>
+                              <strong>{taskTitle(task)}</strong>
                               <span>{taskCategoryLabels[task.category] ?? task.category.replace(/_/g, ' ')}</span>
                             </span>
+                            <span className="task-code">{task.name}</span>
                             <span className="task-option-description">{taskDescription(task)}</span>
                             <span className="task-option-foot">
-                              {task.split === 'development' ? '开发集' : task.split === 'evaluation' ? '评测集' : task.split} · 最多 {task.max_steps} 步 · {
+                              {task.split === 'development' ? '开发集' : task.split === 'evaluation' ? '评测集' : task.split} · 最多 {
+                                task.id === gridworldRealGalleryDefaults.taskId && currentSingleModelMeta?.provider === 'aihubmix'
+                                  ? gridworldRealGalleryDefaults.maxSteps : task.max_steps
+                              } 步 · {
                                 task.suite === 'tool_lab_core'
                                   ? task.supports_mcp ? '支持 MCP' : '本地工具'
-                                  : '本地函数调用提议评测'
+                                  : task.suite === 'gridworld' ? '固定环境动作' : '本地函数调用提议评测'
                               }
                             </span>
                           </button>
@@ -2390,22 +2698,28 @@ export default function App() {
                       <div className="task-picker-heading execution-heading">
                         <div>
                           <h2 id="execution-heading">配置执行方式</h2>
-                          <p>选择模型与 Runtime；其他参数按需展开。</p>
+                          <p>{selectedSuite === 'gridworld'
+                            ? '默认离线 Fake；可显式选择本任务获准的真实模型。'
+                            : '选择模型与 Runtime；其他参数按需展开。'}</p>
                         </div>
                       </div>
 
                 <div className="form-group">
-                    <label htmlFor="model-select" className="form-label">评测模型</label>
+                    <label htmlFor="model-select" className="form-label">
+                      {selectedSuite === 'gridworld' ? '运行模型' : '评测模型'}
+                    </label>
 
                   <select
                     id="model-select"
                     className="form-select"
                     value={selectedModel}
-                    onChange={(e) => setSelectedModel(e.target.value)}
-                    disabled={isLoading}
+                    onChange={(e) => isGridWorldWorkspace
+                      ? setGridworldModel(e.target.value)
+                      : setSelectedModel(e.target.value)}
+                    disabled={isLoading || (isGridWorldWorkspace && gridworldModelOptions.length === 0)}
                   >
                     {!selectedModel && <option value="" disabled>请选择评测模型</option>}
-                    {meta?.models.map((m) => (
+                    {(isGridWorldWorkspace ? gridworldModelOptions : meta?.models ?? []).map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.name} {m.is_default ? '· 目录默认' : ''} {m.is_experimental ? '· 实验性' : ''}
                       </option>
@@ -2425,8 +2739,13 @@ export default function App() {
                     </div>
                   </details>
                 </div>
+                {isGridWorldWorkspace && !gridworldModelOptions.some(model => model.provider === 'aihubmix') && (
+                  <p className="task-list-message" role="status">
+                    当前模型目录未提供 GridWorld 准入的真实型号；仍可使用 Fake 离线试玩。
+                  </p>
+                )}
 
-                <fieldset className="execution-choice" disabled={isLoading}>
+                {selectedSuite !== 'gridworld' && <fieldset className="execution-choice" disabled={isLoading}>
                   <legend className="form-label">执行 Runtime</legend>
                   <div className="execution-choice-grid">
                     {([
@@ -2443,42 +2762,11 @@ export default function App() {
                     ))}
                   </div>
                   <p className="metric-sub">三种调度方式使用相同工具与评测规则；PydanticAI 的步间推进仍由适配器完成。</p>
-                </fieldset>
+                </fieldset>}
 
 
-                  <div className="single-launch-bar">
-                    <div className="single-launch-summary" aria-live="polite">
-                      <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
-                      <span>
-                        {currentSingleModelMeta?.name || selectedModel || '请选择模型'}
-                        {' · '}{singleRuntimeBackend === 'langgraph' ? 'LangGraph' : singleRuntimeBackend === 'pydantic_ai' ? 'PydanticAI' : 'Reference'}
-                        {' · '}
-                        {singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp
-                          ? 'MCP HTTP'
-                          : selectedSuite === 'tool_lab_core' ? '本地工具' : '本地函数调用提议评测'}
-                      </span>
-                      <small>{!meta || !selectedModel ? '目录就绪后可开始运行'
-                        : selectedModel === 'fake' ? 'Fake 离线模拟' : '将发起真实模型请求'}</small>
-                      <span className="single-parameter-summary">{singleContextChoice === 'full' ? '完整历史' : `近期 ${singleContextWindow} 轮${singleContextChoice === 'memory' ? ` · 记忆 ${singleMemoryBytes} 字节` : ''}`} · 最多 {maxSteps} 步 · {executionSeconds} 秒</span>
-                    </div>
-                    <div className="single-launch-action">
-                      <button id="run-button" className="btn-primary"
-                        onClick={handleRunEpisode} disabled={!isSingleRunReady}
-                        aria-describedby={singleRunHint ? 'single-run-hint' : undefined}
-                        title={!meta ? '元数据尚未就绪' : !selectedSingleTaskMeta ? '请选择一个可见任务后再运行' : undefined}>
-                        {isLoading ? <><div className="spinner" /><span>{loadingActivity === 'history' ? '正在读取历史记录…' : '正在运行 Episode…'}</span></>
-                          : <span>开始运行 Episode</span>}
-                      </button>
-                      {singleRunHint && !isLoading && <p id="single-run-hint" className="inline-note" role="status">{singleRunHint}</p>}
-                      {isLoading && (
-                        <p id="single-run-hint" className="loading-note" role="status" aria-live="polite">
-                          {loadingMessage} <span aria-hidden="true">已等待 {elapsedSeconds} 秒。</span>
-                        </p>
-                      )}
-                    </div>
-                  </div>
                     </section>
-                <details className="advanced-settings single-advanced-settings">
+                <details className="advanced-settings single-advanced-settings" hidden={selectedSuite === 'gridworld'}>
                   <summary>
                     <span>更多设置</span>
                     <span>
@@ -2507,14 +2795,14 @@ export default function App() {
                     <label htmlFor="single-call-mode" className="form-label">工具调用方式</label>
                     <select id="single-call-mode" className="form-select" value={selectedSuite === 'tool_lab_core' ? singleCallMode : 'single'}
                       onChange={e => setSingleCallMode(e.target.value as 'single' | 'serial')}
-                      disabled={isLoading || selectedSuite !== 'tool_lab_core'}>
+                      disabled={isLoading || selectedSuite !== 'tool_lab_core' || singleReflection}>
                       <option value="serial">多工具：同轮只读调用，按顺序执行</option>
                       <option value="single">单工具：每轮只接受一个调用</option>
                     </select>
                     <p className="form-hint">{selectedSuite === 'tool_lab_core' ? '每批最多8个，提交答案单独调用；窗口按完整模型轮次保留。' : '当前BFCL任务按单函数调用评分，使用单工具方式。'}</p>
                     <label htmlFor="single-runtime-policy" className="form-label">参数纠错策略</label>
                     <select id="single-runtime-policy" className="form-select" value={singleRuntimeStrategy}
-                      onChange={(e) => setSingleRuntimeStrategy(e.target.value as 'handwritten' | 'handwritten_recovery')} disabled={isLoading}>
+                      onChange={(e) => setSingleRuntimeStrategy(e.target.value as 'handwritten' | 'handwritten_recovery')} disabled={isLoading || singleReflection}>
                       <option value="handwritten">关闭：参数错误后终止</option>
                       <option value="handwritten_recovery">开启：INVALID_ARGUMENTS 最多纠错一次</option>
                     </select>
@@ -2559,14 +2847,30 @@ export default function App() {
                     </section>
                     <section className="settings-group" aria-labelledby="single-context-heading">
                       <h3 id="single-context-heading">上下文与记忆</h3>
+                      {selectedSingleTaskMeta?.supports_reflection && <div className="form-group">
+                        <label className="form-label" htmlFor="single-reflection">
+                          <input id="single-reflection" type="checkbox" checked={singleReflection} disabled={isLoading}
+                            onChange={event => {
+                              const enabled = event.target.checked;
+                              setSingleReflection(enabled);
+                              if (enabled) {
+                                setSinglePlanning(false);
+                                setSingleContextChoice('full');
+                                setSingleRuntimeStrategy('handwritten');
+                                setSingleCallMode('single');
+                              }
+                            }} /> 启用停滞后一次行动修正
+                        </label>
+                        <p className="form-hint">连续两次相同无进展读取后触发；反思无工具、无重试，并计入同一 Token 预算。</p>
+                      </div>}
                       {selectedSingleTaskMeta?.supports_planning && <div className="form-group">
                         <label className="form-label" htmlFor="single-planning">
-                          <input id="single-planning" type="checkbox" checked={singlePlanning} disabled={isLoading}
+                          <input id="single-planning" type="checkbox" checked={singlePlanning} disabled={isLoading || singleReflection}
                             onChange={event => setSinglePlanning(event.target.checked)} /> 启用声明计划
                         </label>
                         <p className="form-hint">模型可声明、更新子目标；额外调用计入相同预算，声明不代表已执行。</p>
                       </div>}
-                  <ContextSettings prefix="single-context" choice={singleContextChoice} rounds={singleContextWindow} bytes={singleMemoryBytes} disabled={isLoading}
+                  <ContextSettings prefix="single-context" choice={singleContextChoice} rounds={singleContextWindow} bytes={singleMemoryBytes} disabled={isLoading || singleReflection}
                     onChoice={setSingleContextChoice} onRounds={setSingleContextWindow} onBytes={setSingleMemoryBytes} />
                     </section>
                     <section className="settings-group" aria-labelledby="single-budget-heading">
@@ -2602,26 +2906,21 @@ export default function App() {
                 </div>
               </details>
 
-              {/* Right Column: Single Episode Result + Trace View */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                 {/* Result Summary */}
-                <section className="card" id="results-panel" aria-labelledby="episode-results-title">
+                <section hidden={!artifact || singleConfigOpen || isLoading || episodeSection !== 'results'} className="card" id="results-panel" aria-labelledby="episode-results-title">
                   <div className="card-title">
-                    <h2 id="episode-results-title" className="section-heading">运行结果指标</h2>
+                    <h2 id="episode-results-title" className="section-heading">最终交付与运行分析</h2>
                     {artifact && (
                       <div className="result-heading-actions">
                       <a className="result-jump" href="#trace-panel" onClick={(event) => {
                         if (!tracePanelRef.current) return;
                         event.preventDefault();
-                        tracePanelRef.current.focus({ preventScroll: true });
-                        tracePanelRef.current.scrollIntoView({ block: 'start' });
+                        selectEpisodeSection('process');
+                        requestAnimationFrame(() => {
+                          tracePanelRef.current?.focus({ preventScroll: true });
+                          tracePanelRef.current?.scrollIntoView({ block: 'start' });
+                        });
                       }}>查看调用过程</a>
-                      <span
-                        id="eval-badge"
-                        className={`badge ${artifact.evaluation.success ? 'badge-green' : 'badge-red'}`}
-                      >
-                        {artifact.evaluation.success ? '评测通过 (SUCCESS)' : '评测未通过 (FAILED)'}
-                      </span>
                       </div>
                     )}
                   </div>
@@ -2635,12 +2934,12 @@ export default function App() {
                   )}
                 </section>
 
-                {artifact && <EpisodeReviewPanel key={artifact.episode.episode_id} artifact={artifact} models={meta?.models ?? []} />}
+                {artifact && !singleConfigOpen && !isLoading && <div hidden={episodeSection !== 'review'}><EpisodeReviewPanel key={artifact.episode.episode_id} artifact={artifact} models={meta?.models ?? []} /></div>}
 
                 {/* Trace Timeline */}
-                <section className="card" id="trace-panel" ref={tracePanelRef} tabIndex={-1} aria-labelledby="trace-title">
+                <section hidden={Boolean(artifact && episodeSection !== 'process')} className="card" id="trace-panel" ref={tracePanelRef} tabIndex={-1} aria-labelledby="trace-title">
                   <div className="card-title">
-                    <h2 id="trace-title" className="section-heading">{liveRun ? liveRun.status === 'completed' ? '本次执行过程' : '实时执行过程' : 'Trace Replay'}</h2>
+                    <h2 id="trace-title" className="section-heading">{liveRun ? liveRun.status === 'completed' ? '本次执行过程' : '实时执行过程' : artifact ? 'Trace Replay' : 'Agent 执行舞台'}</h2>
                     {artifact && (
                       <span className="badge" style={{ fontFamily: 'var(--font-mono)' }}>
                         {artifact.events.length} 个事件
@@ -2649,17 +2948,21 @@ export default function App() {
                   </div>
                   <div className="card-desc">
                     {liveRun ? liveRun.status === 'completed' ? '执行已完成，停留在最终输出；仅主动查看时进入历史回放。' : '节点随实际事件即时出现；结束后停留在最终输出，不自动重播。'
-                      : '仅回放已保存的事件和环境快照，不重新请求模型或执行工具。'}
+                      : artifact ? '仅回放已保存的事件和环境快照，不重新请求模型或执行工具。' : '核对上方任务与模型后开始运行。需要调整时点击“修改任务与配置”。'}
                   </div>
 
                   {liveRun ? (
                     <>
                       <p className="loading-note" role="status">
                         {liveRun.status === 'running' ? '正在接收真实 Trace 事件。' : liveRun.status === 'completed' ? '本次运行已结束，结果已保存。' : '实时连接已中断，后端运行状态未知。'}
+                        {liveRun.environmentVersion === 'gridworld-key-door-v1'
+                          && liveRun.provider === 'aihubmix'
+                          && ` ${meta?.models.find(model => model.id === liveRun.model)?.name ?? liveRun.model} · 实验性真实运行；临时累计 Token 额度 ${gridworldRealBudget.total}，费用可能未知。`}
                         {liveRun.episodeId && ` Episode ID：${liveRun.episodeId}`}
                       </p>
+                      {liveRun.environmentVersion === 'gridworld-key-door-v1' && <GridWorldMap key="live-gridworld" events={liveRun.events} animate />}
                       {liveRun.events.length > 0 && <McpFlowReplay displayMode={liveRun.status === 'completed' ? 'completed' : 'live'} events={liveRun.events}
-                        environmentVersion={liveRun.environmentVersion} model={liveRun.model}
+                        environmentVersion={liveRun.environmentVersion} model={liveRun.model} provider={liveRun.provider}
                         finalState={artifact?.episode.final_state ?? {}} evaluation={artifact?.evaluation}
                         termination={artifact?.episode.termination_reason ?? (liveRun.status === 'running' ? '运行中' : '连接中断')}
                         detail={artifact?.episode.detail ?? ''} />}
@@ -2670,6 +2973,9 @@ export default function App() {
                     </>
                   ) : artifact && artifact.events.length > 0 ? (
                     <>
+                      {artifact.run_config.environment_version === 'gridworld-key-door-v1'
+                        && <GridWorldMap key={artifact.episode.episode_id} events={artifact.events} cutoff={replayIndex}
+                          animate={replayView === 'flow' && gridReplayMotion} />}
                       <div className="view-switch flow-switch" data-active={replayView} aria-label="Replay 视图">
                         <button type="button" className={replayView === 'flow' ? 'active' : ''}
                           aria-pressed={replayView === 'flow'}
@@ -2690,10 +2996,10 @@ export default function App() {
                       <div ref={replayMotionRef} className="replay-content" data-view={replayView}>
                       {replayView === 'flow' && <McpFlowReplay key={artifact.episode.episode_id}
                         events={artifact.events} environmentVersion={artifact.run_config.environment_version ?? ''}
-                        model={artifact.agent.model.model} finalState={artifact.episode.final_state}
+                        model={artifact.agent.model.model} provider={artifact.agent.model.provider} finalState={artifact.episode.final_state}
                         evaluation={artifact.evaluation}
                         termination={artifact.episode.termination_reason} detail={artifact.episode.detail}
-                        eventIndex={replayIndex} onSelectEvent={setReplayIndex} />}
+                        eventIndex={replayIndex} onSelectEvent={selectFlowReplayEvent} />}
                       <div hidden={replayView === 'flow'}>
                       {replayView === 'story' && <div className="step-rail" role="group" aria-label="执行步骤（方向键切换）"
                         onKeyDown={(event) => {
@@ -2990,67 +3296,20 @@ export default function App() {
                       </div>
                     </>
                   ) : (
-                    <div className="empty-state">
-                      <div className="empty-icon">暂无 Trace</div>
-                      <div>Trace 数据将在 Episode 执行完成后呈现在此。</div>
+                    <div className="stage-ready" aria-label="执行舞台准备状态">
+                      <div className="stage-ready-heading"><img src="/brand/fox-mark.svg" width="48" height="48" alt="" />
+                        <div><span>任务目标 · 当前草稿</span><h3>{selectedSingleTaskMeta ? taskTitle(selectedSingleTaskMeta) : '选择一个任务，开始探索'}</h3></div>
+                      </div>
+                      <p>{selectedSingleTaskMeta ? taskDescription(selectedSingleTaskMeta) : '从任务库选择任务，或展开上方配置查看目标与执行设置。'}</p>
+                      <div className="stage-ready-note"><span className="stage-ready-status">尚未开始</span><p>启动后，模型行动与工具反馈将实时出现在这里；实际读取的依据在右侧同步展示。</p></div>
                     </div>
                   )}
                 </section>
               </div>
             </div>
-            {resumableEpisodeIds.length > 0 && (
-              <section className="card resumable-panel" aria-labelledby="resumable-title">
-                <div className="card-title" id="resumable-title">待恢复的单次运行</div>
-                <p className="card-desc">
-                  仅列出上次后端进程留下的运行。恢复可能重新发送中断中的模型请求并产生额外用量。
-                </p>
-                <div className="resumable-list">
-                  {resumableEpisodeIds.map((id) => (
-                    <button key={id} className="btn-secondary" disabled={isLoading}
-                      onClick={() => handleResumeEpisode(id)}>
-                      恢复 Episode <code>{id}</code>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            )}
-            {recentEpisodeIds.length > 0 && (
-              <section className="card recent-episodes" aria-labelledby="recent-episodes-title">
-                <div className="card-title" id="recent-episodes-title">最近运行</div>
-                <p className="card-desc">历史条目仅通过 GET 回读；切换历史产物不会发起新运行。</p>
-                <div className="recent-episode-list">
-                  {recentEpisodeIds.map((id) => {
-                    const summary = episodeHistorySummaries[id];
-                    const status = summary?.status === 'ready'
-                      ? summary.success === undefined ? '结果未记录' : summary.success ? '评测通过' : '评测未通过'
-                      : summary?.status === 'error' ? '摘要暂不可用' : '读取摘要中';
-                    const statusClass = summary?.status === 'ready'
-                      ? summary.success === undefined ? 'badge' : summary.success ? 'badge-green' : 'badge-red'
-                      : 'badge';
-                    const parsedTime = summary?.timestamp ? new Date(summary.timestamp) : null;
-                    const time = parsedTime && !Number.isNaN(parsedTime.getTime())
-                      ? parsedTime.toLocaleString() : '时间未记录';
-                    return (
-                      <article className="recent-episode-row" key={id}>
-                        <button type="button" className="recent-episode-open"
-                          onClick={() => loadEpisodeById(id)} disabled={isLoading}>
-                          <span className="recent-episode-main">
-                            <strong>{summary?.taskName ?? '读取历史 Episode'}</strong>
-                            <span>{summary?.modelId ?? (summary?.status === 'error' ? '无法读取摘要' : '模型信息读取中')} · {time}</span>
-                          </span>
-                          <span className={`badge ${statusClass}`}>{status}</span>
-                        </button>
-                        <button type="button" className="btn-secondary recent-episode-copy"
-                          aria-label={`复制 Episode ID ${id}`}
-                          onClick={async () => setCopyNotice(await copyTextToClipboard(id, 'Episode ID'))}>
-                          复制 ID
-                        </button>
-                      </article>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
+            {!isGridWorldWorkspace && <ClassroomScenarios tasks={meta?.tasks ?? []} disabled={isLoading || metadataLoading || !meta}
+              selectedTaskNames={(meta?.tasks ?? []).filter((task) => task.id === selectedSingleTask).map((task) => task.name)}
+              hasSavedResult={Boolean(artifact || experiment || activeJobId)} onConfigure={configureClassroomScenario} />}
           </div>
         )}
       </main>

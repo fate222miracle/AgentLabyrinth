@@ -587,6 +587,10 @@ class ToolLabEnvironment(Environment):
             "timeout_tool": self._timeout_tool,
         }
 
+    def public_state(self) -> dict[str, JsonValue]:
+        """Expose the legacy ToolLab state used by existing Replay artifacts."""
+        return self.snapshot()
+
     def restore(self, snapshot: dict[str, JsonValue]) -> None:
         """Validate and restore a snapshot; this is not Runtime resume."""
         state = _Snapshot.model_validate(snapshot)

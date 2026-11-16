@@ -18,7 +18,7 @@ test('third Runtime is selectable, labelled honestly and exported without rewrit
 
   await expect(page.getByText('Reference Runtime ↔ PydanticAI Runtime', { exact: true })).toBeVisible();
 
-  await page.locator('.experiment-draft > summary').click();
+  await page.getByRole('button', { name: '配置下一次实验', exact: true }).click();
   await page.getByLabel('对照变量', { exact: true }).selectOption('runtime_backend');
   const target = page.locator('#runtime-target');
   await expect(target).toBeVisible();
@@ -29,6 +29,7 @@ test('third Runtime is selectable, labelled honestly and exported without rewrit
   await expect(summary).toContainText('框架驱动单步节点，步间由适配器推进');
   await target.selectOption('langgraph');
   await expect(summary).toContainText('StateGraph 独立节点调度');
+  await page.goBack();
 
   const download = page.waitForEvent('download');
   await page.locator('#btn-export-experiment-csv').click();
@@ -51,6 +52,7 @@ test('third Runtime is selectable, labelled honestly and exported without rewrit
 
 test('single run offers the third scheduler with its step boundary disclosed', async ({ page }) => {
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   const option = page.getByRole('radio', { name: 'PydanticAI 框架节点驱动单步，步间由适配器推进' });
   await expect(page.locator('fieldset.execution-choice')).toContainText('PydanticAI 的步间推进仍由适配器完成');
   await expect(option).toBeEnabled();

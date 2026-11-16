@@ -45,6 +45,8 @@ class HandwrittenRuntime:
             while next_node != "end":
                 if next_node == "model":
                     next_node = await session.call_model()
+                elif next_node == "reflect":
+                    next_node = await session.call_reflection()
                 elif next_node == "validate":
                     next_node = session.validate()
                 else:

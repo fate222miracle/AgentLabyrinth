@@ -7,6 +7,7 @@ from typing import cast
 from packages.application.reference_pricing import official_reference_cost
 from packages.application.trace import JsonTraceRecorder, content_hash
 from packages.domain.models import (
+    GRIDWORLD_ENVIRONMENT_VERSION,
     AgentSpec,
     EpisodeArtifact,
     EpisodeResult,
@@ -17,7 +18,12 @@ from packages.domain.models import (
     TerminationReason,
 )
 from packages.domain.ports import AgentRuntime, Environment, Evaluator
-from packages.runtime.session import CheckpointFailure, ResumableRuntime, SessionState
+from packages.runtime.session import (
+    CheckpointFailure,
+    EpisodeSession,
+    ResumableRuntime,
+    SessionState,
+)
 
 
 async def run_episode(
@@ -115,6 +121,9 @@ async def run_episode(
             reason="unhandled_runtime_or_evaluator_error",
             metrics={"usage_complete": False},
         )
+    if config.environment_version == GRIDWORLD_ENVIRONMENT_VERSION:
+        public_state = EpisodeSession.last_recorded_public_state(recorder.events)
+        episode = episode.model_copy(update={"final_state": public_state or {}})
     recorder.record(
         EventType.EPISODE_FINISHED,
         episode.step_count,

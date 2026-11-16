@@ -56,9 +56,11 @@ test('actual context artifact → API read-only replay → rerun with original p
     if (value.url().includes('/api/') && value.method() !== 'GET') mutations.push(value.url());
   });
   await page.goto(`/?episode_id=${id}`);
+  await page.getByRole('button', { name: '结果分析', exact: true }).click();
   await expect(page.getByText('上下文：最近 1 轮工具交互', { exact: true })).toBeVisible();
   await expect(page.getByText('评测未通过 (FAILED)', { exact: true })).toBeVisible();
   await expect(page.getByText('MAX_STEPS', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '执行过程', exact: true }).click();
   await expect(page.getByRole('region', { name: '工具调用动画回放' })).toBeVisible();
   await page.getByRole('button', { name: '技术 Trace', exact: true }).click();
   await expect(page.getByText('MODEL_REQUESTED', { exact: true }).first()).toBeVisible();
@@ -68,6 +70,7 @@ test('actual context artifact → API read-only replay → rerun with original p
   await expect.poll(() => new URL(page.url()).searchParams.get('episode_id')).not.toBe(id);
   const rerunId = new URL(page.url()).searchParams.get('episode_id');
   expect(rerunId).toMatch(/^[a-f0-9-]{36}$/);
+  await page.getByRole('button', { name: '结果分析', exact: true }).click();
   await expect(page.getByText('上下文：最近 1 轮工具交互', { exact: true })).toBeVisible();
   await expect(page.getByText('MAX_STEPS', { exact: true })).toBeVisible();
   const rerunResponse = await request.get(`/api/v1/episodes/${rerunId}`);
@@ -87,6 +90,7 @@ test('new Episode → independent evaluation → saved Trace → replay with no 
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.getByRole('button', { name: '开始运行 Episode', exact: true }).click();
   await expect(page).toHaveURL(/episode_id=[a-f0-9-]+/);
   await expect(page.getByText('评测通过 (SUCCESS)', { exact: true })).toBeVisible();
@@ -137,6 +141,7 @@ test('saved flow stays readable across viewports and respects dynamic reduced mo
   const flow = page.getByRole('region', { name: '工具调用动画回放' });
   for (const width of [390, 768, 1280, 1440]) {
     await page.setViewportSize({ width, height: 1000 });
+    if (await flow.locator('.flow-task-brief').getAttribute('open') === null) await flow.locator('.flow-task-brief > summary').click();
     await expect(flow.getByLabel('最初输入')).toBeVisible();
     await expect(flow.getByLabel('最终输出')).toContainText('approved');
     const next = flow.getByRole('button', { name: '动画下一帧' });
@@ -156,8 +161,8 @@ test('saved flow stays readable across viewports and respects dynamic reduced mo
     })).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     const header = await page.locator('.app-header').boundingBox();
-    expect(header?.y).toBeGreaterThanOrEqual(0);
-    expect(header?.y).toBeLessThanOrEqual(1);
+    expect(header?.y).toBeGreaterThanOrEqual(7);
+    expect(header?.y).toBeLessThanOrEqual(9);
     await flow.screenshot({ path: testInfo.outputPath(`flow-${width}.png`) });
   }
   await flow.getByLabel('动画速度').selectOption('2800');
@@ -186,6 +191,7 @@ test('bad historical response clears old success and reports a validation error'
   const corrupt = { ...data, artifact: { ...data.artifact,
     evaluation: { ...data.artifact.evaluation, success: 'true' } } };
   await page.route(`**/api/v1/episodes/${id}`, (route) => route.fulfill({ json: corrupt }));
+  await page.locator('#tab-runs').click();
   await page.locator('#input-episode-id').fill(id);
   await page.getByRole('button', { name: '读取结果', exact: true }).click();
   await expect(page.getByText(/接口数据校验失败/)).toBeVisible();
@@ -214,7 +220,7 @@ test('delayed accepted Job cannot reclaim a page opened from dashboard history',
     await route.fulfill({ response: serverResponse });
     finished();
   });
-  await page.goto('/');
+  await page.goto('/experiments/new');
   await page.locator('.history-disclosure > summary').click();
   await page.getByRole('button', { name: /开始运行对照实验/ }).click();
   await acceptedGate;
@@ -229,9 +235,10 @@ test('delayed accepted Job cannot reclaim a page opened from dashboard history',
     await page.evaluate(() => new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     }));
-    await expect(page.locator('.experiment-draft')).not.toHaveAttribute('open');
-    await page.locator('.experiment-draft > summary').press('Enter');
+    await expect(page.locator('.experiment-draft')).toHaveCount(0);
+    await page.getByRole('button', { name: '配置下一次实验', exact: true }).click();
     await expect(page.getByRole('button', { name: /开始运行对照实验/ })).toBeEnabled();
+    await page.goBack();
     await expect(page).toHaveURL(new RegExp(`experiment_id=${historical}`));
     expect(new URL(page.url()).searchParams.has('experiment_job_id')).toBe(false);
   } finally { release(); }
@@ -251,6 +258,7 @@ test('malformed live Trace never becomes a successful animation', async ({ page 
     contentType: 'text/event-stream', body: 'event: trace\ndata: {"event_id":"invalid","payload":[]}\n\n',
   }));
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await page.getByRole('button', { name: '开始运行 Episode', exact: true }).click();
   await expect(page.getByText(/接口数据校验失败/)).toBeVisible();
   await expect(page.getByText('评测通过 (SUCCESS)', { exact: true })).toHaveCount(0);
@@ -260,5 +268,6 @@ test('malformed live Trace never becomes a successful animation', async ({ page 
 test('broken recovery lists are visible rather than silently shown as empty', async ({ page }) => {
   await page.route('**/api/v1/episodes/resumable', (route) => route.fulfill({ json: ['not-an-id'] }));
   await page.goto('/?mode=single');
+  await page.getByRole('button', { name: '修改任务与配置', exact: true }).click();
   await expect(page.getByText('待恢复记录读取失败，列表可能不完整。请刷新页面重新读取。', { exact: true })).toBeVisible();
 });

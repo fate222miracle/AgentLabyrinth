@@ -4,7 +4,7 @@ import { experimentResponseSchema, episodeResponseSchema, parseApi } from '../sr
 import { flowFrames } from '../src/flowFrames';
 
 test('same-window memory ablation runs from Web and preserves history, CSV and request diagnostics', async ({ page, request }, testInfo) => {
-  await page.goto('/');
+  await page.goto('/experiments/new');
   await page.getByLabel('对照变量', { exact: true }).selectOption('memory_ablation');
   await page.getByLabel('评测模型', { exact: true }).selectOption('fake');
   await page.locator('#exp-scenario-select').selectOption('clean');
@@ -30,8 +30,10 @@ test('same-window memory ablation runs from Web and preserves history, CSV and r
   const savedNote = page.getByLabel('已保存工具记忆对照');
   await expect(savedNote).toContainText('最近 1 轮工具交互 + 工具记忆');
   await expect(page.getByText('仅带记忆窗口通过', { exact: true })).toBeVisible();
-  await page.locator('.experiment-draft > summary').click();
+  await page.getByRole('button', { name: '配置下一次实验', exact: true }).click();
+  await page.getByLabel('对照变量', { exact: true }).selectOption('memory_ablation');
   await page.getByLabel('相同窗口轮次 N（两侧共用）', { exact: true }).fill('2');
+  await page.goBack();
   await expect(savedNote).toContainText('最近 1 轮工具交互');
   const mutations: string[] = [];
   page.on('request', (r) => { if (r.url().includes('/api/') && r.method() !== 'GET') mutations.push(r.url()); });

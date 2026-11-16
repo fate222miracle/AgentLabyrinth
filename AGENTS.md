@@ -2,6 +2,36 @@
 
 唯一权威需求是 `docs/product/requirements.md`，已核对版本 **V0.6**。本文件和任务卡只指导执行，不替代需求。
 
+负责人2026-11-03明确要求提交GitHub，授权本次提交/推送已验证源码、测试、交接及公开模拟UI审查截图，覆盖下文此前本地保留约束，仅限本次交付。按CONTRIBUTING分组PR：此前持久化/反思、Judge截断修复、四工作区与演示主线UI；保留原历史，不自动合并main。密钥/本机配置/原始实验产物/缓存不入库，无新真实模型或迁移授权；实际门禁与远端回执见current-state，不把本机通过冒充CI。
+
+负责人2026-11-02同意优先演示主线。UI第三批共享最终交付/结果分析、真实实时到达与完成不重播、当前反馈/资料去重及回到Agent关联、单行路径和全屏适配已接入。历史最终交付明确独立于游标，当前节点/资料仍限事件前缀，BFCL不补执行值。实际53Node/85Edge完整及新增空正文后的3专项、最终typecheck/build通过；证据和步骤见docs/learning/ui-demo-mainline-20261102.md与current-state，不称86项全量。未改后端/新增真实模型/Judge/Git，原历史哈希保持；API/Web已恢复，MCP未监听后另启动，全部未提交成果保护，待负责人体验。
+
+负责人2026-11-02接续UI优化。第二批任务库桌面详情/窄屏顺序阅读、焦点交接、空搜索/失败状态，紧凑准备舞台、目录提示按场景出现及实验看板前置已完成；activeJob控制仍前置。实际53Node/83Edge完整回归及最后失败数量文案后的3专项、最终typecheck/build通过，失败/证据/边界见docs/learning/ui-workspace-polish-20261102.md和current-state。未改后端或新增真实模型/Judge/Git同步，原历史哈希保持，服务已恢复，保留全部未提交成果；待负责人体验，不扩数据库全量列表或后台跨页运行。
+
+负责人2026-11-02授权UI重编排。首批四工作区/详情路径、独立草稿、默认过程与结果/评审分层、实验看板与新配置分离已完成；旧URL/刷新/前后导航只GET，Job控制保留。运行记录明确本机最近5条，完整数据库分页须具体ADR；实时单次仍不可切离，不宣称后台运行/重连。实际typecheck/build、53Node/80Edge通过，首次失败与Job修复见docs/learning/ui-workspace-navigation-20261102.md及current-state。无新后端协议/依赖/真实模型/Git提交，保护全部既有成果；服务已恢复，本批待负责人体验。
+
+负责人2026-11-02要求立即修复Judge截断，并取消左侧长配置栏。按ADR-040§7提高新真实Judge输出上限为4096，已有ModelConfig1.1/single保留异常已报告用量，截断归已有INVALID_JUDGE_OUTPUT且安全日志保留原因；严格JSON/无工具无重试/30秒保持，不改Review字段或历史。配置默认收起、顶部摘要下全宽展开，运行中隐藏结果/评审、结束后显示，编辑时暂藏旧结果；历史和工作区切换收起配置。实际验证及首轮浏览器失败见current-state和V0.3-judge-truncation-and-config-layout-20261102，不复用四次已消费真实授权，不提交Git，全部既有成果保护。
+
+负责人2026-11-02授权当前目录四个真实型号各Judge一次。相同已成功Episode/v2/800输出/30秒，M2.7与M3完成，GLM5.3与Flash均OUTPUT_TRUNCATED（length/800）；4次授权已消费，无补跑/格式探针，来源哈希保持，正常SQLite保存4条Review，原失败保留。确证通用错误包装丢失原因、ModelConfig1.0截断丢失已报告用量，诊断及候选修复见current-state与V0.3-judge-model-diagnostics-20261102。当前仅诊断，不自动扩大预算/协议或真实调用、不提交Git。
+
+负责人2026-11-01进一步要求选完任务自动隐藏任务栏与配置栏。任务卡/课堂快捷入口现在只填草稿后隐藏整个配置区，焦点交给全宽舞台顶部；唯一运行按钮及实际模型/预算等摘要移到舞台，显式“修改任务与配置”恢复原搜索/参数，不自动POST。最终本轮typecheck/build、50Node、77Edge全部通过，证据da7b5eba…见current-state。仍保留所有前轮未提交改动，不发真实模型/Judge、不提交Git。
+
+负责人2026-11-01进一步选定“执行舞台：流程居中、配置可收起、依据在右侧”。单次页面已调整为桌面独立滚动配置侧栏、中央目标/待机与实时执行区，启动后收起配置、保留原流程和输出，课堂快捷入口移到工作区下方；中文任务名/原ID及搜索草稿隔离一起收口。对照实验保留原流程，最终舞台版typecheck/build、50Node、77Edge全部通过，证据与失败过程见current-state。仍不提交Git/不发真实模型请求，已有所有成果保留。
+
+负责人2026-11-01要求使用`redesign-existing-projects`优化现有前端。已在不改API/评分/运行协议和不加依赖的前提下收口工作台首屏：浮动导航、紧凑目录错误、非等权课堂场景、唯一填充主操作、减少嵌套边框及300/500ms统一动效；UI规范同步。实际typecheck/build、50Node及16项Edge（课堂场景/紧凑配置/动效/四视口）通过，截图和证据见current-state。当前分支`codex/ui-workbench-polish`仅本地未提交；不沿用上轮Git授权，不发真实模型请求。
+
+负责人2026-10-31确认按ADR-044实施并要求完成后提交GitHub。一次有界Reflection已成品闭环：两次相同成功无进展只读后，同Provider无工具严格JSON修正一次，计入原预算，不重试；三Runtime、SQLite恢复、单次/对照API-Web、实时/回放、CSV及公开旧别名题均接入。最终`scripts.check` 退出0：749Python/50Node/76Edge、126文件Ruff-Mypy、22格零退化/audit0，证据见current-state。Fake只证机制，未发真实模型/Judge、未迁移真实历史。本轮Git授权仅限已验证源码/测试/文档，不自动合并main或延伸为以后授权。
+
+负责人2026-10-30要求借鉴Pi设计思想但不引入依赖，全力推进V0.3剩余功能。Accepted ADR-043阶段2新数据链路已完成：产品默认SQLite保存新单次/成对Episode、Experiment计划/结果、Job和Review；旧JSON只读兼容，不迁移/删除。最终733Python/48Node/74Edge、22格零退化及audit0通过，证据与首次Dashboard失败见current-state。V0.3唯一未实施核心项为Reflection；具体算法、公开任务、失败语义和单变量协议已写入Proposed ADR-044，按需求§0.3须负责人确认后实施，不能把方案当成已完成或用额外请求冒充创新。A1保持已接受披露边界；不自动真实模型、Git提交/推送或真实历史迁移。
+
+负责人2026-10-29要求完成当前数据持久化整项切片后统一汇报。ADR-043首个单Episode成品切片已接Application Port/SQLAlchemy Adapter/Alembic：产品新单次/实时Episode以SQLite同一记录保存安全点、Trace和结果，数据库原生恢复、不可覆盖、旧JSON只读兼容及在线备份已测。实际732Python/123文件Ruff-Mypy/48Node/74Edge/22格零退化/audit0见current-state；默认Chromium缺本机可执行文件，系统Edge实测通过，不能称完整脚本原命令退出0。Experiment/Job/Review和真实历史迁移仍是后续切片，不自动迁移/删除旧数据，不提交或推送Git，不发真实模型请求。
+
+负责人2026-10-28要求连续修复已发现及新发现问题再统一汇报。评审不完整提示/旧接口兼容见ADR-042，恢复列表损坏报错、Episode与Experiment结果防覆盖已完成；最终727Python/48Node/74Edge及22格零退化等实测见current-state。多进程、跨文件事务、备份、自由文本脱敏和损坏列表部分可见仍有边界；下一步设计SQLite及无损迁移，不将既有本地工作自动提交或推送，不发真实模型请求。
+
+负责人2026-10-28要求继续检查问题。已修普通API及实时错误流暴露校验输入/本机路径，离线93项相关测试及Ruff/Linux目标Mypy通过；本轮未重跑完整门禁。当前分支codex/fix-api-error-disclosure保留上轮全部未提交工作，不提交/推送、不调用真实模型；具体结果及待核查评审列表隔离见current-state顶部。
+
+负责人2026-10-28要求接续优化存量问题。当前任务docs/learning/V0.3-readonly-api-responsiveness-20261028.md：修复四个只读GET同步读盘阻塞事件循环，处理Job在读取期间结束的快照竞态；不改运行/控制写入、协议/评分/CSV或依赖，不新增真实模型调用。分支codex/fix-readonly-api-responsiveness从5066436接续，保留PR#3中的最后修复；不沿用上一轮一次性Git授权提交/推送或合并。完整结果以current-state本轮实际记录为准。
+
 负责人2026-10-28明确要求提交GitHub，授权本次提交/推送全部已验证源码、测试和文档并按CONTRIBUTING创建关联PR；覆盖此前本地保留约束，仅限本次交付。密钥、本机配置、实验产物和缓存不入库，不授权真实模型请求或自动合并。按Git规范、实验可靠性、网络诊断分组，实际提交/PR/CI状态见current-state，不能把本地Edge门禁冒称远端CI通过。
 
 本次实际已推送并创建PR #1/#2/#3。随后检测远端PR#4将5d44d4a合并main（e4d9497，非Codex操作），尚未包含最后课程超时修复与交接；已将#3改为直接对比main并关闭本轮重叠#2，分支/提交均保留，#1主体已入main且PR关闭。当前审查入口为#3，不再沿旧依赖链合并；未自动合并或改写main。旧“不提交”是当时约束，不阻止本次已授权交付，也不授权未来自动推送/模型调用/合并。

@@ -1,5 +1,7 @@
 """Application service for running and retrieving ToolLab episodes and experiments."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -8,20 +10,26 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic, time_ns
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4, uuid5
 
+from apps.api.gridworld_batch import MODELS, BatchList, BatchPlan, BatchResult, BatchRun, BatchView
 from apps.api.schemas import (
     ALLOWED_FAKE_SCENARIOS,
+    GRIDWORLD_ALLOWED_MODEL_IDS,
     CreateEpisodeRequest,
     CreateEpisodeReviewRequest,
     CreateExperimentRequest,
+    CreateGridWorldReviewRequest,
     ExperimentDashboardItem,
     ExperimentDashboardResponse,
     ExperimentJobState,
     ExperimentProgressArm,
     ExperimentProgressResponse,
     FaultProfile,
+    GridWorldComparisonResponse,
+    GridWorldComparisonRow,
+    GridWorldReviewListResponse,
     MetaResponse,
     ModelOption,
     TaskOption,
@@ -29,6 +37,8 @@ from apps.api.schemas import (
 )
 from packages.application.checkpoint import (
     CheckpointStore,
+    EpisodeCheckpoint,
+    EpisodeStore,
     read_completed_episode,
     resume_checkpointed_episode,
     run_checkpointed_episode,
@@ -44,6 +54,16 @@ from packages.application.experiment import (
     run_experiment,
     write_experiment_checkpoint,
 )
+from packages.application.gridworld_review import (
+    PairReview,
+    build_pair_input,
+    comparison_key,
+    complete_usage,
+    judge_pair,
+    ordered_pair,
+    planned_comparison_key,
+    verify_citations,
+)
 from packages.application.reference_pricing import reference_price_version
 from packages.application.regression import fixed_config
 from packages.application.review import (
@@ -57,6 +77,7 @@ from packages.application.review import (
 from packages.application.trace import content_hash, read_artifact, write_text_atomically
 from packages.domain.models import (
     AgentSpec,
+    Budget,
     ContextPolicy,
     EpisodeArtifact,
     EstimatedCost,
@@ -64,6 +85,7 @@ from packages.domain.models import (
     ModelConfig,
     ModelResponse,
     PlanningConfig,
+    ReflectionConfig,
     RunConfig,
     RuntimeBackend,
     TaskSpec,
@@ -81,6 +103,43 @@ from packages.domain.ports import (
 from packages.environments.bfcl.adapter import ROOT as BFCL_ROOT
 from packages.environments.bfcl.adapter import BFCLAdapter
 from packages.environments.bfcl.environment import BFCLEnvironment
+from packages.environments.gridworld.environment import (
+    ENVIRONMENT_VERSION as GRIDWORLD_ENVIRONMENT_VERSION,
+)
+from packages.environments.gridworld.environment import (
+    GALLERY_REAL_MAX_ACTIONS as GRIDWORLD_GALLERY_REAL_MAX_ACTIONS,
+)
+from packages.environments.gridworld.environment import (
+    GALLERY_REAL_MAX_TIME_MS as GRIDWORLD_GALLERY_REAL_MAX_TIME_MS,
+)
+from packages.environments.gridworld.environment import (
+    GALLERY_REAL_PROFILE as GRIDWORLD_GALLERY_REAL_PROFILE,
+)
+from packages.environments.gridworld.environment import (
+    GALLERY_REAL_ROUTE_HINTS as GRIDWORLD_GALLERY_REAL_ROUTE_HINTS,
+)
+from packages.environments.gridworld.environment import (
+    GALLERY_TASK_NAME as GRIDWORLD_GALLERY_TASK_NAME,
+)
+from packages.environments.gridworld.environment import (
+    MAX_ACTIONS as GRIDWORLD_MAX_ACTIONS,
+)
+from packages.environments.gridworld.environment import (
+    REAL_BUDGET_PROFILE as GRIDWORLD_REAL_BUDGET_PROFILE,
+)
+from packages.environments.gridworld.environment import (
+    REAL_MAX_OUTPUT_TOKENS as GRIDWORLD_REAL_MAX_OUTPUT_TOKENS,
+)
+from packages.environments.gridworld.environment import (
+    REAL_TOKEN_BUDGET as GRIDWORLD_REAL_TOKEN_BUDGET,
+)
+from packages.environments.gridworld.environment import (
+    SOURCE_TOKEN_BUDGET as GRIDWORLD_SOURCE_TOKEN_BUDGET,
+)
+from packages.environments.gridworld.environment import (
+    GridWorldEnvironment,
+)
+from packages.environments.gridworld.evaluator import GridWorldKeyDoorEvaluator
 from packages.environments.tool_lab.environment import (
     TOOL_LAB_TOOL_SET_VERSION,
     TOOL_LAB_TOOL_SET_VERSIONS,
@@ -92,9 +151,13 @@ from packages.evaluation.bfcl import BFCLEvaluator
 from packages.evaluation.order_status import OrderStatusEvaluator
 from packages.providers.aihubmix import AIHubMixModelProvider, list_available_model_ids
 from packages.providers.fake import FakeModelProvider
+from packages.providers.gridworld_fake import GridWorldFakeProvider
 from packages.runtime.factory import create_runtime, runtime_version
 from packages.tools.executor import ToolExecutor
 from packages.tools.registry import DefaultToolValidator
+
+if TYPE_CHECKING:
+    from packages.infrastructure.sqlite_episode_store import SQLiteEpisodeStore
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ARTIFACTS_DIR = ROOT / "artifacts"
@@ -103,6 +166,7 @@ DEFAULT_MODELS_PATH = ROOT / "benchmarks/tool_lab_core/models.json"
 DEFAULT_AIHUBMIX_AGENT = ROOT / "benchmarks/tool_lab_core/agents/aihubmix-m1.json"
 DEFAULT_FAKE_AGENT = ROOT / "benchmarks/tool_lab_core/agents/baseline-m0.json"
 DEFAULT_RECOVERY_AGENT = ROOT / "benchmarks/tool_lab_core/agents/recovery-m1.json"
+DEFAULT_GRIDWORLD_TASKS_DIR = ROOT / "benchmarks/gridworld/tasks"
 
 
 class ExperimentJobStopped(Exception):
@@ -135,6 +199,7 @@ class EpisodeService:
         models_path: Path | None = None,
         live_model_catalog: bool = False,
         tool_set_version: str = TOOL_LAB_TOOL_SET_VERSION,
+        database_path: Path | None = None,
     ) -> None:
         if tool_set_version not in TOOL_LAB_TOOL_SET_VERSIONS:
             raise ValueError("Unsupported ToolLab tool description version")
@@ -143,6 +208,14 @@ class EpisodeService:
         self.tasks_dir = tasks_dir or DEFAULT_TASKS_DIR
         self.models_path = models_path or DEFAULT_MODELS_PATH
         self.live_model_catalog = live_model_catalog
+        self._sqlite_store: SQLiteEpisodeStore | None = None
+        if database_path is not None:
+            from packages.infrastructure.sqlite_episode_store import SQLiteEpisodeStore as Store
+
+            self._sqlite_store = Store(database_path)
+        self._episode_store: EpisodeStore = self._sqlite_store or CheckpointStore(
+            self.artifacts_dir / "checkpoints"
+        )
         self._live_model_ids: set[str] = set()
         self._model_catalog_expires_at = 0.0
         self._model_catalog_status = "static"
@@ -154,17 +227,58 @@ class EpisodeService:
         )
         self._started_ns = time_ns()
         self._resuming: set[UUID] = set()
+        self._gridworld_batch: asyncio.Task[None] | None = None
+        self._gridworld_batch_id: UUID | None = None
+        self._gridworld_batch_lock = asyncio.Lock()
         self._resuming_experiments: set[UUID] = set()
 
     def _job_path(self, experiment_id: UUID) -> Path:
         return self.artifacts_dir / "experiments" / "jobs" / f"{experiment_id}.json"
 
+    def _load_experiment_plan(self, experiment_id: UUID) -> ExperimentCheckpoint | None:
+        stored = (
+            self._sqlite_store.load_experiment_plan(experiment_id)
+            if self._sqlite_store is not None
+            else None
+        )
+        path = experiment_checkpoint_path(self.artifacts_dir, experiment_id)
+        legacy = read_experiment_checkpoint(path) if path.is_file() else None
+        if stored is not None and legacy is not None and stored != legacy:
+            raise ValueError("Experiment plan storage sources conflict")
+        return stored or legacy
+
+    def _save_experiment_plan(self, plan: ExperimentCheckpoint) -> None:
+        if self._sqlite_store is not None:
+            if experiment_checkpoint_path(self.artifacts_dir, plan.experiment_id).exists():
+                raise ValueError("Experiment plan storage sources conflict")
+            self._sqlite_store.save_experiment_plan(plan)
+        else:
+            write_experiment_checkpoint(
+                experiment_checkpoint_path(self.artifacts_dir, plan.experiment_id), plan
+            )
+
+    def get_experiment_plan(self, experiment_id: UUID) -> ExperimentCheckpoint | None:
+        """Read a frozen plan without executing or repairing it."""
+        return self._load_experiment_plan(experiment_id)
+
     def get_experiment_job(self, experiment_id: UUID) -> ExperimentJobState | None:
         """Read a saved job without executing an Experiment."""
         path = self._job_path(experiment_id)
-        if not path.is_file():
+        stored = (
+            self._sqlite_store.load_experiment_job(experiment_id)
+            if self._sqlite_store is not None
+            else None
+        )
+        legacy = path.read_text(encoding="utf-8") if path.is_file() else None
+        if stored is not None and legacy is not None:
+            if ExperimentJobState.model_validate_json(
+                stored
+            ) != ExperimentJobState.model_validate_json(legacy):
+                raise ValueError("Experiment job storage sources conflict")
+        payload = stored or legacy
+        if payload is None:
             return None
-        state = ExperimentJobState.model_validate_json(path.read_text(encoding="utf-8"))
+        state = ExperimentJobState.model_validate_json(payload)
         if state.experiment_id != experiment_id:
             raise ValueError("Experiment job ID mismatch")
         return state
@@ -172,33 +286,36 @@ class EpisodeService:
     def resumable_experiment_job_ids(self) -> list[UUID]:
         """Find stopped local jobs with a valid saved plan and no complete result."""
         result: list[UUID] = []
-        for path in (self.artifacts_dir / "experiments" / "jobs").glob("*.json"):
+        ids = {
+            UUID(path.stem) for path in (self.artifacts_dir / "experiments" / "jobs").glob("*.json")
+        }
+        if self._sqlite_store is not None:
+            ids.update(self._sqlite_store.experiment_job_ids())
+        for experiment_id in ids:
             try:
-                experiment_id = UUID(path.stem)
                 state = self.get_experiment_job(experiment_id)
                 if state is None or state.status in {"completed", "cancelled", "failed"}:
                     continue
-                if not experiment_checkpoint_path(self.artifacts_dir, experiment_id).is_file():
+                plan = self._load_experiment_plan(experiment_id)
+                if plan is None:
                     continue
-                plan = read_experiment_checkpoint(
-                    experiment_checkpoint_path(self.artifacts_dir, experiment_id)
-                )
                 if plan.experiment_id != experiment_id:
                     continue
-                try:
-                    final = self.get_experiment(experiment_id)
-                except ValueError:
-                    final = None
+                final = self.get_experiment(experiment_id)
                 if final is None:
                     result.append(experiment_id)
-            except (OSError, ValueError):
-                continue
+            except (OSError, ValueError) as exc:
+                raise ValueError("Saved job records are invalid or unavailable") from exc
         return sorted(result)
 
     def _save_job(self, state: ExperimentJobState) -> ExperimentJobState:
-        write_text_atomically(
-            self._job_path(state.experiment_id), state.model_dump_json(indent=2) + "\n"
-        )
+        payload = state.model_dump_json(indent=2) + "\n"
+        if self._sqlite_store is not None:
+            if self._job_path(state.experiment_id).exists():
+                raise ValueError("Experiment job storage sources conflict")
+            self._sqlite_store.save_experiment_job(state.experiment_id, payload, create=False)
+        else:
+            write_text_atomically(self._job_path(state.experiment_id), payload)
         return state
 
     def reserve_experiment_job(
@@ -206,25 +323,31 @@ class EpisodeService:
     ) -> ExperimentJobState:
         """Claim a new ID, saving its fixed plan before a Job can be accepted."""
         if (
-            self._job_path(experiment_id).exists()
-            or experiment_checkpoint_path(self.artifacts_dir, experiment_id).exists()
-            or (self.artifacts_dir / "experiments" / f"{experiment_id}.json").exists()
+            self.get_experiment_job(experiment_id) is not None
+            or self._load_experiment_plan(experiment_id) is not None
+            or self.get_experiment(experiment_id) is not None
         ):
             raise ValueError("Experiment ID already exists")
         if plan is not None:
             plan.verify()
             if plan.experiment_id != experiment_id:
                 raise ValueError("Experiment plan ID mismatch")
-            write_experiment_checkpoint(
-                experiment_checkpoint_path(self.artifacts_dir, experiment_id), plan
-            )
-        return self._save_job(
-            ExperimentJobState(
-                experiment_id=experiment_id,
-                status="queued",
-                updated_at=datetime.now(UTC).isoformat(),
-            )
+        state = ExperimentJobState(
+            experiment_id=experiment_id,
+            status="queued",
+            updated_at=datetime.now(UTC).isoformat(),
         )
+        if self._sqlite_store is not None and plan is not None:
+            self._sqlite_store.reserve_experiment(plan, state.model_dump_json(indent=2) + "\n")
+            return state
+        if plan is not None:
+            self._save_experiment_plan(plan)
+        if self._sqlite_store is not None:
+            self._sqlite_store.save_experiment_job(
+                experiment_id, state.model_dump_json(indent=2) + "\n", create=True
+            )
+            return state
+        return self._save_job(state)
 
     def update_experiment_job(
         self,
@@ -450,6 +573,94 @@ class EpisodeService:
             raise ValueError("Task catalog contains duplicate identities")
         return tasks
 
+    def _load_gridworld_tasks(self) -> list[TaskSpec]:
+        """Load the separately versioned GridWorld catalog without mixing suites."""
+        tasks = [
+            TaskSpec.model_validate_json(path.read_text(encoding="utf-8"))
+            for path in sorted(DEFAULT_GRIDWORLD_TASKS_DIR.rglob("*.json"))
+        ]
+        if len({task.id for task in tasks}) != len(tasks) or len(
+            {task.name for task in tasks}
+        ) != len(tasks):
+            raise ValueError("GridWorld task catalog contains duplicate identities")
+        for task in tasks:
+            GridWorldEnvironment._validate_task(task)
+        return tasks
+
+    def _get_gridworld_task(self, task_id: str) -> TaskSpec:
+        """Resolve only the approved GridWorld task catalog entry."""
+        for task in self._load_gridworld_tasks():
+            if task_id in (task.name, str(task.id)):
+                return task
+        raise ValueError("Task not found in the selected suite")
+
+    @staticmethod
+    def _gridworld_agent(
+        provider: Literal["fake", "aihubmix"] = "fake",
+        model: str = "gridworld-fake-v1",
+        *,
+        max_actions: int = GRIDWORLD_MAX_ACTIONS,
+        max_time_ms: int = 300_000,
+    ) -> AgentSpec:
+        """Build the fixed single-action GridWorld Agent for its selected provider."""
+        source = AgentSpec.model_validate_json(DEFAULT_FAKE_AGENT.read_text(encoding="utf-8"))
+        max_output = 800 if provider == "fake" else GRIDWORLD_REAL_MAX_OUTPUT_TOKENS
+        token_budget = (
+            GRIDWORLD_SOURCE_TOKEN_BUDGET if provider == "fake" else GRIDWORLD_REAL_TOKEN_BUDGET
+        )
+        return source.model_copy(
+            update={
+                "name": (
+                    "GridWorld Key Door Fake"
+                    if provider == "fake"
+                    else f"GridWorld Key Door {model}"
+                ),
+                "schema_version": _backend_revision("handwritten"),
+                "runtime_backend": "handwritten",
+                "runtime_strategy": "handwritten",
+                "model": source.model.model_copy(
+                    update={
+                        "schema_version": "1.1",
+                        "tool_call_mode": "single",
+                        "provider": provider,
+                        "model": model,
+                        "max_tokens": max_output,
+                    }
+                ),
+                "budget": Budget(
+                    schema_version="1.1",
+                    max_execution_time_ms=max_time_ms,
+                    max_steps=max_actions,
+                    max_model_calls=max_actions,
+                    max_tool_calls=max_actions,
+                    max_prompt_tokens=token_budget,
+                    max_completion_tokens=max_actions * max_output,
+                ),
+            }
+        )
+
+    @staticmethod
+    def _gridworld_real_budget_task(task: TaskSpec, *, gallery_v3: bool) -> TaskSpec:
+        """Pin the approved temporary real-run budget without changing the catalog source."""
+        profile = GRIDWORLD_GALLERY_REAL_PROFILE if gallery_v3 else GRIDWORLD_REAL_BUDGET_PROFILE
+        return task.model_copy(
+            update={
+                "version": f"{task.version}+{profile}",
+                "token_budget": GRIDWORLD_REAL_TOKEN_BUDGET,
+                "max_steps": GRIDWORLD_GALLERY_REAL_MAX_ACTIONS if gallery_v3 else task.max_steps,
+                "constraints": (
+                    (*task.constraints, *GRIDWORLD_GALLERY_REAL_ROUTE_HINTS)
+                    if gallery_v3
+                    else task.constraints
+                ),
+                "evaluator_config": {
+                    **task.evaluator_config,
+                    "budget_profile": profile,
+                    "source_token_budget": GRIDWORLD_SOURCE_TOKEN_BUDGET,
+                },
+            }
+        )
+
     @staticmethod
     def _agent_with_task_capacity(agent: AgentSpec, tasks: list[TaskSpec]) -> AgentSpec:
         """Pin sufficient call capacity only for newly created evidence-chain runs."""
@@ -574,9 +785,25 @@ class EpisodeService:
                 supports_mcp=bool(t.initial_state.get("documents"))
                 and {"search_documents", "read_document"}.issubset(t.expected_tools),
                 supports_planning=t.evaluator_config.get("planning_protocol") == "plan-update-v1",
+                supports_reflection=t.evaluator_config.get("reflection_protocol")
+                == "no-progress-revision-v1",
             )
             for t in task_specs
         ]
+        tasks.extend(
+            TaskOption(
+                id=task.name,
+                name=task.name,
+                category=task.category,
+                description=task.description,
+                max_steps=task.max_steps,
+                token_budget=task.token_budget,
+                suite="gridworld",
+                split=str(task.evaluator_config.get("split", "development")),
+                allowed_model_ids=sorted(GRIDWORLD_ALLOWED_MODEL_IDS),
+            )
+            for task in self._load_gridworld_tasks()
+        )
         for suite, adapter in (("bfcl_adapted", self.bfcl), ("bfcl_java_adapted", self.bfcl_java)):
             try:
                 tasks.extend(
@@ -616,6 +843,8 @@ class EpisodeService:
         on_event: Callable[[TraceEvent], None] | None = None,
     ) -> EpisodeArtifact:
         """Assemble the selected runtime and suite, execute, and persist the episode."""
+        if req.suite == "gridworld":
+            return await self._execute_gridworld_episode(req, on_event)
         if req.suite != "tool_lab_core" and req.tool_call_mode == "serial":
             raise ValueError("BFCL single-call tasks require single tool call mode")
         # 1. Validate requested model/scenario against permissive free model catalog
@@ -694,9 +923,23 @@ class EpisodeService:
                 raise ValueError("Planning requires a planning task")
             agent = agent.model_copy(update={"schema_version": "1.3", "planning": req.planning})
 
+        if req.reflection is not None:
+            if task.evaluator_config.get("reflection_protocol") != "no-progress-revision-v1":
+                raise ValueError("Reflection requires a reflection challenge task")
+            agent = agent.model_copy(
+                update={
+                    "schema_version": "1.5",
+                    "runtime_strategy": "handwritten",
+                    "context_policy": ContextPolicy(mode="full"),
+                    "reflection": req.reflection,
+                }
+            )
+
         # Context and planning revisions are additive; the PydanticAI backend needs 1.4 last.
         if req.runtime_backend == "pydantic_ai":
-            agent = agent.model_copy(update={"schema_version": "1.4"})
+            agent = agent.model_copy(
+                update={"schema_version": "1.5" if req.reflection is not None else "1.4"}
+            )
 
         # 3. Assemble components
         environment: Environment
@@ -739,7 +982,7 @@ class EpisodeService:
 
         # 4. Execute episode
         episode_id = uuid4()
-        if req.provider == "fake":
+        if req.provider == "fake" and self._sqlite_store is None:
             self._save_fake_scenario(episode_id, req.scenario or "success")
         artifact = await run_checkpointed_episode(
             agent,
@@ -752,21 +995,437 @@ class EpisodeService:
             fake_scenario=(req.scenario or "success") if req.provider == "fake" else None,
             on_event=on_event,
             episode_id=episode_id,
+            store=self._episode_store,
         )
         return artifact
 
+    async def _execute_gridworld_episode(
+        self,
+        req: CreateEpisodeRequest,
+        on_event: Callable[[TraceEvent], None] | None,
+    ) -> EpisodeArtifact:
+        """Run one frozen Fake or explicitly approved real GridWorld Episode."""
+        task = self._get_gridworld_task(req.task_id)
+        scenario: str | None = None
+        if req.provider == "fake":
+            scenario = req.scenario or "success"
+            provider: ModelProvider = GridWorldFakeProvider(scenario, task_name=task.name)
+            agent = self._gridworld_agent(max_actions=task.max_steps)
+        else:
+            if (
+                req.provider != "aihubmix"
+                or req.model not in GRIDWORLD_ALLOWED_MODEL_IDS
+                or not is_model_permitted(req.model, self._configured_model_ids())
+            ):
+                raise ValueError("GridWorld real model is not approved by server configuration")
+            await asyncio.to_thread(self._require_live_model, req.model)
+            gallery_v3 = (
+                task.name == GRIDWORLD_GALLERY_TASK_NAME
+                and req.max_steps is None
+                and req.max_execution_time_ms is None
+            )
+            task, agent = self._gridworld_real_configuration(task, req.model, gallery_v3=gallery_v3)
+            provider = self._gridworld_real_provider(gallery_v3=gallery_v3)
+        episode_id = uuid4()
+        if self._sqlite_store is None and req.provider == "fake":
+            self._save_fake_scenario(episode_id, scenario or "success")
+        return await self._run_gridworld(
+            task,
+            agent,
+            self._gridworld_run_config(),
+            provider,
+            episode_id,
+            scenario=scenario,
+            on_event=on_event,
+        )
+
+    def _gridworld_real_configuration(
+        self, task: TaskSpec, model: str, *, gallery_v3: bool
+    ) -> tuple[TaskSpec, AgentSpec]:
+        task = self._gridworld_real_budget_task(task, gallery_v3=gallery_v3)
+        GridWorldEnvironment._validate_task(task)
+        agent = self._gridworld_agent(
+            provider="aihubmix",
+            model=model,
+            max_actions=task.max_steps,
+            max_time_ms=GRIDWORLD_GALLERY_REAL_MAX_TIME_MS if gallery_v3 else 300_000,
+        )
+        if task.name == GRIDWORLD_GALLERY_TASK_NAME:
+            agent = agent.model_copy(
+                update={
+                    "schema_version": "1.2",
+                    "context_policy": ContextPolicy(mode="recent_tool_rounds", max_tool_rounds=2),
+                }
+            )
+        return task, agent
+
+    @staticmethod
+    def _gridworld_real_provider(*, gallery_v3: bool) -> ModelProvider:
+        if gallery_v3:
+            return AIHubMixModelProvider(timeout=60.0, min_request_interval=13.0)
+        return AIHubMixModelProvider(min_request_interval=13.0)
+
+    @staticmethod
+    def _gridworld_run_config() -> RunConfig:
+        return RunConfig(
+            seed=1,
+            environment_version=GRIDWORLD_ENVIRONMENT_VERSION,
+            runtime_version=runtime_version("handwritten"),
+        )
+
+    async def _run_gridworld(
+        self,
+        task: TaskSpec,
+        agent: AgentSpec,
+        run_config: RunConfig,
+        provider: ModelProvider,
+        episode_id: UUID,
+        *,
+        scenario: str | None = None,
+        on_event: Callable[[TraceEvent], None] | None = None,
+    ) -> EpisodeArtifact:
+        environment = GridWorldEnvironment()
+        return await run_checkpointed_episode(
+            agent,
+            task,
+            run_config,
+            create_runtime(agent, provider, environment._validator),
+            environment,
+            GridWorldKeyDoorEvaluator(),
+            self.artifacts_dir,
+            fake_scenario=scenario,
+            on_event=on_event,
+            episode_id=episode_id,
+            store=self._episode_store,
+        )
+
+    def _batch_path(self, batch_id: UUID) -> Path:
+        return self.artifacts_dir / "gridworld-batches" / f"{batch_id}.json"
+
+    def _save_gridworld_batch(self, plan: BatchPlan) -> None:
+        write_text_atomically(self._batch_path(plan.batch_id), plan.model_dump_json())
+
+    async def start_gridworld_batch(self) -> BatchView:
+        """Freeze four episodes under the same settings before any inference."""
+        async with self._gridworld_batch_lock:
+            if self._sqlite_store is None:
+                raise ValueError("四模型批次需要启用 SQLite")
+            if self._gridworld_batch is not None and not self._gridworld_batch.done():
+                raise ValueError("已有 GridWorld 批次正在运行")
+            configured = self._configured_model_ids()
+            if any(not is_model_permitted(model, configured) for model in MODELS):
+                raise ValueError("四个固定模型尚未全部加入本地允许列表")
+            available = await asyncio.to_thread(self._batch_available_models)
+            if not available:
+                raise ValueError("四个固定模型当前均不可用")
+            source = self._get_gridworld_task(GRIDWORLD_GALLERY_TASK_NAME)
+            task, base_agent = self._gridworld_real_configuration(
+                source, MODELS[0], gallery_v3=True
+            )
+            config = self._gridworld_run_config()
+            plan = BatchPlan(
+                batch_id=uuid4(),
+                created_at=datetime.now(UTC),
+                task=task.name,
+                task_version=task.version,
+                configuration_key=planned_comparison_key(base_agent, task, config),
+                seed=config.seed,
+                max_steps=task.max_steps,
+                input_threshold=task.token_budget,
+                output_per_call=GRIDWORLD_REAL_MAX_OUTPUT_TOKENS,
+                timeout_ms=GRIDWORLD_GALLERY_REAL_MAX_TIME_MS,
+                context_rounds=2,
+                runs=(
+                    BatchRun(model=MODELS[0], episode_id=uuid4()),
+                    BatchRun(model=MODELS[1], episode_id=uuid4()),
+                    BatchRun(model=MODELS[2], episode_id=uuid4()),
+                    BatchRun(model=MODELS[3], episode_id=uuid4()),
+                ),
+            )
+            await asyncio.to_thread(self._save_gridworld_batch, plan)
+            self._gridworld_batch_id = plan.batch_id
+            self._gridworld_batch = asyncio.create_task(
+                self._execute_gridworld_batch(plan, available, task, base_agent, config)
+            )
+            return self._batch_view(plan, running=True)
+
+    def _batch_available_models(self) -> set[str]:
+        available = set()
+        for model in MODELS:
+            try:
+                self._require_live_model(model)
+            except ValueError:
+                continue
+            available.add(model)
+        return available
+
+    async def _execute_gridworld_batch(
+        self,
+        plan: BatchPlan,
+        available: set[str],
+        task: TaskSpec,
+        base_agent: AgentSpec,
+        config: RunConfig,
+    ) -> None:
+        def update(index: int, state: Literal["started", "unavailable", "error"]) -> BatchPlan:
+            runs = list(plan.runs)
+            runs[index] = runs[index].model_copy(update={"state": state})
+            return plan.model_copy(update={"runs": tuple(runs)})
+
+        try:
+            for index, run in enumerate(plan.runs):
+                if run.model not in available:
+                    plan = update(index, "unavailable")
+                    await asyncio.to_thread(self._save_gridworld_batch, plan)
+                    continue
+                plan = update(index, "started")
+                await asyncio.to_thread(self._save_gridworld_batch, plan)
+                agent = base_agent.model_copy(
+                    update={
+                        "name": f"GridWorld Key Door {run.model}",
+                        "model": base_agent.model.model_copy(update={"model": run.model}),
+                    }
+                )
+                try:
+                    await self._run_gridworld(
+                        task,
+                        agent,
+                        config,
+                        self._gridworld_real_provider(gallery_v3=True),
+                        run.episode_id,
+                    )
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "GridWorld batch Episode could not be saved"
+                    )
+                    plan = update(index, "error")
+                    await asyncio.to_thread(self._save_gridworld_batch, plan)
+        except OSError:
+            logging.getLogger(__name__).exception("GridWorld batch manifest could not be saved")
+
+    def _batch_view(self, plan: BatchPlan, *, running: bool) -> BatchView:
+        rows: list[BatchResult] = []
+        for run in plan.runs:
+            status: Literal[
+                "queued",
+                "running",
+                "completed",
+                "failed",
+                "unavailable",
+                "error",
+                "interrupted",
+                "not_started",
+            ]
+            row = None
+            if run.state == "queued":
+                status = "queued" if running else "not_started"
+            elif run.state in ("unavailable", "error"):
+                status = run.state
+            else:
+                try:
+                    artifact = self.get_episode(run.episode_id)
+                    if artifact is None:
+                        status = "running" if running else "interrupted"
+                    elif (
+                        artifact.agent.model.model != run.model
+                        or comparison_key(artifact) != plan.configuration_key
+                    ):
+                        status = "error"
+                    else:
+                        row = self._gridworld_comparison_row(artifact)
+                        status = "completed" if row.success else "failed"
+                except (OSError, ValueError):
+                    status = "error"
+            rows.append(
+                BatchResult(model=run.model, episode_id=run.episode_id, status=status, row=row)
+            )
+        return BatchView(
+            **plan.model_dump(exclude={"runs", "configuration_key"}), running=running, runs=rows
+        )
+
+    def gridworld_batches(self) -> BatchList:
+        """Read saved batch outcomes without scheduling new work."""
+        running_id = (
+            self._gridworld_batch_id
+            if (self._gridworld_batch is not None and not self._gridworld_batch.done())
+            else None
+        )
+        items: list[BatchView] = []
+        skipped = 0
+        # ponytail: scan local manifests; use a storage index if batch history outgrows a directory.
+        plans = []
+        for path in (self.artifacts_dir / "gridworld-batches").glob("*.json"):
+            try:
+                plan = BatchPlan.model_validate_json(path.read_text(encoding="utf-8"))
+                if path.stem != str(plan.batch_id):
+                    raise ValueError("Batch ID mismatch")
+                plans.append(plan)
+            except (OSError, ValueError):
+                skipped += 1
+        plans.sort(key=lambda plan: plan.created_at, reverse=True)
+        for plan in plans[:20]:
+            items.append(self._batch_view(plan, running=plan.batch_id == running_id))
+        return BatchList(items=items, skipped_count=skipped)
+
     def get_episode(self, episode_id: UUID) -> EpisodeArtifact | None:
-        """Strictly read previously saved artifact from disk without invoking any model."""
+        """Read the authoritative DB result or one unchanged legacy JSON artifact."""
+        stored = self._episode_store.load_completed(episode_id)
         target_file = self.artifacts_dir / f"{episode_id}.json"
-        if not target_file.is_file():
-            return None
-        artifact = read_artifact(target_file)
-        if artifact.episode.episode_id != episode_id:
+        legacy = read_artifact(target_file) if target_file.is_file() else None
+        if legacy is not None and legacy.episode.episode_id != episode_id:
             raise ValueError("Episode file ID mismatch")
-        return artifact
+        if stored is not None and legacy is not None and stored != legacy:
+            raise ValueError("Episode storage sources conflict")
+        if self._sqlite_store is not None and self._sqlite_store.status(episode_id) == "checkpoint":
+            if legacy is not None:
+                raise ValueError("Episode storage sources conflict")
+            return None
+        return stored or legacy
+
+    def gridworld_comparison(self) -> GridWorldComparisonResponse:
+        """Index validated recent GridWorld results by their saved comparison settings."""
+        rows: list[GridWorldComparisonRow] = []
+        skipped = 0
+        if self._sqlite_store is None:
+            return GridWorldComparisonResponse(items=rows, skipped_count=skipped)
+        for episode_id in self._sqlite_store.recent_completed_ids(
+            GRIDWORLD_ENVIRONMENT_VERSION, limit=100
+        ):
+            try:
+                artifact = self.get_episode(episode_id)
+                if artifact is None:
+                    raise ValueError("Saved run unavailable")
+                rows.append(self._gridworld_comparison_row(artifact))
+            except (OSError, ValueError):
+                skipped += 1
+        return GridWorldComparisonResponse(items=rows, skipped_count=skipped)
+
+    @staticmethod
+    def _gridworld_comparison_row(artifact: EpisodeArtifact) -> GridWorldComparisonRow:
+        episode, agent = artifact.episode, artifact.agent
+        events = artifact.events
+        if not events or events[0].event_type != "EPISODE_STARTED":
+            raise ValueError("Run is missing its start event")
+        usage = episode.token_usage
+        complete = complete_usage(artifact)
+        reported = bool(
+            complete
+            or usage.prompt_tokens
+            or usage.completion_tokens
+            or any(event.event_type == "MODEL_RESPONDED" for event in events)
+        )
+        metrics = artifact.evaluation.metrics
+        actions, rejected = (
+            metrics.get("environment_action_count"),
+            metrics.get("illegal_action_count"),
+        )
+        return GridWorldComparisonRow(
+            episode_id=episode.episode_id,
+            started_at=events[0].timestamp,
+            comparison_key=comparison_key(artifact),
+            task_name=artifact.task.name,
+            task_version=artifact.task.version,
+            seed=artifact.run_config.seed,
+            model_id=agent.model.model,
+            provider=agent.model.provider,
+            context_rounds=agent.context_policy.max_tool_rounds if agent.context_policy else None,
+            max_steps=artifact.task.max_steps,
+            token_budget=artifact.task.token_budget,
+            max_execution_time_ms=agent.budget.max_execution_time_ms,
+            success=artifact.evaluation.success,
+            termination=episode.termination_reason,
+            detail=episode.detail,
+            actions=actions if type(actions) is int else None,
+            illegal_actions=rejected if type(rejected) is int else None,
+            duration_ms=episode.duration_ms,
+            input_tokens=usage.prompt_tokens if reported else None,
+            output_tokens=usage.completion_tokens if reported else None,
+            usage_complete=complete,
+        )
+
+    def _pair_sources(self, pair: tuple[UUID, UUID]) -> tuple[EpisodeArtifact, EpisodeArtifact]:
+        a, b = (self.get_episode(episode_id) for episode_id in pair)
+        if a is None or b is None:
+            raise FileNotFoundError("找不到两条已完成的运行记录")
+        return a, b
+
+    async def create_gridworld_review(self, req: CreateGridWorldReviewRequest) -> PairReview:
+        """Check both sources and persist the result of one explicit Judge call."""
+        store = self._sqlite_store
+        if store is None:
+            raise ValueError("当前运行模式未启用 SQLite 评审保存")
+        pair = ordered_pair(*req.episode_ids)
+        a, b = await asyncio.to_thread(self._pair_sources, pair)
+        data = build_pair_input(a, b)
+        if req.judge_model.casefold() in {
+            a.agent.model.model.casefold(),
+            b.agent.model.model.casefold(),
+        }:
+            raise ValueError("请选择不同于两局参评模型的评审模型")
+        provider, config = await self._live_judge(req.judge_model, timeout=60.0)
+        review = await judge_pair(a, b, data, provider, config)
+        await asyncio.to_thread(store.save_pair_review, review)
+        return review
+
+    def list_gridworld_reviews(
+        self, episode_a: UUID, episode_b: UUID
+    ) -> GridWorldReviewListResponse:
+        """Return the pair's saved reviews after rechecking both frozen sources."""
+        pair = ordered_pair(episode_a, episode_b)
+        if self._sqlite_store is None:
+            return GridWorldReviewListResponse(reviews=[], skipped_count=0)
+        reviews, skipped = self._sqlite_store.pair_reviews(pair)
+        if not reviews:
+            return GridWorldReviewListResponse(reviews=[], skipped_count=skipped)
+        try:
+            a, b = self._pair_sources(pair)
+            source_hashes = (content_hash(a), content_hash(b))
+            key = comparison_key(a)
+        except (OSError, ValueError):
+            return GridWorldReviewListResponse(reviews=[], skipped_count=skipped + len(reviews))
+        checked = []
+        for review in reviews:
+            try:
+                data = build_pair_input(a, b, review.prompt_version)
+                if (
+                    review.source_hashes != source_hashes
+                    or review.review_input_hash != content_hash(data)
+                    or review.comparison_key != key
+                    or review.judge_model.casefold()
+                    in {a.agent.model.model.casefold(), b.agent.model.model.casefold()}
+                ):
+                    raise ValueError("Pair review source mismatch")
+                if review.output:
+                    verify_citations(review.output, data)
+                checked.append(review)
+            except ValueError:
+                skipped += 1
+        return GridWorldReviewListResponse(reviews=checked, skipped_count=skipped)
 
     def _review_path(self, review_id: UUID) -> Path:
         return self.artifacts_dir / "reviews" / f"{review_id}.json"
+
+    async def _live_judge(
+        self, model: str, *, timeout: float = 30.0
+    ) -> tuple[ModelProvider, ModelConfig]:
+        if not is_model_permitted(model, self._configured_model_ids()):
+            raise ValueError("所选评审模型不在后端允许列表中")
+        await asyncio.to_thread(self._require_live_model, model)
+        return (
+            AIHubMixModelProvider(
+                timeout=timeout,
+                min_request_interval=13.0,
+                reasoning_split=True if "minimax" in model.lower() else None,
+            ),
+            ModelConfig(
+                schema_version="1.1",
+                tool_call_mode="single",
+                provider="aihubmix",
+                model=model,
+                temperature=0.0,
+                max_tokens=4096,
+            ),
+        )
 
     @staticmethod
     def _fake_judge_provider(scenario: str) -> ModelProvider:
@@ -818,20 +1477,8 @@ class EpisodeService:
             if len(review_input.model_dump_json().encode("utf-8")) > 65536:
                 raise ValueError("评审输入超过65536字节，本次未发送模型请求")
             assert req.judge_model is not None
-            if not is_model_permitted(req.judge_model, self._configured_model_ids()):
-                raise ValueError("所选评审模型不在后端允许列表中")
-            await asyncio.to_thread(self._require_live_model, req.judge_model)
-            artifact = await create_judge_review(
-                episode,
-                AIHubMixModelProvider(
-                    timeout=30.0,
-                    min_request_interval=13.0,
-                    reasoning_split=True if "minimax" in req.judge_model.lower() else None,
-                ),
-                ModelConfig(
-                    provider="aihubmix", model=req.judge_model, temperature=0.0, max_tokens=800
-                ),
-            )
+            provider, config = await self._live_judge(req.judge_model)
+            artifact = await create_judge_review(episode, provider, config)
         else:
             scenario = req.judge_scenario or "success"
             artifact = await create_judge_review(
@@ -839,20 +1486,36 @@ class EpisodeService:
                 self._fake_judge_provider(scenario),
                 ModelConfig(provider="fake", model="fake-judge-v1"),
             )
-        write_review(artifact, self._review_path(artifact.review_id))
+        if self._sqlite_store is not None:
+            if self._review_path(artifact.review_id).exists():
+                raise ValueError("Review storage sources conflict")
+            self._sqlite_store.save_review(artifact)
+        else:
+            write_review(artifact, self._review_path(artifact.review_id))
         return artifact
 
     def get_episode_review(self, review_id: UUID) -> EpisodeReviewArtifact | None:
         """Read one review and verify its source Episode still matches."""
-        path = self._review_path(review_id)
-        if not path.is_file():
+        review = self._load_review_record(review_id)
+        if review is None:
             return None
-        review = read_review(path)
-        if review.review_id != review_id:
-            raise ValueError("Review file ID mismatch")
         episode = self.get_episode(review.episode_id)
         if episode is None or content_hash(episode) != review.episode_content_hash:
             raise ValueError("Reviewed Episode source mismatch")
+        return review
+
+    def _load_review_record(self, review_id: UUID) -> EpisodeReviewArtifact | None:
+        """Read one review identity before deciding whether its source is relevant."""
+        path = self._review_path(review_id)
+        stored = self._sqlite_store.load_review(review_id) if self._sqlite_store else None
+        legacy = read_review(path) if path.is_file() else None
+        if stored is not None and legacy is not None and stored != legacy:
+            raise ValueError("Review storage sources conflict")
+        review = stored or legacy
+        if review is None:
+            return None
+        if review.review_id != review_id:
+            raise ValueError("Review ID mismatch")
         return review
 
     def list_episode_reviews(self, episode_id: UUID) -> tuple[EpisodeReviewArtifact, ...]:
@@ -860,34 +1523,98 @@ class EpisodeService:
         if self.get_episode(episode_id) is None:
             raise FileNotFoundError("Reviewed Episode does not exist")
         reviews: list[EpisodeReviewArtifact] = []
-        for path in (self.artifacts_dir / "reviews").glob("*.json"):
-            review = self.get_episode_review(UUID(path.stem))
-            if review is not None and review.episode_id == episode_id:
-                reviews.append(review)
+        ids = {UUID(path.stem) for path in (self.artifacts_dir / "reviews").glob("*.json")}
+        if self._sqlite_store is not None:
+            ids.update(self._sqlite_store.review_ids())
+        for review_id in ids:
+            review = self._load_review_record(review_id)
+            if review is None:
+                raise ValueError("Review disappeared")
+            if review.episode_id == episode_id:
+                checked = self.get_episode_review(review_id)
+                if checked is not None:
+                    reviews.append(checked)
         return tuple(sorted(reviews, key=lambda item: (item.created_at, str(item.review_id))))
 
+    def list_episode_reviews_partial(
+        self, episode_id: UUID
+    ) -> tuple[tuple[EpisodeReviewArtifact, ...], int]:
+        """Return validated target reviews and the number of unreadable files."""
+        if self.get_episode(episode_id) is None:
+            raise FileNotFoundError("Reviewed Episode does not exist")
+        reviews: list[EpisodeReviewArtifact] = []
+        unreadable = 0
+        directory = self.artifacts_dir / "reviews"
+        paths = list(directory.glob("*.json")) if directory.exists() else []
+        ids: set[UUID] = set()
+        for path in paths:
+            try:
+                ids.add(UUID(path.stem))
+            except ValueError:
+                unreadable += 1
+        if self._sqlite_store is not None:
+            ids.update(self._sqlite_store.review_ids())
+        if not ids and unreadable == 0:
+            return (), 0
+        for review_id in ids:
+            try:
+                review = self._load_review_record(review_id)
+                if review is None:
+                    raise ValueError("Review disappeared")
+                if review.episode_id == episode_id:
+                    checked = self.get_episode_review(review_id)
+                    if checked is None:
+                        raise ValueError("Review disappeared")
+                    reviews.append(checked)
+            except (OSError, ValueError):
+                unreadable += 1
+        return tuple(
+            sorted(reviews, key=lambda item: (item.created_at, str(item.review_id)))
+        ), unreadable
+
     def resumable_episode_ids(self) -> list[UUID]:
-        """Show only unfinished checkpoints saved before this API instance started."""
+        """Show prior DB checkpoints and unchanged legacy file checkpoints."""
         store = CheckpointStore(self.artifacts_dir / "checkpoints")
-        result: list[UUID] = []
+        result = (
+            self._sqlite_store.checkpoint_ids(before_ns=self._started_ns)
+            if self._sqlite_store is not None
+            else []
+        )
+        if self._sqlite_store is not None:
+            resumable: list[UUID] = []
+            for episode_id in result:
+                checkpoint = self._sqlite_store.load_checkpoint(episode_id)
+                if (self.artifacts_dir / f"{episode_id}.json").exists():
+                    raise ValueError("Episode storage sources conflict")
+                if self._checkpoint_supports_resume(checkpoint):
+                    resumable.append(episode_id)
+            result = resumable
         for path in store.directory.glob("*.json"):
             try:
                 episode_id = UUID(path.stem)
-                store.load(episode_id)
+                if self._sqlite_store is not None and self._sqlite_store.status(episode_id):
+                    raise ValueError("Episode storage sources conflict")
+                checkpoint = store.load(episode_id)
                 final_path = self.artifacts_dir / f"{episode_id}.json"
                 if final_path.is_file():
-                    try:
-                        completed = read_completed_episode(episode_id, self.artifacts_dir)
-                    except ValueError:
-                        pass
-                    else:
-                        if completed is not None:
-                            continue
+                    completed = read_completed_episode(episode_id, self.artifacts_dir)
+                    if completed is not None:
+                        continue
+                if not self._checkpoint_supports_resume(checkpoint):
+                    continue
                 if path.stat().st_mtime_ns < self._started_ns and episode_id not in self._resuming:
                     result.append(episode_id)
-            except (ValueError, OSError):
-                continue
+            except (ValueError, OSError) as exc:
+                raise ValueError("Saved Episode records are invalid or unavailable") from exc
         return sorted(result)
+
+    @staticmethod
+    def _checkpoint_supports_resume(checkpoint: EpisodeCheckpoint) -> bool:
+        """Real GridWorld runs are intentionally new-Episode-only in this release."""
+        return not (
+            checkpoint.run_config.environment_version == GRIDWORLD_ENVIRONMENT_VERSION
+            and checkpoint.agent.model.provider != "fake"
+        )
 
     async def resume_episode(self, episode_id: UUID) -> EpisodeArtifact:
         """Restore a prior API instance's unfinished ToolLab episode."""
@@ -901,15 +1628,28 @@ class EpisodeService:
 
     async def _resume_episode_once(self, episode_id: UUID) -> EpisodeArtifact:
         """Assemble the saved provider and continue one claimed Episode."""
-        checkpoint = CheckpointStore(self.artifacts_dir / "checkpoints").load(episode_id)
+        store: EpisodeStore = self._episode_store
+        if self._sqlite_store is None or self._sqlite_store.status(episode_id) is None:
+            store = CheckpointStore(self.artifacts_dir / "checkpoints")
+        checkpoint = store.load_checkpoint(episode_id)
+        if not self._checkpoint_supports_resume(checkpoint):
+            raise ValueError("Real GridWorld Episodes can only be started as new runs")
         if checkpoint.agent.model.provider == "fake":
             scenario = checkpoint.fake_scenario or "success"
             if scenario not in ALLOWED_FAKE_SCENARIOS:
                 raise ValueError("Unsupported saved Fake scenario")
-            provider: ModelProvider = FakeModelProvider(
-                scenario=scenario,
-                initial_call_count=checkpoint.session.budget.model_call_count,
-            )
+            provider: ModelProvider
+            if checkpoint.run_config.environment_version == GRIDWORLD_ENVIRONMENT_VERSION:
+                provider = GridWorldFakeProvider(
+                    scenario=scenario,
+                    initial_call_count=checkpoint.session.budget.model_call_count,
+                    task_name=checkpoint.task.name,
+                )
+            else:
+                provider = FakeModelProvider(
+                    scenario=scenario,
+                    initial_call_count=checkpoint.session.budget.model_call_count,
+                )
         else:
             model_id = checkpoint.agent.model.model
             if not is_model_permitted(model_id, self._configured_model_ids()):
@@ -927,13 +1667,24 @@ class EpisodeService:
             environment,
             evaluator,
             self.artifacts_dir,
+            store=store,
         )
 
     def _saved_environment(
         self, task: TaskSpec, environment_version: str, tool_set_version: str = "v1.0.0"
     ) -> tuple[Environment, ToolValidator, Evaluator]:
         """Reconstruct one pinned environment for resume or explicit rerun."""
-        if environment_version == "bfcl-adapted-single-call-v1":
+        environment: Environment
+        validator: ToolValidator
+        evaluator: Evaluator
+        if environment_version == GRIDWORLD_ENVIRONMENT_VERSION:
+            if self._get_gridworld_task(task.name) != task:
+                raise ValueError("GridWorld source changed since the original Episode")
+            gridworld = GridWorldEnvironment()
+            environment = gridworld
+            validator = gridworld._validator
+            evaluator = GridWorldKeyDoorEvaluator()
+        elif environment_version == "bfcl-adapted-single-call-v1":
             suite = task.evaluator_config.get("suite")
             adapter = self.bfcl_java if suite == "bfcl_java_adapted" else self.bfcl
             case, loaded_task = adapter.case_for_task(task.name)
@@ -945,9 +1696,9 @@ class EpisodeService:
             if expected_task != task:
                 raise ValueError("BFCL source changed since the original Episode")
             bfcl_environment = BFCLEnvironment(case)
-            environment: Environment = bfcl_environment
+            environment = bfcl_environment
             validator = bfcl_environment.validator
-            evaluator: Evaluator = BFCLEvaluator()
+            evaluator = BFCLEvaluator()
         elif environment_version == "tool-lab-mcp-v1":
             environment = MCPToolLabEnvironment(
                 MCP_DISCONNECTED_URL if task.initial_state.get("mcp_disconnect") else None,
@@ -971,6 +1722,11 @@ class EpisodeService:
 
     def _saved_fake_scenario(self, episode_id: UUID) -> str:
         """Recover a Fake scenario from saved single-run or paired provenance."""
+        if self._sqlite_store is not None and self._sqlite_store.status(episode_id) is not None:
+            scenario = self._sqlite_store.fake_scenario(episode_id)
+            if scenario not in ALLOWED_FAKE_SCENARIOS:
+                raise ValueError("Saved Fake scenario is unavailable")
+            return str(scenario)
         input_path = self.artifacts_dir / "episode-inputs" / f"{episode_id}.json"
         if input_path.is_file():
             data = json.loads(input_path.read_text(encoding="utf-8"))
@@ -1004,12 +1760,21 @@ class EpisodeService:
         source = self.get_episode(episode_id)
         if source is None:
             raise FileNotFoundError("Source Episode not found")
+        if (
+            source.run_config.environment_version == GRIDWORLD_ENVIRONMENT_VERSION
+            and source.agent.model.provider != "fake"
+        ):
+            raise ValueError("Real GridWorld Episodes do not support rerun")
         if source.evaluation.success:
             raise ValueError("Only failed Episodes may be rerun")
         model = source.agent.model
         if model.provider == "fake":
             scenario = self._saved_fake_scenario(episode_id)
-            provider: ModelProvider = FakeModelProvider(scenario=scenario)
+            provider: ModelProvider = (
+                GridWorldFakeProvider(scenario=scenario, task_name=source.task.name)
+                if source.run_config.environment_version == GRIDWORLD_ENVIRONMENT_VERSION
+                else FakeModelProvider(scenario=scenario)
+            )
         else:
             if not is_model_permitted(model.model, self._configured_model_ids()):
                 raise ValueError("Saved model is no longer permitted")
@@ -1020,7 +1785,7 @@ class EpisodeService:
             source.task, source.run_config.environment_version, source.agent.tool_set_version
         )
         rerun_id = uuid4()
-        if scenario is not None:
+        if scenario is not None and self._sqlite_store is None:
             self._save_fake_scenario(rerun_id, scenario)
         artifact = await run_checkpointed_episode(
             source.agent,
@@ -1032,6 +1797,7 @@ class EpisodeService:
             self.artifacts_dir,
             fake_scenario=scenario,
             episode_id=rerun_id,
+            store=self._episode_store,
         )
         lineage = {
             "schema_version": "1.0",
@@ -1159,13 +1925,13 @@ class EpisodeService:
         else:
             baseline_agent = baseline_agent.model_copy(
                 update={
-                    "schema_version": "1.1",
+                    "schema_version": _backend_revision(req.runtime_backend),
                     "runtime_backend": req.runtime_backend,
                 }
             )
             recovery_agent = recovery_agent.model_copy(
                 update={
-                    "schema_version": "1.1",
+                    "schema_version": _backend_revision(req.runtime_backend),
                     "runtime_backend": req.runtime_backend,
                 }
             )
@@ -1229,6 +1995,28 @@ class EpisodeService:
                     "planning": PlanningConfig(),
                 }
             )
+        if req.comparison_axis == "reflection":
+            if any(
+                t.evaluator_config.get("reflection_protocol") != "no-progress-revision-v1"
+                for t in tasks
+            ):
+                raise ValueError("Reflection challenge requires reflection tasks")
+            baseline_agent = baseline_agent.model_copy(
+                update={
+                    "schema_version": "1.5",
+                    "runtime_strategy": "handwritten",
+                    "context_policy": ContextPolicy(mode="full"),
+                    "planning": None,
+                    "reflection": None,
+                }
+            )
+            recovery_agent = baseline_agent.model_copy(
+                update={
+                    "id": uuid4(),
+                    "name": f"{baseline_agent.name}-reflection",
+                    "reflection": ReflectionConfig(),
+                }
+            )
         tasks = [self._with_call_mode(t, req.tool_call_mode) for t in tasks]
         baseline_agent = self._agent_with_call_mode(baseline_agent, req.tool_call_mode)
         recovery_agent = self._agent_with_call_mode(recovery_agent, req.tool_call_mode)
@@ -1274,21 +2062,28 @@ class EpisodeService:
     ) -> ExperimentArtifact:
         """Persist a fixed plan and execute through the same path used by recovery."""
         plan = await self.prepare_experiment(req, experiment_id=job_id)
-        path = experiment_checkpoint_path(self.artifacts_dir, plan.experiment_id)
         if (
-            path.exists()
-            or (self.artifacts_dir / "experiments" / f"{plan.experiment_id}.json").exists()
+            self._load_experiment_plan(plan.experiment_id) is not None
+            or self.get_experiment(plan.experiment_id) is not None
         ):
             raise ValueError("Experiment ID already exists")
-        write_experiment_checkpoint(path, plan)
+        self._save_experiment_plan(plan)
         return await self._resume_experiment_once(plan.experiment_id, controlled=job_id is not None)
 
     def get_experiment(self, experiment_id: UUID) -> ExperimentArtifact | None:
         """Strictly read previously saved ExperimentArtifact from disk without invoking models."""
         target_file = self.artifacts_dir / "experiments" / f"{experiment_id}.json"
-        if not target_file.is_file():
+        stored = (
+            self._sqlite_store.load_experiment_result(experiment_id)
+            if self._sqlite_store is not None
+            else None
+        )
+        legacy = read_experiment(target_file) if target_file.is_file() else None
+        if stored is not None and legacy is not None and stored != legacy:
+            raise ValueError("Experiment storage sources conflict")
+        artifact = stored or legacy
+        if artifact is None:
             return None
-        artifact = read_experiment(target_file)
         if artifact.experiment_id != experiment_id:
             raise ValueError("Experiment file ID mismatch")
         if compute_config_hash(artifact.config) != artifact.config_hash:
@@ -1301,16 +2096,20 @@ class EpisodeService:
         """Summarize saved comparisons without invoking models or mixing score protocols."""
         items: list[ExperimentDashboardItem] = []
         skipped = 0
+        ids: set[UUID] = set()
         for path in (self.artifacts_dir / "experiments").glob("*.json"):
             try:
-                artifact = read_experiment(path)
-                if path.stem != str(artifact.experiment_id):
-                    raise ValueError("Experiment file ID mismatch")
-                if compute_config_hash(artifact.config) != artifact.config_hash:
-                    raise ValueError("Experiment configuration hash mismatch")
+                ids.add(UUID(path.stem))
+            except ValueError:
+                skipped += 1
+        if self._sqlite_store is not None:
+            ids.update(self._sqlite_store.experiment_ids())
+        for experiment_id in ids:
+            try:
+                artifact = self.get_experiment(experiment_id)
+                if artifact is None:
+                    raise ValueError("Experiment disappeared")
                 metrics = artifact.metrics
-                if metrics.total_pairs != len(artifact.pairs):
-                    raise ValueError("Experiment pair count mismatch")
                 try:
                     comparison_key = compute_config_hash(fixed_config(artifact))
                 except ValueError:
@@ -1363,36 +2162,68 @@ class EpisodeService:
     def resumable_experiment_ids(self) -> list[UUID]:
         """List only unfinished plans left by an earlier API instance."""
         directory = self.artifacts_dir / "experiments" / "checkpoints"
-        result: list[UUID] = []
+        result = (
+            self._sqlite_store.experiment_plan_ids(before_ns=self._started_ns)
+            if self._sqlite_store is not None
+            else []
+        )
         for path in directory.glob("*.json"):
             try:
                 experiment_id = UUID(path.stem)
+                if (
+                    self._sqlite_store is not None
+                    and self._sqlite_store.load_experiment_plan(experiment_id) is not None
+                ):
+                    raise ValueError("Experiment plan storage sources conflict")
+                plan = read_experiment_checkpoint(path)
+                if plan.experiment_id != experiment_id:
+                    raise ValueError("Experiment plan ID mismatch")
                 final_path = self.artifacts_dir / "experiments" / f"{experiment_id}.json"
                 if final_path.is_file():
-                    try:
-                        read_experiment(final_path)
-                    except ValueError:
-                        pass
-                    else:
-                        continue
+                    read_experiment(final_path)
+                    continue
                 if (
                     path.stat().st_mtime_ns < self._started_ns
                     and experiment_id not in self._resuming_experiments
                     and self.get_experiment_job(experiment_id) is None
                 ):
                     result.append(experiment_id)
-            except (ValueError, OSError):
-                continue
-        return sorted(result)
+            except (ValueError, OSError) as exc:
+                raise ValueError("Saved Experiment records are invalid or unavailable") from exc
+        checked: list[UUID] = []
+        for experiment_id in sorted(set(result)):
+            try:
+                checked_plan = self._load_experiment_plan(experiment_id)
+                if checked_plan is None or checked_plan.experiment_id != experiment_id:
+                    raise ValueError("Experiment plan ID mismatch")
+                if self.get_experiment(experiment_id) is not None:
+                    continue
+                if (
+                    experiment_id not in self._resuming_experiments
+                    and self.get_experiment_job(experiment_id) is None
+                ):
+                    checked.append(experiment_id)
+            except (ValueError, OSError) as exc:
+                raise ValueError("Saved Experiment records are invalid or unavailable") from exc
+        return checked
 
     def experiment_progress(self, experiment_id: UUID) -> ExperimentProgressResponse:
         """Inspect frozen local sources without executing or repairing anything."""
-        plan = read_experiment_checkpoint(
-            experiment_checkpoint_path(self.artifacts_dir, experiment_id)
-        )
+        plan = self._load_experiment_plan(experiment_id)
+        if plan is None:
+            raise FileNotFoundError("Experiment plan does not exist")
         if plan.experiment_id != experiment_id:
             raise ValueError("Experiment plan identity mismatch")
-        store = CheckpointStore(self.artifacts_dir / "checkpoints")
+        database_plan = (
+            self._sqlite_store.load_experiment_plan(experiment_id)
+            if self._sqlite_store is not None
+            else None
+        )
+        store: EpisodeStore = (
+            self._sqlite_store
+            if database_plan is not None and self._sqlite_store is not None
+            else CheckpointStore(self.artifacts_dir / "checkpoints")
+        )
         arms: list[ExperimentProgressArm] = []
         runs = [
             (task, seed, repeat)
@@ -1415,10 +2246,8 @@ class EpisodeService:
                     state="no_saved_record",
                 )
                 try:
-                    if (self.artifacts_dir / f"{episode_id}.json").exists():
-                        artifact = read_completed_episode(episode_id, self.artifacts_dir)
-                        if artifact is None:
-                            raise ValueError("Invalid saved result")
+                    artifact = store.load_completed(episode_id)
+                    if artifact is not None:
                         expected = {
                             "agent": content_hash(agent),
                             "task": content_hash(task),
@@ -1442,8 +2271,12 @@ class EpisodeService:
                                 "detail": artifact.episode.detail,
                             }
                         )
-                    elif store.path(episode_id).exists():
-                        saved = store.load(episode_id)
+                    else:
+                        try:
+                            saved = store.load_checkpoint(episode_id)
+                        except FileNotFoundError:
+                            saved = None
+                    if artifact is None and saved is not None:
                         if (
                             saved.agent != agent
                             or saved.task != task
@@ -1479,7 +2312,7 @@ class EpisodeService:
         job = self.get_experiment_job(experiment_id)
         if job is None or job.status not in {"paused", "interrupted", "queued", "running"}:
             raise ValueError("No paused or interrupted job exists")
-        if not experiment_checkpoint_path(self.artifacts_dir, experiment_id).is_file():
+        if self._load_experiment_plan(experiment_id) is None:
             raise ValueError("Experiment plan is unavailable")
         return await self._resume_experiment_once(experiment_id, controlled=True)
 
@@ -1489,9 +2322,14 @@ class EpisodeService:
         """Rebuild providers from a validated plan, preserving completed arms."""
         self._resuming_experiments.add(experiment_id)
         try:
-            state = read_experiment_checkpoint(
-                experiment_checkpoint_path(self.artifacts_dir, experiment_id)
+            database_plan = (
+                self._sqlite_store.load_experiment_plan(experiment_id)
+                if self._sqlite_store is not None
+                else None
             )
+            state = self._load_experiment_plan(experiment_id)
+            if state is None:
+                raise FileNotFoundError("Experiment plan does not exist")
             if state.experiment_id != experiment_id:
                 raise ValueError("Foreign experiment checkpoint")
             model = state.baseline_agent.model
@@ -1537,6 +2375,12 @@ class EpisodeService:
                 before_arm=(lambda: self._check_experiment_action(experiment_id))
                 if controlled
                 else None,
+                episode_store=(
+                    self._sqlite_store
+                    if database_plan is not None and self._sqlite_store is not None
+                    else CheckpointStore(self.artifacts_dir / "checkpoints")
+                ),
+                experiment_store=self._sqlite_store if database_plan is not None else None,
             )
         finally:
             self._resuming_experiments.discard(experiment_id)
