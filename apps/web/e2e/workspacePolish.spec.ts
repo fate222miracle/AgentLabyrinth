@@ -70,7 +70,10 @@ test('standby uses content height and experiment charts precede ID utilities', a
     await page.screenshot({ path: testInfo.outputPath(`standby-${width}.png`), fullPage: false });
   }
   await page.locator('#tab-experiment').click();
-  await expect(page.locator('.experiment-dashboard')).toBeVisible();
+  const charts = page.locator('.experiment-dashboard');
+  await expect(charts).toBeHidden();
+  await page.locator('.comparison-strategies > summary').click();
+  await expect(charts).toBeVisible();
   const positions = await page.evaluate(() => ({
     charts: document.querySelector('.experiment-dashboard')!.getBoundingClientRect().top + scrollY,
     archive: document.querySelector('.experiment-archive')!.getBoundingClientRect().top + scrollY,

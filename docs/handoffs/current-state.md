@@ -1,6 +1,14 @@
 # Current state
 
-更新：2026-11-13。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+更新：2026-11-16。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+
+## 2026-11-16 V0.4 单 Agent 阶段交付
+
+交付分支 `codex/v0.4-gridworld` 汇总两关 GridWorld、局部视野、三维回放、同配置四模型批次、双局 Judge 和本机 Blender MCP 演示。[演示启动与资产验证](../learning/blender-mcp-demo-20261111.md)。
+
+本机门禁已通过 826 项 Python、22 格回归零退化、54 项 Node、前端类型检查及构建，npm audit 为 0。Edge 首轮 93 通过、1 条旧断言失败（`8eb3c374-ea7c-427b-ae3e-ff02871d31ef`）。策略实验已默认折叠，更新回归后重跑该浏览器文件，3 条用例及代理身份检查全部通过。归档的角色 GLB 通过六段动作、15 个关节、根骨与发色校验，新增 Blender 演示脚本通过 Ruff 与 Mypy。
+
+双局真实 Judge 的既有超时和截断记录仍留档，本轮验证使用离线替身。远端 CI 由推送触发，以 GitHub 实际回执为准。
 
 ## 2026-11-13 双局 Judge 复用原版狐狸动画
 
