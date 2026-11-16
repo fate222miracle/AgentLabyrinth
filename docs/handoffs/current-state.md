@@ -1,6 +1,137 @@
 # Current state
 
-更新：2026-11-03。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+更新：2026-11-13。需求唯一来源：`docs/product/requirements.md` **V0.6**。不依赖历史聊天。
+
+## 2026-11-13 双局 Judge 复用原版狐狸动画
+
+等待区改为原版狐狸上移显形、五官显现和卷尾路径展开。现有生成器从同一原稿输出循环版，每次原动作后停留 670 ms。减少动效时使用静态标志。Edge 4 项、Web 类型检查和构建通过，另在 19922 预览以实际图片采样核对第二轮仍播放和减少动效时的静止画面。浏览器验证使用替身评审，未调用真实模型。
+
+## 2026-11-13 双局 Judge 等待与超时诊断
+
+用户两次评审失败均对应供应商 `REQUEST_TIMEOUT` 日志。双局请求超时从 30 秒调至 60 秒，新超时结果单独显示。提交后旧结果区由狐狸 Logo 等待动画替代，减少动效时用静态 Logo。返回后优先显示本次结果，旧记录收进默认折叠的历史区。70 项后端定向、8 项 Edge 定向及 Web 类型检查与构建通过。预览原三条评审回读一致，本轮未发真实评审请求。
+
+## 2026-11-13 四模型批次与 Judge 分析改进
+
+实验中心可显式启动回廊档案室的四模型串行批次，并只读查看各局状态、限定本批数据与选两局对比。新版双局 Judge 根据行动前的局部视野、探索增量和折返标记分析路线决策。初版评审仍可回查。实际验证、运行约束和操作步骤见集成工作区系统优化记录。
+
+## 2026-11-13 GridWorld 双局 Judge
+
+[ADR-050 第二阶段](../adr/ADR-050-gridworld-model-comparison.md#第二阶段-双局-judge) 已按负责人批准实施于集成工作区。实验中心在两张路线图下提供双局模型评审，按 A/B 公共轨迹分析并独立保存至 SQLite。74 项 Python、54 项 Web 单元、25 项 Edge 定向及前端构建通过。本地预览升级后原历史可读，真实历史的评审候选与只读回查已验证。实际真实评审由页面显式触发，开发未发真实 Judge。下一项为 ADR-050 第三阶段四模型批次。
+
+## 2026-11-13 GridWorld 模型对比第一阶段
+
+实验中心首页现读取 SQLite 最近 100 条完成的 GridWorld 运行，按保存配置分组，每个模型保留最新一局供选择。两局并排展示动作、拒绝、Token、耗时和公开路线，可进入原 3D 回放。策略实验收在同页可展开入口，旧详情地址保留。方案见 [ADR-050](../adr/ADR-050-gridworld-model-comparison.md)，验证和真实历史样本见[系统优化记录](../learning/system-optimization-log.md#2026-11-13-gridworld-模型对比)。双局 Judge 与同配置四模型批次待后续开发。本次未发模型推理或评审请求，未提交 Git。
+
+## 2026-11-12 GridWorld 首次推理超时
+
+第二关真实样本 8c425323-a39b-4f48-9041-88b68bdcb197 首次模型请求约 31 秒以 REQUEST_TIMEOUT 结束，未执行动作。第二关新真实默认配置的单次 AIHubMix HTTP 阈值由 30 秒调为 60 秒。旧用例先复现缺失参数，修正后 58 项离线检查及 Ruff、Mypy 通过。19922 已更新，原结果回读等值，真实上游表现待新样本。详情见[系统优化记录](../learning/system-optimization-log.md#首个模型请求超时)。
+
+## 2026-11-12 GridWorld 优化复测与日志
+
+GLM 5.3 Flash 第二关实跑输入降低 69.6%，停在 20 轮时离出口还剩 4 步。第二关的新真实默认配置放至 24 轮、330 秒，累计 Token 保持 160,000，新增公开行动提示。旧实现与新实现的 24 步回归、实际两局数据、验证及既有系统优化索引统一记录于 [系统优化记录](../learning/system-optimization-log.md)。19922 已更新，原失败记录回读等值。
+
+## 2026-11-12 回廊档案室真实上下文裁剪
+
+- [ADR-049](../adr/ADR-049-gridworld-loop-gallery.md) 新增外部方案比较及现有 ContextPolicy 复用说明。新建真实第二关使用最近两次完整工具轮次；最新公开观察包含已知格、位置、库存和可见目标。保留完整 Trace。新建第一关、Fake、旧历史与预算沿用原行为。
+- GLM 5.3 Flash 保存样本 3bd40bae-b2ac-4f7e-b3a0-2f6835e1b54a 离线重建 20 次 AIHubMix 消息体。完整 495,661 字节，两轮 132,486 字节，减少 73.3%。测量只计网关 JSON 消息体。原路线至少 21 轮。
+- 新用例在旧代码因缺少策略失败，接入后 111 Python、Ruff、Mypy、Web 类型检查和构建通过。19922 已更新，系统 Edge 确认第二关 GLM 配置展示两轮且选项操作零 POST。旧失败产物在服务重启前后回读等值。未新增真实推理。
+
+## 2026-11-12 回廊档案室 Blender 美术
+
+- 第二关采用沙岩地砖、青灰矮墙、铜边拱门、青釉门扇和出口灯环。参考《前进！奇诺比奥队长》的微缩关卡构图。按公开格逐一实例化 Blender 模块，坐标、遮挡、钥匙门规则与评分保持。第一关沿用原有道具。
+- 源码 scripts/blender_gallery_kit.py，沿用 blender_key_door_scene.py 的网格助手。本机 Blender 4.5.15 LTS 后台建模，GLB 86,272 字节、13 个根对象、24 个网格、2,164 三角面，重导入通过。可编辑工程在同级 AgentLabyrinth 的 artifacts/blender-mcp-demo/gallery-kit。
+- Ruff、Mypy、Web 类型与构建通过。独立 Edge 专项 4 项通过，验证旧 3D 舞台、二维回退、新道具加载、第二关 14 步通关及局部视野回放。截图证据 artifacts/playwright/75f81afc-3eb2-4cd4-b402-2a593b1d3f25。19922 预览已更新。
+- 需求 V0.6 §21 列出演示与交付物，课程任务卡只记约四个月，具体答辩日期待确认。现场先验笔记本启动、第一关真实记录和 Fake 备份，再安排投屏与录像。后续版本按 V0.5 MCP 工具资源、风险分级、人工审批与审计推进。
+
+## 2026-11-12 GridWorld 第二关「回廊档案室」
+
+- [ADR-049](../adr/ADR-049-gridworld-loop-gallery.md) 定义固定 9 × 7 地图、回廊探索任务、钥匙折返与开门后绕行。最短 14 个动作，经状态空间搜索验证；上限 20，原关 16。真实累计上限 160,000，单次输出 2,048，第二关累计输出 40,960。Fake 第二关累计总量 16,000。
+- 环境按任务绑定地图、各阶段最早动作计数、合法坐标和保存来源；公开 Trace 的形状沿用原契约。模型与三维舞台只看到已到达的局部观察。前端两关可选，复用原 Blender 资产。服务端入口是环境的 GRID_LAYOUTS、EpisodeService 的任务装配与 GridWorldKeyDoorEvaluator，Web 从 GridWorldMap 进入 GridWorldStage。
+- 59 Python、54 Node、6 Edge、Ruff、Mypy 定向 6 文件、类型检查与构建通过。Edge 浏览器截图见 artifacts/playwright/577da099-b8de-4626-8a6e-143bf5aceef3。Fake 验证 14 步通关、15 步撞墙后通关和 20 步上限。真实模型可选，第二关未发真实推理。19922 预览已切换到两关版本，旧真实 Episode e05472ff-140d-433f-8075-35249ba9d1fa 在重启前后回读等值。
+
+## 2026-11-12 GridWorld 真实三维运行
+
+- 按 ADR-047 增补开放真实运行预算。新建真实 Episode 冻结 temporary-real-160k-v2，累计 160,000、每次输出 2,048、累计输出 32,768，保留旧真实档案、Fake 预算与 16 轮 / 300 秒。
+- 正常 API 和隔离 SQLite 运行于 19921，前端 19922。目录返回四个可选真实型号。唯一真实请求链用 coding-minimax-m2.7-free，Episode e05472ff-140d-433f-8075-35249ba9d1fa，8 次请求、8 个动作通关，27144 + 245 Token、94.371 秒、网关费用未知。脚本结束后通过 GET 重开实际 Episode，确认三维终点 (5,2) 且历史无 POST。隔离记录目录 artifacts/gridworld-live-5e762c6e-821a-4db9-b718-b50aebfd5a52。
+- 55 Python、54 Node、5 Edge、Ruff、类型检查和生产构建通过。后端替身在 116,000 总量、单次 1,000 输出下通过，覆盖旧额度无法完成的情况。
+
+## 2026-11-12 GridWorld 三维舞台接入
+
+- 按 ADR-048 将尤诺最终 GLB 与 13 个 Blender 场景零件放入 `apps/web/public/gridworld/`。用同级 AgentLabyrinth 工作区的最终精修角色导出和 MCP 运行 `857457a0-3c2b-4c4e-ad52-9947920f42e4` 中的钥匙门工程。Three.js 0.180.0 仅在三维舞台按需加载。
+- `GridWorldMap.tsx` 从已到达的公开投影取状态，`gridWorldMotion.ts` 识别被接受且发生相应变化的动作，`gridWorldScene.ts` 在浏览器播放骨骼和物件动画。即时场景、历史自动播放、跳转、缩减动效与二维回退共享同一公开事件前缀。GridWorld 完成时保留当前舞台视口。
+- 构建、类型检查、54 项 Node 检查、11 项 Edge 定向检查通过。Edge 证据目录 `artifacts/playwright/a09e4755-362e-4c25-97cd-1c69479a6e69/`。Chrome 默认通道在本机无 Playwright Chromium，改用系统 Edge。npm 审计安装回执为 0 漏洞。真实模型请求路径使用本地替身验证，未产生真实推理。
+- [隔离 Fake 预览](http://127.0.0.1:19912/gridworld) 使用 API 19911。默认路线可体验通关，选择「先撞墙再通关」可核对规则拒绝。普通浏览器运行直接读取站点内 GLB。源 Blender 工程保留在同级工作区的 `artifacts/blender-mcp-demo`。
+
+## 2026-11-09 V0.4 阶段 2/3：GridWorld Fake 实时闭环、SQLite 恢复与历史回读
+
+- 阶段 2、阶段 3 已按批准的 [ADR-045](../adr/ADR-045-gridworld-key-door-first-slice.md) / [ADR-046](../adr/ADR-046-gridworld-visibility-and-budget.md) 完成；GridWorld 首片不再有未完成的阶段任务。新增固定 Fake 行动序列、API SSE 单次运行与实时地图/规则拒绝视图；历史 Replay 严格按当前事件前缀显示，不从最终状态补过去。
+- 最终完整质量门禁 `uv --cache-dir .uv-cache run --locked python -m scripts.check` 退出 0。运行前设置 `AGENTLABYRINTH_E2E_API_PORT=19800`、`AGENTLABYRINTH_E2E_WEB_PORT=19801`、`AGENTLABYRINTH_E2E_PROXY_API_PORT=19800`、`AGENTLABYRINTH_E2E_CHANNEL=msedge` 和 `NODE_OPTIONS=--max-old-space-size=512`。实测：Ruff format/check 与 Mypy 通过（132 source files）；Python 804 passed（1 条既有 Starlette/AnyIO 弃用 warning）；回归 22 格/0 regressions；Fake-only context ablation；Web typecheck/build 通过；Node 53/53；Edge 88/88（4.9 分钟）；npm audit 0 vulnerabilities。早先全门禁重跑分别因已有 E2E 页面加载超时和 Node 子进程 OOM 失败；最终在清理本任务失败运行遗留的 API/Web 服务并显式设置 Node heap 后通过。
+- 质量产物：`artifacts/quality/df5a1047-17eb-4806-b509-4f40e4848cd9/`；回归报告 `578a797a-de20-4a9d-ac2b-28a58b0cd973`（2 格）、`0ad9114b-580a-43f9-8ce6-be366d7fe238`（8 格）、`c5859f89-00b9-4aa2-8034-8b2f157075b9`（8 格）、`91ff3f07-d6bf-4bcb-9e5e-371f88054b65`（4 格），均 0 regressions。Edge 浏览器运行 `artifacts/playwright/b54dc936-e4fd-4768-becd-1c5c3cdcdc68/`；5 个截图覆盖 1440×900、1280×720、768×1024、640×450、390×844。
+- 最终真实浏览器（Fake Provider）产物：通关 Episode `31dc89a1-a446-446a-8717-220ee8ed89a7`（8 轮/59 事件）；先撞墙再通关 `91366fc5-26a7-40c1-bdac-d71478d9676c`（9 轮/66 事件/1 次规则拒绝）；预算停止 `1335ac3e-75a9-4ab4-a245-74512622552d`（16 轮/115 事件）。Network 断言为每场一次 `POST /api/v1/episodes/stream`（200），历史详情/刷新为 `GET`（200），没有浏览器错误或历史导航 POST。
+- SQLite 跨进程测试分别在持钥匙（3 个动作）及门已打开（5 个动作）时从子进程 checkpoint 后退出，新 EpisodeService 从原 ID 恢复；预算不重置、Trace 只追加。新增 Runtime 恢复一致性检查：从私有快照重建 `public_state()` 后，与最后一份已保存的公开 Trace 投影比较；合法但被篡改且与 Trace 不一致的探索知识会被拒绝，避免历史/继续执行的 Agent 视图分叉。SQLite 完成产物及普通 GET 只包含公开最终状态。
+- 定向门禁 `uv --cache-dir .uv-cache run --locked python -m pytest tests/integration/test_gridworld_product.py tests/unit/test_gridworld_environment.py tests/contract -q`：158 passed（1 条同上警告）；Mypy 全仓 132 个源文件通过。源码阅读顺序、调用链、失败处理及限制见 [V0.4 GridWorld 学习交接](../learning/V0.4-gridworld-key-door-first-slice-20261109.md)；任务验收矩阵见 [V0.4 开发任务卡](../tasks/V0.4-gridworld-development-spec-20261105.md)。
+- 边界：Fake 只证明冻结规则、事件/存储/恢复机制，不证明真实模型规划收益；未接 GridWorld Experiment、未执行真实模型/Judge、未迁移旧历史、未做 GitHub 写操作或远端 CI。V0.4 GridWorld 首片现可交负责人体验检查；之后新能力按新任务/ADR 处理。
+
+## 2026-11-09 V0.4 首阶段：批准 ADR 并完成 GridWorld 环境契约
+
+- 负责人明确批准 [ADR-045](../adr/ADR-045-gridworld-key-door-first-slice.md) 与 [ADR-046](../adr/ADR-046-gridworld-visibility-and-budget.md)，按送审稿实施。两份 ADR 已改为 Accepted；执行顺序仍是环境契约 → Fake 实时 API/Web → SQLite 跨进程恢复，不把批准等同于后两阶段完成。
+- 新增 `key-door-001-v1` 固定地图夹具、GridWorld Environment 与确定性 Evaluator。环境使用严格任务元数据校验、七个单动作工具、四射线局部视野、最后已知格记忆、私有版本化快照和独立 Agent 可见投影；恢复校验钥匙/门/终态/动作数/当前视野/已知格，不用服务端全图补探索记忆。
+- `Environment.public_state()` 已成为必需 Port；ToolLab 显式保持旧 Replay 投影等值、MCP ToolLab 继承、BFCL 显式提供原 Agent 已见状态。Runtime checkpoint 继续私有 `snapshot()`，Observation/Trace 使用公开状态；Runner 只在权威评估后投影最终 Episode，Evaluator/公开投影失败时不把私有快照作为兜底。累计 Token 等值当前动作完成后停止下个请求；累计超限/单次 801 完整记账并拒绝动作。
+- 新增 [GridWorld 首片学习交接](../learning/V0.4-gridworld-key-door-first-slice-20261109.md) 与 [环境/预算契约测试](../../tests/unit/test_gridworld_environment.py)。定向测试：37 passed；兼容/预算/时限测试命令 `uv --cache-dir .uv-cache run --locked python -m pytest tests/contract tests/unit/test_budget_tracker.py tests/contract/test_execution_time.py -q`：126 passed；全仓库严格 Mypy：130 source files，无问题。
+- 完整门禁 `uv --cache-dir .uv-cache run --locked python -m scripts.check` 已退出 0：798 Python passed（1 条既有 Starlette/AnyIO 弃用 warning）、130 文件 Ruff format/check 和 Mypy 通过、Regression 22 格 0 regressions、Fake-only context ablation、Web typecheck/build、Node 53/53、系统 Edge 87/87（4.4 分钟）、npm audit 0 vulnerabilities。使用隔离端口 API 19500/Web 19501 与 `AGENTLABYRINTH_E2E_CHANNEL=msedge`；不是远端 CI，也不是 GridWorld API/Web 产品闭环验收。
+- 质量产物：`artifacts/quality/0835601d-3303-40a9-92ba-7dd4b278f91d/`；Playwright run `artifacts/playwright/0d12aa3c-981f-47bf-a53f-4f19a45647b8/`。四个回归报告 ID：`854a738e-eb21-4704-af42-3b3f67d9b8bc`、`abb8e383-692b-41f7-8e8c-0c2cb63bc990`、`b97a96f6-d44f-4e27-912d-c2d0dd0c4528`、`8f39cdeb-9c8a-4721-9518-2b0093ca4274`。
+- 剩余工作：阶段 2 Fake 单次 API/真实追加事件/实时 Web 与预算终止闭环；阶段 3 私有安全点 SQLite 恢复、跨进程与只读历史回读。当前没有 GridWorld Web/API Episode ID 或跨进程恢复证据。未调用真实模型/Judge，未做 GitHub 写操作、提交/推送、SQLite Schema 迁移或旧历史改写；所有既有未提交成果保留。
+
+## 2026-11-09 V0.4 规范修改：Token 边界与共享 Environment 兼容（批准前记录）
+
+- 当时负责人确认 V0.4 设计交付通过验收，要求先按两项验收意见修订 ADR-046，再把 ADR-045/046 一并审阅；后续已明确批准并完成首阶段。V0.3 整版已签收。
+- 修订 [ADR-046](../adr/ADR-046-gridworld-visibility-and-budget.md)：累计 Token 恰好达限时允许当前通过 Schema/权限验证的一个动作完成（包括规则内拒绝），随后不再发 Provider 请求；累计超限时完整记录用量并拒绝执行当前动作。单次 completion 801 同样完整记账但拒绝该动作；800 可执行。新增事件/动作计数验收例，避免继续请求与边界动作混淆。
+- 补齐共享 `Environment.public_state()` Port 兼容矩阵：ToolLab、MCP ToolLab、BFCL、测试 Stub/Mock 和执行时限子类；不提供默认 snapshot 回退。增加 public_state/工具/Evaluator/恢复失败注入要求，公开产物仅可用最后安全投影或空状态，禁止退回私有 checkpoint。
+- [ADR-045](../adr/ADR-045-gridworld-key-door-first-slice.md) 和 [V0.4 任务卡](../tasks/V0.4-gridworld-development-spec-20261105.md) 已同步上述边界。两份 ADR 后已批准；后续顺序为固定地图与 Environment 契约测试 → Fake 实时演示 → Replay/SQLite 跨进程恢复。
+- 当时仅做文档修改与定向契约核对；当时未修改源码，也未重跑完整质量门禁。真实模型/Judge、GitHub 写入/提交/推送和历史迁移均无授权，后续首阶段仍保持此边界。
+
+## 2026-11-05 V0.3 整版签收与 V0.4 规范准备
+
+- 负责人确认 **V0.3 整版已签收**。此前 2026-11-04 记录的“待体验/签收”是当时状态，保留作历史，不再作为当前阻塞。
+- 当前执行入口为 [V0.4 GridWorld 开发规范与首片任务卡](../tasks/V0.4-gridworld-development-spec-20261105.md)。已补 [ADR-046 可见状态隔离与首切片预算](../adr/ADR-046-gridworld-visibility-and-budget.md)，并将预算与状态隔离阻塞连回 [ADR-045 GridWorld 环境提案](../adr/ADR-045-gridworld-key-door-first-slice.md)。
+- ADR-046 提议 checkpoint 使用私有权威快照，Provider/Observation/Trace/SSE/API/Replay/最终 Episode state 使用 Agent 可见投影；Evaluator 在服务端使用权威状态，完成评估后才投影最终产物。旧 ToolLab projection 必须与既有 snapshot 一致；不变更 Trace/API Schema、不迁移或重写历史。
+- 提议每 Episode 16 轮/模型调用/工具调用；单次 800 completion tokens；累计 16,000 tokens（prompt+completion）、12,800 completion；300,000ms（按现有契约使用 `Budget.schema_version=1.1`）；已知估算费用 USD 1.00。预算按现有累计边界核账，单次 800 使用请求上限并须显式验证；已发响应超限完整记账后停止，未知用量/费用不补零。估算费用不是发票硬上限。
+- 实施顺序及验收矩阵已列入任务卡：环境规则 → Fake 实时事件/UI → SQLite 保存、恢复和历史只读回读；涵盖隐藏状态扫描、非法动作、16轮与资源预算边界、跨进程恢复及 ToolLab 兼容。均是待批方案，不是已实现或已验证的产品功能。
+- **当前待负责人决策**：批准/修改 ADR-045 的地图/动作/部分可观测规则；批准/修改 ADR-046 的快照/Agent projection 协议和各预算值。批准之前不改 Runtime、Domain Port、Trace/API Schema 或 GridWorld 源码。无真实模型/Judge、GitHub 写操作或数据库迁移授权。
+
+## 2026-11-04 补充：Fake UI 三流程复核、Reflection 夹具与 ADR-045 参照
+
+- 在隔离集成工作区启动 Fake SQLite API/Web：首次服务身份 `f4149a31-4f4e-4e9a-b640-1ff340e5917d`，重启身份 `e2be9a6f-4ec1-4bfc-a87a-df0f8e0168c0`，仅使用 `artifacts/v03-owner-acceptance/f4149a31-4f4e-4e9a-b640-1ff340e5917d/`。未访问原工作区 SQLite、未调用真实模型/Judge。
+- A 实际 UI 运行 Fake 任务 `order-status-001`：Episode `61af2d80-4a9e-4929-813b-4c156c450aad`，终态 `SUCCESS`，17 个事件，最终交付 `shipped`、引用 `order:ORD-001`。从运行页回退至工作台、前进回运行、刷新后 URL/产物一致；稳定回读的网络采样全为 GET，未发现新的 Episode/Experiment POST。页面切换时有少量未完成的背景 GET 被浏览器中止，目标 Episode GET 完成且刷新后正常呈现。
+- B 首次按旧清单遗漏 Fake 场景设置，默认 `invalid-then-success` 导致两侧均以 `FAILED / INVALID_ARGUMENTS` 在第一轮终止；失败 Experiment `ae7a9e8b-7bdc-426d-87cf-95e581ea97ee`，Episode `317052d0-e638-56cd-8769-3f1b9d7ffe7e` 与 `3e8423d4-108d-571b-a0c8-9bf285c69493`。查阅既有 `reflectionChallenge.spec.ts` 后按产品固定夹具改用 `clean / success`，并将清空其他任务、选择正确场景写回验收清单。
+- B 用正确夹具实跑后通过：Experiment `2a8f1926-3761-4f73-87af-541e52b4e081`；Baseline Episode `2f101465-a15e-55be-833d-1f396d633dae` 为 `FAILED / MAX_STEPS`，有界 Reflection Episode `4d34ec65-3191-5b86-8394-6dc4db3c1eee` 为 `SUCCESS`；保存配置为 `reflection-stale-alias-001`、Seed 1/Repeat 1。按需回读两侧 Trace，确认一次反思触发、改用公开 ID `ORD-001`，刷新后仍是原 Experiment。结果只作为 Fake 机制/产品验收，不外推模型收益。
+- C 在同一隔离 SQLite 目录上停止仅由本次启动的 API 进程并用 `--reuse-artifacts-dir` 新身份重启；此次用指定 PID 结束空闲服务进程，验证的是跨进程（含非优雅退出）恢复，不等同于负责人按 Ctrl+C 的个人体验。重启后 Meta 为 200 且身份头为 `e2be9a6f-4ec1-4bfc-a87a-df0f8e0168c0`；Episode `61af2d80-4a9e-4929-813b-4c156c450aad` 与 Experiment `2a8f1926-3761-4f73-87af-541e52b4e081` 均 API GET 成功，Web 分别按 ID 回读正确终态/对照，采样请求全部 GET、无 POST，Vite 保持 200。专用 SQLite 预览目录按交接要求保留，未清理任何既有数据库。
+- 更新[负责人体验清单](./V0.3-owner-acceptance-checklist-20261104.md)明确 Reflection 固定使用 `clean / success`，避免默认纠错夹具把两侧提前终止；扩充[ADR-045](../adr/ADR-045-gridworld-key-door-first-slice.md)引用 MiniGrid、AgentWorld、VirT-Lab、Collab-Overcooked 的研究范围和非目标，区分研究参照与依赖/移植/效果证据。复核还发现现有 Runtime 会把 `environment.snapshot()` 写入 `ENVIRONMENT_UPDATED.state`；若含隐藏地图，需在 GridWorld 实现前通过独立协议 ADR 或兼容方案解决。ADR-045 继续 Proposed，并补明 StepResult 非法游戏行动回执语义和未冻结的 Token/时间/费用额度。
+- 最终在隔离端口 `19400/19401`、`AGENTLABYRINTH_E2E_CHANNEL=msedge` 重跑完整 `uv --cache-dir .uv-cache run --locked python -m scripts.check`，退出 **0 / Quality gate passed**：Python **761 passed**（1 条 Starlette/AnyIO 弃用 warning）、126 文件 Ruff/Mypy、回归 **22 格零退化**、上下文消融、Web typecheck/build、Node **53/53**、系统 Edge **87/87（4.4 分钟）**、npm audit **0 vulnerabilities**。质量证据 `artifacts/quality/8f102bb7-4b0d-40fe-bc95-00f0dc1cfe13/`，Playwright run `artifacts/playwright/eebacbcc-8d8b-42f4-97a6-cddabeb78946/`；保留 Rollup 依赖注释与大 bundle warning。前两次门禁分别因原有 `8000` 被占用、默认 Chromium 二进制缺失而未通过；未停止或更改原服务，改用独立端口及已安装 Edge 后通过。仅本机验证，不是远端 CI。
+- 上述浏览器/API流程由本助手执行，不是负责人个人体验或 V0.3 整版签收。待负责人检查：按清单亲自体验 A/B/C（尤其 Ctrl+C 的有序重启），确认或暂缓 V0.3 整版签收；审阅并单独批准/修改 ADR-045；确定实现所需固定资源预算。GridWorld 尚未实现；本轮无 Git/远端操作、无真实模型/Judge 请求。
+
+## 2026-11-04 后续：V0.3 体验清单、SQLite 重启回读与 GridWorld 提案收口
+
+- Playwright 新增 `api-identity` setup 依赖：隔离 Fake API 用每次运行唯一 UUID 返回 `X-AgentLabyrinth-Test-Run-ID`，Playwright 经 Web base URL/Vite 代理读取 `/api/v1/meta` 并核对。所有 browser 项目依赖身份检查，错指代理时先失败、业务测试不启动。
+- 正常身份检查 1/1 通过，run ID `3b490552-a031-4d15-9b67-990c6dd09ad2`，隔离 API/Web `19020/19021`。故意误指本地替代服务 `19024` 的负例中，身份检查按预期失败，86 个 browser 测试未运行，替代服务收到 **0 POST**；run ID `88f3f218-187f-4886-a653-f8a9d82a02e9`。负例仅证明 fail-closed，不是产品业务失败。
+- 在集成工作区执行完整 `uv --cache-dir .uv-cache run --locked python -m scripts.check`，API/Web/代理端口 `19030/19031/19030`、系统 Edge，最终退出 **0**：761 Python（1 条 Starlette 弃用 warning）、126 文件 Ruff/Mypy、22 回归格零退化、53 Node、87 Edge、Web typecheck/build 通过、npm audit 0 vulnerabilities。Playwright run `artifacts/playwright/7fd3642c-56f3-46d7-9903-e8981d7e68e7/`；质量证据 `artifacts/quality/f8f8d6e6-8261-4911-a389-5a7507dc33c3/`。一次 Ruff 格式检查失败后已格式化并最终全门禁通过。本机结果不是远端 CI。
+- 一次初始门禁因 shell 未切换至集成工作区而在原工作区执行，并因其 `127.0.0.1:8000` 服务占用在 E2E 阶段退出 1；确认原工作区 Git 状态未变化。此结果不计入集成门禁；成功的完整门禁明确在集成工作区运行。未清理原服务/数据库。
+- 原 SQLite 的负责人保留只读复核报告：北京时间 `11:08:50–11:17:40` 按 `updated_at_ns` 找到 86 条候选（66 个结束 Episode、1 个安全点、13 个 Experiment 结果、4 个 Fake Review、1 条计划和 1 个 Job 的顶层 Provider 未取到）。请求与 ID 直接匹配 1 个 Fake Experiment、1 个 Fake Episode；其他候选仍未逐条归因，不能把 86 条全称为早期 E2E 写入。盘点副本 `quick_check=ok`，主库/WAL复核前后哈希相同；原始审计产物留在原工作区忽略目录、不复制入库。本轮未访问、修改或清理原库，也未读取未关联实验原始产物；清理仍需负责人明确授权。
+- 新增[负责人 Fake 体验签收清单](./V0.3-owner-acceptance-checklist-20261104.md)，覆盖实时运行到最终交付/历史只读回读、`reflection-stale-alias-001` 成对对照及隔离 SQLite 服务重启后按 Episode/Experiment ID 回读。`scripts.web_test_server` 新增 opt-in `--sqlite` 与严格的 `--reuse-artifacts-dir`：仅允许当前工作区 `artifacts` 下的新建专用子目录；复用要求数据库及该服务写入的专用标记均存在；原 E2E 默认 JSON/Fake 行为不变。上述是待负责人执行的体验步骤，尚未代执行/签收。
+- SQLite 重启定向冒烟实际通过：Fake 反思 Experiment `8ec0f28a-839b-4e67-9c42-446547a21210`，Episodes `1dc59bf3-97a8-56f5-a682-aa092e84f3ba` 与 `87e25dc4-8143-587a-b77a-d8a194a64410`。专用 API `19340` 首次 run ID `da7e8e0d-f359-4707-bd7e-7b3268712427`；停止后以 run ID `7f7f899d-3c23-4a66-9afd-af2643fe4de6` 复用同一隔离 SQLite 目录。重启后 Experiment 哈希与创建时一致（SHA-256 `9B87B01A61845382557FBCBDB8AFADF8C7E12035FED20E41419C428F775BB072`），两条 Episode 按 ID GET，重启后只发 GET、无 POST，身份头匹配新进程。缺失 DB 或缺少本服务专用标记的 `--reuse-artifacts-dir` 均按预期退出 2 且未启动服务。测试专用 SQLite 目录已清理；未访问原工作区 SQLite。该 API 冒烟不替代清单中的负责人 UI 体验。
+- 含专用 SQLite 标记保护的最终代码后重新运行完整门禁：`uv --cache-dir .uv-cache run --locked python -m scripts.check`，Microsoft Edge，API/Web `19060/19061`，退出 **0**。Python **761 passed**；126 文件 Ruff/Mypy 通过；固定回归 **22 格/0 regressions**；上下文消融完成；Web typecheck/build 通过；Node **53/53**；Edge **87/87**；npm audit **0 vulnerabilities**；`git diff --check` 通过。质量证据 `artifacts/quality/e7aa0652-7dc6-4ddc-8726-d613db957a7d/`，Playwright run `d36b2d03-6ebf-4453-8d6b-1d6403eac07d`。非阻断 warning：1 条 Starlette/AnyIO `BlockingPortal` 弃用提示，Rollup 提示依赖注释位置及 JS chunk >500KB。仅本机验证，远端 CI/PR Checks 未运行；无真实模型/Judge 请求。
+- ADR-045 仍为 Proposed，并已明确 16 个环境动作对应 `TaskSpec.max_steps=16`、`Budget.max_steps=16`、`max_model_calls=16`、`max_tool_calls=16`；第 16 个动作未成功时，`call_model` 在任何第 17 次 Provider 请求前终止为 `MAX_STEPS / max_steps_reached`，不额外请求。权威快照与 Agent 可见 Observation/Trace 分离；若现有接口无法实现该隔离，先提核心接口/事件 ADR。开门后射线仍最多两格、已探索动态信息只保留最后已知状态和 8 动作通关路径保持。GridWorld 没有实现。
+- 待负责人检查：原库窗口内除两个匹配记录外候选逐条归因；执行上述三条 Fake 体验并确认或暂缓 V0.3 整版签收；单独审阅/批准或修改 ADR-045。远端 CI/PR Checks、提交/推送/PR、真实模型/Judge、SQLite 清理均未执行/授权。
+
+## 2026-11-04 本地 V0.3 集成与离线门禁
+
+按[集成交接记录](./V0.3-main-integration-review-20261104.md)从 `origin/main` `392cd133b265` 建立 `codex/v0.3-main-integration-20261104`，普通合并 `edc7e629c06d`，本地集成提交 `02ea18dc86edf513de699897fdea99fa9410e938`。已验证 #5 Reflection/SQLite、#6 Judge 和 #7 工作区交付的代表提交均为集成提交祖先；106 个文件，5979 insertions / 772 deletions。未改写 `main`，未提交/推送/创建 PR。
+
+此前无身份前置项目的基线 `scripts.check` 在隔离 Fake 数据目录、Microsoft Edge、专用端口 19010/19011 退出 **0**：761 Python（1 条 Starlette 弃用 warning）、126 文件 Ruff/Mypy、固定回归 22 格/0 退化、上下文消融、Web typecheck/build、53 Node、86 Edge、npm audit 0 vulnerabilities；`git diff --check` 通过。Python/回归证据 `artifacts/quality/17cb4e7c-7e39-46ed-8ae2-60724cfae38c/`，日志 `artifacts/quality/scripts-check-final.log`，Playwright 运行目录 `artifacts/playwright/60dc5d70-ec11-4b54-bbf7-9db08826d9f6/`。现最新全量结果及87 Edge见上节；本机结果不是远端 CI。
+
+测试为适应现有本机 8000/5173 服务增加可选 E2E API/Web 端口；默认端口仍不复用、冲突即失败。**数据影响已经完成只读复核但仍有未归因记录**：一次较早的临时端口 E2E 运行只改了测试 API 端口、未同步 Vite 代理，导致代理仍指向现有 `127.0.0.1:8000`，56/86 通过后失败。负责人保留的只读复核将一个 Fake Episode 和一个 Fake Experiment 与请求 ID 匹配到该运行；86 条更新时间窗口候选中其余项目仍需逐条归因。原库/WAL复核前后哈希相同。未停止现有服务，未读取、清理或修改原库；最终全量门禁已正确代理到隔离 Fake 服务。早期错误路由不用于证明原服务未收到目录请求。
+
+V0.3 验收矩阵已更新为 Reflection 已实现、SQLite/四工作区 UI 已集成；新增 [ADR-045 GridWorld 首片提案](../adr/ADR-045-gridworld-key-door-first-slice.md)，状态 Proposed。负责人对新增整合流程的体验签收仍待完成；GridWorld 未实现，须先确认 V0.3 再单独批准 ADR。PR 模板正文已在集成交接记录中准备；远端 CI、提交、推送、建 PR、合并及真实模型调用均未执行。
 
 ## 2026-11-03 GitHub分组交付
 

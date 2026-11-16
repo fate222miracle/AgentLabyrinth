@@ -3,6 +3,7 @@ import type { WorkspaceArea } from './workspaceNavigation';
 const items: { area: WorkspaceArea; label: string; id: string }[] = [
   { area: 'tasks', label: '任务库', id: 'tab-tasks' },
   { area: 'workbench', label: '执行工作台', id: 'tab-single' },
+  { area: 'gridworld', label: 'GridWorld', id: 'tab-gridworld' },
   { area: 'runs', label: '运行记录', id: 'tab-runs' },
   { area: 'experiments', label: '实验中心', id: 'tab-experiment' },
 ];

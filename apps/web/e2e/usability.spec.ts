@@ -82,6 +82,7 @@ test('labelled history accepts Enter and keyboard navigation identifies the work
   await expect(page).toHaveURL(new RegExp(`episode_id=${original.episode.episode_id}`));
   await page.locator('#tab-experiment').click();
   await expect(page.locator('#tab-experiment')).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('.comparison-strategies > summary').press('Enter');
   await page.getByLabel('历史 Experiment ID', { exact: true }).fill(experiment.experiment_id);
   await page.getByLabel('历史 Experiment ID', { exact: true }).press('Enter');
   await expect(page).toHaveURL(new RegExp(`experiment_id=${experiment.experiment_id}`));
@@ -115,6 +116,7 @@ test('configure before running, retain advanced settings, and explain a disabled
   expect(saved.task.name).toBe('order-status-007');
   expect(saved.agent.runtime_backend).toBe('langgraph');
   await page.locator('#tab-experiment').click();
+  await page.locator('.comparison-strategies > summary').click();
   await page.getByRole('button', { name: '新建对照实验', exact: true }).click();
   const settings = page.locator('.experiment-settings');
   await settings.locator('summary').press('Enter');

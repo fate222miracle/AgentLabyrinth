@@ -21,6 +21,7 @@ for (const hasFake of [true, false]) {
     await page.getByRole('button', { name: '重新读取模型目录', exact: true }).click();
     await expect(page.locator('#model-select')).toHaveValue(real.id);
     await page.locator('#tab-experiment').click();
+    await page.locator('.comparison-strategies > summary').click();
     await page.getByRole('button', { name: '新建对照实验', exact: true }).click();
     await expect(page.locator('#exp-model-select')).toHaveValue(hasFake ? 'fake' : '');
     await expect(page.locator('.experiment-launch-summary')).toContainText('1 个任务');

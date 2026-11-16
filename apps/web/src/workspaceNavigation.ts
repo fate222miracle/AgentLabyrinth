@@ -1,10 +1,22 @@
-export type Workspace = 'tasks' | 'workbench' | 'runs' | 'episode' | 'experiments' | 'experiment-new' | 'experiment';
-export type WorkspaceArea = 'tasks' | 'workbench' | 'runs' | 'experiments';
+export type Workspace = 'tasks' | 'workbench' | 'gridworld' | 'gridworld-episode' | 'runs' | 'episode' | 'experiments' | 'experiment-new' | 'experiment';
+export type WorkspaceArea = 'tasks' | 'workbench' | 'gridworld' | 'runs' | 'experiments';
 export type EpisodeSection = 'process' | 'results' | 'review';
 
 /** Read old query links and new page URLs without executing or restoring anything. */
 export function routeParams(url: URL): URLSearchParams {
   const params = new URLSearchParams(url.search);
+  const gridworld = /^\/gridworld(?:\/([^/]+))?\/?$/.exec(url.pathname);
+  if (gridworld) {
+    if (gridworld[1] && !params.has('episode_id')) {
+      try { params.set('episode_id', decodeURIComponent(gridworld[1])); }
+      catch { params.set('episode_id', gridworld[1]); }
+    }
+    params.delete('page');
+    params.delete('mode');
+    params.delete('experiment_id');
+    params.delete('experiment_job_id');
+    return params;
+  }
   if (!params.has('episode_id') && !params.has('experiment_id') && !params.has('experiment_job_id')) {
     const parts = url.pathname.split('/').filter(Boolean);
     if (parts[0] === 'runs' && parts.length === 2) params.set('episode_id', parts[1]);
@@ -20,6 +32,9 @@ export function routeParams(url: URL): URLSearchParams {
 
 export function workspaceFor(url: URL): Workspace {
   const params = routeParams(url);
+  if (url.pathname === '/gridworld' || url.pathname.startsWith('/gridworld/')) {
+    return params.get('episode_id') ? 'gridworld-episode' : 'gridworld';
+  }
   if (params.get('experiment_job_id') || params.get('experiment_id')) return 'experiment';
   if (params.get('episode_id')) return 'episode';
   const page = params.get('page');
@@ -30,6 +45,7 @@ export function workspaceFor(url: URL): Workspace {
 
 export function areaFor(workspace: Workspace): WorkspaceArea {
   if (workspace === 'episode') return 'runs';
+  if (workspace === 'gridworld-episode') return 'gridworld';
   if (workspace === 'experiment-new' || workspace === 'experiment') return 'experiments';
   return workspace;
 }
@@ -43,6 +59,13 @@ export function sectionFor(url: URL): EpisodeSection {
 export function canonicalLocation(input: URL): URL {
   const url = new URL(input);
   const params = url.searchParams;
+  const workspace = workspaceFor(url);
+  if (areaFor(workspace) === 'gridworld') {
+    url.search = routeParams(url).toString();
+    const id = url.searchParams.get('episode_id');
+    url.pathname = id ? `/gridworld/${encodeURIComponent(id)}` : '/gridworld';
+    return url;
+  }
   if (!params.has('mode') && !params.has('page') && !params.has('episode_id')
     && !params.has('experiment_id') && !params.has('experiment_job_id')) {
     const saved = routeParams(url);

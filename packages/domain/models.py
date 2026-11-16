@@ -22,6 +22,7 @@ PositiveInt = Annotated[int, Field(gt=0)]
 RuntimeBackend = Literal["handwritten", "langgraph", "pydantic_ai"]
 RuntimeStrategy = Literal["handwritten", "handwritten_recovery"]
 ToolCallMode = Literal["single", "serial"]
+GRIDWORLD_ENVIRONMENT_VERSION: Literal["gridworld-key-door-v1"] = "gridworld-key-door-v1"
 
 
 class Contract(BaseModel):

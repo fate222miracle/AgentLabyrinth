@@ -3,10 +3,12 @@ import { TaskLibrary } from './TaskLibrary';
 import { RunRecords } from './RunRecords';
 import { areaFor, canonicalLocation, routeParams, sectionFor, workspaceFor, type WorkspaceArea, type EpisodeSection } from './workspaceNavigation';
 import { taskDescription, taskTitle, taskCategoryLabels } from './taskPresentation';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { explainFailure, changedStateFields, groupTraceByStep, keyFields, toolFeedbackFields, stepOutcome, stepTitle } from './traceSteps';
 import { ReadableFields, fieldLabels } from './ReadableFields';
 import { McpFlowReplay } from './McpFlowReplay';
+import { GridWorldMap } from './GridWorldMap';
+import { GridWorldComparison } from './GridWorldComparison';
 import { summarizeEpisode, type EpisodeHistorySummary, type ExperimentDashboardItem } from './historySummary';
 import { ExperimentDashboard } from './ExperimentDashboard';
 import { readEpisodeStream } from './streamEpisode';
@@ -27,6 +29,9 @@ import { metaSchema, dashboardSchema, resumableIdsSchema,
   type TaskOption, type MetaResponse, type TraceEvent, type EpisodeArtifact,
   type PairComparison, type ExperimentArtifact, type ExperimentJobState } from './apiContracts';
 import { readApi, readEpisode, readExperiment, readJob, requireOk } from './apiClient';
+
+const gridworldRealBudget = { total: '160,000', perCall: 2048 };
+const gridworldRealGalleryDefaults = { taskId: 'key-door-002-v1', maxSteps: 24, seconds: 330 };
 
 const experimentJobLabels: Record<ExperimentJobState['status'], string> = {
   queued: '排队中', running: '运行中', paused: '已暂停', cancelled: '已取消',
@@ -236,11 +241,24 @@ export default function App() {
   const [metadataError, setMetadataError] = useState<string | null>(null);
 
   // Single Episode states
-  const [selectedModel, setSelectedModel] = useState<string>('');
-  const [selectedScenario, setSelectedScenario] = useState<string>('success');
+  const isGridWorldWorkspace = areaFor(workspace) === 'gridworld';
+  const [workbenchModel, setSelectedModel] = useState<string>('');
+  const [workbenchScenario, setSelectedScenario] = useState<string>('success');
   const [singleFaultProfile, setSingleFaultProfile] = useState<string>('none');
-  const [selectedSingleTask, setSelectedSingleTask] = useState<string>('');
-  const [selectedSuite, setSelectedSuite] = useState<TaskOption['suite']>('tool_lab_core');
+  const [workbenchTask, setSelectedSingleTask] = useState<string>('');
+  const [workbenchSuite, setSelectedSuite] = useState<Exclude<TaskOption['suite'], 'gridworld'>>('tool_lab_core');
+  const [gridworldModel, setGridworldModel] = useState('');
+  const [gridworldTask, setGridworldTask] = useState('');
+  const [gridworldScenario, setGridworldScenario] = useState('success');
+  const selectedSuite = isGridWorldWorkspace ? 'gridworld' : workbenchSuite;
+  const selectedScenario = isGridWorldWorkspace ? gridworldScenario : workbenchScenario;
+  const selectedModel = isGridWorldWorkspace
+    ? (gridworldModel || meta?.models.find((model) => model.provider === 'fake')?.id) ?? ''
+    : workbenchModel;
+  const selectedSingleTask = isGridWorldWorkspace
+    ? (meta?.tasks.find((task) => task.suite === 'gridworld' && task.id === gridworldTask)
+      ?? meta?.tasks.find((task) => task.suite === 'gridworld'))?.id ?? ''
+    : workbenchTask;
   const [singleTaskQuery, setSingleTaskQuery] = useState('');
   const [maxSteps, setMaxSteps] = useState<number>(6);
   const [artifact, setArtifact] = useState<EpisodeArtifact | null>(null);
@@ -259,6 +277,11 @@ export default function App() {
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
   const [eventTypeFilter, setEventTypeFilter] = useState<string>('ALL');
   const [replayIndex, setReplayIndex] = useState<number>(0);
+  const [gridReplayMotion, setGridReplayMotion] = useState(false);
+  const selectFlowReplayEvent = useCallback((index: number, auto: boolean) => {
+    setGridReplayMotion(auto);
+    setReplayIndex(index);
+  }, []);
   const [replayPlaying, setReplayPlaying] = useState<boolean>(false);
   const [replaySpeedMs, setReplaySpeedMs] = useState<number>(1000);
   const [replayView, setReplayView] = useState<'flow' | 'story' | 'events'>('flow');
@@ -375,8 +398,9 @@ export default function App() {
     setSingleConfigOpen(false);
     setReplayPlaying(false);
     const url = new URL(window.location.origin);
-    if (area === 'workbench') {
-      url.searchParams.set('mode', 'single');
+    if (area === 'workbench' || area === 'gridworld') {
+      url.pathname = area === 'gridworld' ? '/gridworld' : '/workbench';
+      if (area === 'workbench') url.searchParams.set('mode', 'single');
       setArtifact(null);
       setLiveRun(null);
     } else if (area !== 'experiment-new') url.searchParams.set('page', area);
@@ -389,7 +413,7 @@ export default function App() {
   };
 
   const selectLibraryTask = (task: TaskOption) => {
-    if (isLoading || metadataLoading) return;
+    if (isLoading || metadataLoading || task.suite === 'gridworld') return;
     pageRequests.current.begin();
     setArtifact(null);
     setLiveRun(null);
@@ -525,9 +549,18 @@ export default function App() {
       const initialModel = data.models.find(model => model.provider === 'fake')?.id ?? '';
       setSelectedModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : initialModel);
       setExpModel((current) => !initializeDefaults && data.models.some((model) => model.id === current) ? current : initialModel);
-      if (initializeDefaults && data.tasks.length > 0) {
-        const initialTask = data.tasks.find((task) => task.id === data.default_task)
-          ?? data.tasks.find((task) => task.suite === 'tool_lab_core') ?? data.tasks[0];
+      const gridworldTask = data.tasks.find(task => task.suite === 'gridworld');
+      const gridworldAllowedModels = new Set(gridworldTask?.allowed_model_ids ?? []);
+      const gridworldModels = data.models.filter(model =>
+        model.provider === 'fake' || gridworldAllowedModels.has(model.id));
+      const initialGridworldModel = gridworldModels.find(model => model.provider === 'fake')?.id ?? '';
+      setGridworldModel(current =>
+        !initializeDefaults && gridworldModels.some(model => model.id === current)
+          ? current : initialGridworldModel);
+      const workbenchTasks = data.tasks.filter(task => task.suite !== 'gridworld');
+      const initialTask = workbenchTasks.find((task) => task.id === data.default_task)
+        ?? workbenchTasks.find((task) => task.suite === 'tool_lab_core') ?? workbenchTasks[0];
+      if (initializeDefaults && initialTask && initialTask.suite !== 'gridworld') {
         setSelectedSuite(initialTask.suite);
         setSelectedSingleTask(initialTask.id);
         const initialExperimentTask = initialTask.suite === 'tool_lab_core' && initialTask.category !== 'evidence_chain'
@@ -712,6 +745,13 @@ export default function App() {
       if (!pageRequests.current.isCurrent(requestId)) return;
       setArtifact(data.artifact);
       addRecentEpisodeId(id.trim());
+      const url = new URL(window.location.href);
+      const isGridWorldEpisode = data.artifact.run_config.environment_version === 'gridworld-key-door-v1';
+      if ((areaFor(workspaceFor(url)) === 'gridworld') !== isGridWorldEpisode) {
+        url.pathname = isGridWorldEpisode ? '/gridworld' : '/runs';
+        url.searchParams.set('episode_id', id.trim());
+        commitLocation(url, true);
+      }
 
     } catch (err: unknown) {
       if (!pageRequests.current.isCurrent(requestId)) return;
@@ -765,6 +805,7 @@ export default function App() {
     setErrorMsg(null);
     setArtifact(null);
     const runningUrl = new URL(window.location.href);
+    runningUrl.pathname = isGridWorldWorkspace ? '/gridworld' : '/workbench';
     runningUrl.searchParams.set('mode', 'single');
     runningUrl.searchParams.delete('page');
     runningUrl.searchParams.delete('section');
@@ -772,7 +813,8 @@ export default function App() {
     runningUrl.searchParams.delete('experiment_id');
     commitLocation(runningUrl);
     setLiveRun({ events: [], episodeId: null, model: selectedModel, provider: currentSingleModelMeta?.provider,
-      environmentVersion: selectedSuite !== 'tool_lab_core' ? 'bfcl-adapted-single-call-v1'
+      environmentVersion: selectedSuite === 'gridworld' ? 'gridworld-key-door-v1'
+        : selectedSuite !== 'tool_lab_core' ? 'bfcl-adapted-single-call-v1'
         : selectedSingleTaskMeta?.supports_mcp && singleToolTransport === 'mcp' ? 'tool-lab-mcp-v1' : 'tool-lab-m0-v1',
       status: 'running' });
     requestAnimationFrame(() => {
@@ -784,7 +826,21 @@ export default function App() {
       const currentModelObj = meta?.models.find((m) => m.id === selectedModel);
       const isFake = selectedModel === 'fake' || currentModelObj?.provider === 'fake';
 
-      const payload = {
+      const payload = selectedSuite === 'gridworld' ? {
+        schema_version: '1.3',
+        provider: isFake ? 'fake' : 'aihubmix',
+        model: isFake ? 'fake-model' : selectedModel,
+        scenario: isFake ? selectedScenario : null,
+        task_id: selectedSingleTask,
+        suite: selectedSuite,
+        max_steps: gridworldRealGallery ? null : gridworldMaxSteps,
+        max_execution_time_ms: gridworldRealGallery ? null : gridworldSeconds * 1000,
+        token_budget: isFake ? gridworldTaskMeta?.token_budget ?? 16000 : null,
+        runtime_backend: 'handwritten',
+        runtime_strategy: 'handwritten',
+        tool_transport: 'local',
+        fault_profile: 'none',
+      } : {
         schema_version: singleReflection && selectedSingleTaskMeta?.supports_reflection
           ? '1.8'
           : singleRuntimeBackend === 'pydantic_ai'
@@ -870,6 +926,7 @@ export default function App() {
       setResumableEpisodeIds((previous) => previous.filter((item) => item !== id));
       addRecentEpisodeId(id);
       const url = new URL(window.location.href);
+      if (data.artifact.run_config.environment_version === 'gridworld-key-door-v1') url.pathname = '/gridworld';
       url.searchParams.set('episode_id', id);
       url.searchParams.delete('mode');
       url.searchParams.delete('experiment_id');
@@ -1156,19 +1213,30 @@ export default function App() {
   };
 
   const currentSingleModelMeta = meta?.models.find((m) => m.id === selectedModel);
+  const gridworldTaskMeta = meta?.tasks.find((task) => task.suite === 'gridworld' && task.id === selectedSingleTask);
+  const gridworldRealGallery = selectedSingleTask === gridworldRealGalleryDefaults.taskId
+    && currentSingleModelMeta?.provider === 'aihubmix';
+  const gridworldMaxSteps = gridworldRealGallery ? gridworldRealGalleryDefaults.maxSteps : gridworldTaskMeta?.max_steps ?? 16;
+  const gridworldSeconds = gridworldRealGallery ? gridworldRealGalleryDefaults.seconds : 300;
+  const gridworldOutputPerCall = currentSingleModelMeta?.provider === 'fake' ? 800 : gridworldRealBudget.perCall;
+  const gridworldOutputTotal = (gridworldMaxSteps * gridworldOutputPerCall).toLocaleString('en-US');
+  const gridworldAllowedModels = new Set(gridworldTaskMeta?.allowed_model_ids ?? []);
+  const gridworldModelOptions = meta?.models.filter(model =>
+    model.provider === 'fake' || gridworldAllowedModels.has(model.id)) ?? [];
   const currentExpModelMeta = meta?.models.find((m) => m.id === expModel);
   const experimentTasks = meta?.tasks.filter((task) => task.suite === 'tool_lab_core'
     && (comparisonAxis !== 'reflection' || task.supports_reflection)) ?? [];
   const singleTasks = meta?.tasks.filter((task) => task.suite === selectedSuite) ?? [];
   const filteredSingleTasks = singleTasks.filter((task) => {
-    const query = singleTaskQuery.trim().toLocaleLowerCase();
+    const query = isGridWorldWorkspace ? '' : singleTaskQuery.trim().toLocaleLowerCase();
     return !query || `${taskTitle(task)} ${task.name} ${task.id} ${task.category} ${taskCategoryLabels[task.category] ?? ''} ${task.description} ${taskDescription(task)}`
       .toLocaleLowerCase().includes(query);
   });
   const bfclTaskCount = meta?.tasks.filter((task) => task.suite === 'bfcl_adapted').length ?? 0;
   const selectedSingleTaskMeta = singleTasks.find((task) => task.id === selectedSingleTask);
   const defaultSingleMaxSteps = selectedSingleTaskMeta?.max_steps ?? (selectedSuite !== 'tool_lab_core' ? 1 : 6);
-  const defaultSingleTokenBudget = selectedSingleTaskMeta?.category === 'evidence_chain' ? selectedSingleTaskMeta.token_budget : 8000;
+  const defaultSingleTokenBudget = selectedSingleTaskMeta?.category === 'evidence_chain'
+    || selectedSuite === 'gridworld' ? selectedSingleTaskMeta?.token_budget ?? 16000 : 8000;
   const singleAdvancedChangeCount = [
     singleRuntimeStrategy !== 'handwritten',
     singleContextChoice !== 'full',
@@ -1283,7 +1351,9 @@ export default function App() {
     expTasks.length * (parsedExpSeeds?.length ?? 0) * expRepeatCount * 2;
   const isExperimentRunReady = Boolean(meta) && Boolean(expModel) && expTasks.length > 0 &&
     parsedExpSeeds !== null && expRepeatCount >= 1 && expRepeatCount <= 10 && !isLoading;
-  const isSingleRunReady = Boolean(meta) && Boolean(selectedModel) && Boolean(selectedSingleTaskMeta) && !isLoading;
+  const isSingleRunReady = Boolean(meta) && Boolean(selectedModel) && Boolean(selectedSingleTaskMeta)
+    && (selectedSuite !== 'gridworld'
+      || gridworldModelOptions.some(model => model.id === selectedModel)) && !isLoading;
   const singleRunHint = !meta ? '正在读取任务与模型目录，完成后即可配置运行。'
     : !selectedModel ? '请先选择评测模型。' : !selectedSingleTaskMeta ? '请先选择一个任务。'
       : isLoading ? loadingMessage : null;
@@ -1805,10 +1875,10 @@ export default function App() {
           <div>
             <div className="page-eyebrow">Agent 评测工作台</div>
             <h1 id="page-title">
-              {workspace === 'tasks' ? '选择下一项探索' : workspace === 'runs' ? '运行记录' : workspace === 'experiments' ? '实验中心' : activeTab === 'experiment' ? experiment ? '对照实验结果' : '比较策略差异' : artifact ? '运行详情' : liveRun ? 'Agent 正在执行' : '运行一个 Agent 任务'}
+              {isGridWorldWorkspace ? artifact ? 'GridWorld 运行详情' : 'GridWorld' : workspace === 'tasks' ? '选择下一项探索' : workspace === 'runs' ? '运行记录' : workspace === 'experiments' ? '实验中心' : activeTab === 'experiment' ? experiment ? '对照实验结果' : '比较策略差异' : artifact ? '运行详情' : liveRun ? 'Agent 正在执行' : '运行一个 Agent 任务'}
             </h1>
             <p>
-              {workspace === 'tasks' ? '浏览任务目标、交付要求与工具能力，再进入工作台配置。' : workspace === 'runs' ? '找到本机最近访问的任务，核查结果与执行依据。' : activeTab === 'experiment'
+              {isGridWorldWorkspace ? '在局部视野内探索地图，拾取钥匙，开启门并抵达目标。' : workspace === 'tasks' ? '浏览任务目标、交付要求与工具能力，再进入工作台配置。' : workspace === 'runs' ? '找到本机最近访问的任务，核查结果与执行依据。' : workspace === 'experiments' ? '从同一配置中选择两局，比较模型的迷宫路线、用量和耗时。' : activeTab === 'experiment'
                 ? '固定任务、模型、种子与预算，每次比较上下文、恢复策略或 Runtime 中的一项。'
                 : '运行一个任务，核查评测结论、环境状态与完整 Trace。'}
             </p>
@@ -1851,7 +1921,7 @@ export default function App() {
           selectedTaskNames={(meta?.tasks ?? []).filter((task) => expTasks.includes(task.id)).map((task) => task.name)}
           hasSavedResult={Boolean(artifact || experiment || activeJobId)} onConfigure={configureClassroomScenario} />}
 
-        <div hidden={workspace !== 'tasks'}><TaskLibrary tasks={meta?.tasks ?? []} loading={metadataLoading || (!meta && !metadataError)} unavailable={Boolean(metadataError && !meta)}
+        <div hidden={workspace !== 'tasks'}><TaskLibrary tasks={meta?.tasks.filter(task => task.suite !== 'gridworld') ?? []} loading={metadataLoading || (!meta && !metadataError)} unavailable={Boolean(metadataError && !meta)}
           disabled={isLoading || metadataLoading || !meta} onSelect={selectLibraryTask} /></div>
         <div hidden={workspace !== 'runs'}><RunRecords ids={recentEpisodeIds} summaries={episodeHistorySummaries}
           value={inputEpisodeId} busy={isLoading} onChange={setInputEpisodeId} onRead={loadEpisodeById} /></div>
@@ -1871,10 +1941,13 @@ export default function App() {
                 </div>
               </section>
             )}
-        {workspace === 'experiments' && <section className="experiment-index" aria-label="实验列表">
-          <div className="workspace-page-actions"><p>查看已保存实验，选择可比条件后分析差异。</p>
-            <button className="btn-primary" onClick={() => navigateWorkspace('experiment-new')} disabled={isLoading}>新建对照实验</button></div>
+        {workspace === 'experiments' && <section className="experiment-index" aria-label="实验中心">
+          <GridWorldComparison models={meta?.models ?? []} />
           {activeJobId && experimentOperations}
+          <details className="comparison-strategies">
+          <summary>策略实验</summary>
+          <div className="workspace-page-actions"><p>比较上下文、规划或恢复策略。</p>
+            <button className="btn-primary" onClick={() => navigateWorkspace('experiment-new')} disabled={isLoading}>新建对照实验</button></div>
           <ExperimentDashboard items={dashboardItems} loading={dashboardLoading} error={dashboardError}
             skipped={dashboardSkipped} activeId={experiment?.experiment_id}
             onRefresh={refreshExperimentDashboard} onOpen={loadExperimentById} />
@@ -1883,6 +1956,7 @@ export default function App() {
             <HistoryReader kind="exp" value={inputExpId} busy={isLoading} onChange={setInputExpId} onRead={loadExperimentById} />
             {!activeJobId && experimentOperations}
           </section>
+          </details>
         </section>}
 
         {/* TAB 1: EXPERIMENT MODE */}
@@ -2352,7 +2426,7 @@ export default function App() {
         )}
 
         {/* TAB 2: SINGLE EPISODE MODE */}
-        {(workspace === 'workbench' || workspace === 'episode') && (
+        {(workspace === 'workbench' || workspace === 'episode' || isGridWorldWorkspace) && (
           <div>
             {/* Persistent ID Bar */}
             {(artifact || liveRun) && <div className="persistence-bar persistence-bar-spaced">
@@ -2383,7 +2457,9 @@ export default function App() {
                     >
                       导出 JSON
                     </button>
-                    {!artifact.evaluation.success && (
+                    {!artifact.evaluation.success
+                      && !(artifact.run_config.environment_version === 'gridworld-key-door-v1'
+                        && artifact.agent.model.provider === 'aihubmix') && (
                       <button className="btn-secondary" disabled={isLoading}
                         onClick={handleRerunFailedEpisode}>
                         单独重跑失败 Episode
@@ -2392,6 +2468,11 @@ export default function App() {
                   </>
                 )}
               </div>
+              {artifact && !artifact.evaluation.success
+                && artifact.run_config.environment_version === 'gridworld-key-door-v1'
+                && artifact.agent.model.provider === 'aihubmix' && (
+                  <p className="metric-sub">真实模型 GridWorld 结果只读；本版本不支持恢复或重跑，请检查已保存的 Trace 与用量。</p>
+                )}
               {artifact && !singleConfigOpen && <button className="btn-secondary" disabled={isLoading}
                 onClick={() => {
                   setSingleConfigOpen(true);
@@ -2422,9 +2503,17 @@ export default function App() {
                   <div className="single-launch-summary" aria-live="polite">
                     <small>{artifact ? '下次运行草稿 · 不修改当前保存结果' : '当前运行配置'}</small>
                     <strong>{selectedSingleTaskMeta?.name ?? '请选择任务'}</strong>
-                    <span>{currentSingleModelMeta?.name || selectedModel || '请选择模型'} · {singleRuntimeBackend === 'langgraph' ? 'LangGraph' : singleRuntimeBackend === 'pydantic_ai' ? 'PydanticAI' : 'Reference'} · {singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp ? 'MCP HTTP' : selectedSuite === 'tool_lab_core' ? '本地工具' : '本地函数调用提议评测'}</span>
-                    <span className="single-parameter-summary">{singleContextChoice === 'full' ? '完整历史' : `近期 ${singleContextWindow} 轮${singleContextChoice === 'memory' ? ` · 记忆 ${singleMemoryBytes} 字节` : ''}`} · 最多 {maxSteps} 步 · {executionSeconds} 秒 · {selectedModel === 'fake' || currentSingleModelMeta?.provider === 'fake' ? 'Token 模拟用量' : `Token 预算 ${singleTokenBudget ?? '未设置'}`}</span>
-                    <small>{!meta || !selectedModel ? '目录就绪后可开始运行' : selectedModel === 'fake' ? 'Fake 离线模拟' : '将发起真实模型请求'}</small>
+                    <span>{selectedSuite === 'gridworld'
+                      ? `${currentSingleModelMeta?.name ?? '请选择模型'} · ${currentSingleModelMeta?.provider === 'fake' ? 'Fake 离线试玩' : '真实模型实验性运行'}`
+                      : `${currentSingleModelMeta?.name || selectedModel || '请选择模型'} · ${singleRuntimeBackend === 'langgraph' ? 'LangGraph' : singleRuntimeBackend === 'pydantic_ai' ? 'PydanticAI' : 'Reference'} · ${singleToolTransport === 'mcp' && selectedSingleTaskMeta?.supports_mcp ? 'MCP HTTP' : selectedSuite === 'tool_lab_core' ? '本地工具' : '本地函数调用提议评测'}`}</span>
+                    <span className="single-parameter-summary">{selectedSuite === 'gridworld'
+                      ? `最多 ${gridworldMaxSteps} 轮 · 单次 ${gridworldOutputPerCall.toLocaleString('en-US')} 输出 Token · 累计 ${currentSingleModelMeta?.provider === 'fake' ? '16,000' : gridworldRealBudget.total} Token · 累计输出 ${gridworldOutputTotal} · ${gridworldSeconds} 秒`
+                      : `${singleContextChoice === 'full' ? '完整历史' : `近期 ${singleContextWindow} 轮${singleContextChoice === 'memory' ? ` · 记忆 ${singleMemoryBytes} 字节` : ''}`} · 最多 ${maxSteps} 步 · ${executionSeconds} 秒 · ${selectedModel === 'fake' || currentSingleModelMeta?.provider === 'fake' ? 'Token 模拟用量' : `Token 预算 ${singleTokenBudget ?? '未设置'}`}`}</span>
+                    <small>{!meta || !selectedModel ? '目录就绪后可开始运行' : selectedSuite === 'gridworld'
+                      ? currentSingleModelMeta?.provider === 'fake'
+                        ? 'Fake 离线模拟'
+                        : '仅点击“开始运行 Episode”后才发起真实模型请求'
+                      : selectedModel === 'fake' ? 'Fake 离线模拟' : '将发起真实模型请求'}</small>
                   </div>
                   <div className="single-launch-action">
                     <button type="button" className="btn-secondary" aria-controls="config-panel"
@@ -2465,7 +2554,7 @@ export default function App() {
                         <span className="task-picker-count">{filteredSingleTasks.length} 个</span>
                       </div>
 
-                      <fieldset className="suite-choice" disabled={isLoading || !meta}>
+                      {!isGridWorldWorkspace && <fieldset className="suite-choice" disabled={isLoading || !meta}>
                         <legend className="form-label">任务集</legend>
                         <div className="suite-choice-options">
                           <label className={selectedSuite === 'tool_lab_core' ? 'selected' : ''}>
@@ -2522,18 +2611,41 @@ export default function App() {
                             <small>固定改编题</small>
                           </label>
                         </div>
-                      </fieldset>
-                      {selectedSuite !== 'tool_lab_core' && (
+                      </fieldset>}
+                      {selectedSuite === 'gridworld' && (
+                        <div className="suite-provenance">
+                          <strong>{currentSingleModelMeta?.provider === 'fake'
+                            ? '离线 Fake 试玩'
+                            : `${currentSingleModelMeta?.name ?? selectedModel} · 实验性真实运行`}</strong>
+                          <p>{currentSingleModelMeta?.provider === 'fake'
+                            ? `固定路线离线试玩。最多 ${gridworldMaxSteps} 轮、累计 16,000 Token 和 300 秒。`
+                            : `仅新建 Episode 可用；${gridworldMaxSteps} 轮、每次最多 ${gridworldOutputPerCall.toLocaleString('en-US')} 输出 Token、累计输入 + 输出 ${gridworldRealBudget.total} Token、累计输出 ${gridworldOutputTotal} Token 和 ${gridworldSeconds} 秒。调用费用仍可能未知。`}</p>
+                          {gridworldRealGallery
+                            && <p>模型保留任务目标和最近 2 轮工具记录，最新观察包含已探索地图。</p>}
+                          {currentSingleModelMeta?.provider === 'fake' && <>
+                            <label htmlFor="gridworld-scenario" className="form-label">Fake 场景</label>
+                            <select id="gridworld-scenario" className="form-select" value={selectedScenario}
+                              onChange={(event) => setGridworldScenario(event.target.value)} disabled={isLoading}>
+                              <option value="success">固定路线通关</option>
+                              <option value="illegal-action">规则内非法行动后通关</option>
+                              <option value="max-steps">达到 16 轮预算后停止</option>
+                            </select>
+                          </>}
+                        </div>
+                      )}
+                      {selectedSuite !== 'tool_lab_core' && selectedSuite !== 'gridworld' && (
                         <p className="suite-provenance">
                           BFCL V4 固定上游提交的 AgentLabyrinth 改编子集；任务卡为中文说明，模型接收英文原题。仅本地精确匹配函数调用提议，非官方分数。
                         </p>
                       )}
 
+                      {!isGridWorldWorkspace && <>
                       <label htmlFor="single-task-search" className="form-label task-search-label">搜索任务</label>
                       <input id="single-task-search" className="form-input task-search" type="search"
                         value={singleTaskQuery} placeholder="名称、类别或目标"
                         onChange={(event) => setSingleTaskQuery(event.target.value)}
                         disabled={isLoading || !meta} />
+                      </>}
 
                       <div className="task-option-list" role="group" aria-label="评测任务">
                         {!meta && <p className="task-list-message">正在读取可用任务…</p>}
@@ -2545,8 +2657,16 @@ export default function App() {
                             className={`task-option ${selectedSingleTask === task.id ? 'selected' : ''}`}
                             aria-pressed={selectedSingleTask === task.id}
                             onClick={() => {
+                              if (isGridWorldWorkspace) {
+                                setGridworldTask(task.id);
+                                focusExecutionStage();
+                                return;
+                              }
                               if (maxSteps === defaultSingleMaxSteps) setMaxSteps(task.max_steps);
-                              if (singleTokenBudget === defaultSingleTokenBudget) setSingleTokenBudget(task.category === 'evidence_chain' ? task.token_budget : 8000);
+                              if (singleTokenBudget === defaultSingleTokenBudget) {
+                                setSingleTokenBudget(task.suite === 'gridworld' || task.category === 'evidence_chain'
+                                  ? task.token_budget : 8000);
+                              }
                               setSelectedSingleTask(task.id);
                               setSingleToolTransport('local');
                               setSingleFaultProfile('none');
@@ -2560,10 +2680,13 @@ export default function App() {
                             <span className="task-code">{task.name}</span>
                             <span className="task-option-description">{taskDescription(task)}</span>
                             <span className="task-option-foot">
-                              {task.split === 'development' ? '开发集' : task.split === 'evaluation' ? '评测集' : task.split} · 最多 {task.max_steps} 步 · {
+                              {task.split === 'development' ? '开发集' : task.split === 'evaluation' ? '评测集' : task.split} · 最多 {
+                                task.id === gridworldRealGalleryDefaults.taskId && currentSingleModelMeta?.provider === 'aihubmix'
+                                  ? gridworldRealGalleryDefaults.maxSteps : task.max_steps
+                              } 步 · {
                                 task.suite === 'tool_lab_core'
                                   ? task.supports_mcp ? '支持 MCP' : '本地工具'
-                                  : '本地函数调用提议评测'
+                                  : task.suite === 'gridworld' ? '固定环境动作' : '本地函数调用提议评测'
                               }
                             </span>
                           </button>
@@ -2575,22 +2698,28 @@ export default function App() {
                       <div className="task-picker-heading execution-heading">
                         <div>
                           <h2 id="execution-heading">配置执行方式</h2>
-                          <p>选择模型与 Runtime；其他参数按需展开。</p>
+                          <p>{selectedSuite === 'gridworld'
+                            ? '默认离线 Fake；可显式选择本任务获准的真实模型。'
+                            : '选择模型与 Runtime；其他参数按需展开。'}</p>
                         </div>
                       </div>
 
                 <div className="form-group">
-                    <label htmlFor="model-select" className="form-label">评测模型</label>
+                    <label htmlFor="model-select" className="form-label">
+                      {selectedSuite === 'gridworld' ? '运行模型' : '评测模型'}
+                    </label>
 
                   <select
                     id="model-select"
                     className="form-select"
                     value={selectedModel}
-                    onChange={(e) => setSelectedModel(e.target.value)}
-                    disabled={isLoading}
+                    onChange={(e) => isGridWorldWorkspace
+                      ? setGridworldModel(e.target.value)
+                      : setSelectedModel(e.target.value)}
+                    disabled={isLoading || (isGridWorldWorkspace && gridworldModelOptions.length === 0)}
                   >
                     {!selectedModel && <option value="" disabled>请选择评测模型</option>}
-                    {meta?.models.map((m) => (
+                    {(isGridWorldWorkspace ? gridworldModelOptions : meta?.models ?? []).map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.name} {m.is_default ? '· 目录默认' : ''} {m.is_experimental ? '· 实验性' : ''}
                       </option>
@@ -2610,8 +2739,13 @@ export default function App() {
                     </div>
                   </details>
                 </div>
+                {isGridWorldWorkspace && !gridworldModelOptions.some(model => model.provider === 'aihubmix') && (
+                  <p className="task-list-message" role="status">
+                    当前模型目录未提供 GridWorld 准入的真实型号；仍可使用 Fake 离线试玩。
+                  </p>
+                )}
 
-                <fieldset className="execution-choice" disabled={isLoading}>
+                {selectedSuite !== 'gridworld' && <fieldset className="execution-choice" disabled={isLoading}>
                   <legend className="form-label">执行 Runtime</legend>
                   <div className="execution-choice-grid">
                     {([
@@ -2628,11 +2762,11 @@ export default function App() {
                     ))}
                   </div>
                   <p className="metric-sub">三种调度方式使用相同工具与评测规则；PydanticAI 的步间推进仍由适配器完成。</p>
-                </fieldset>
+                </fieldset>}
 
 
                     </section>
-                <details className="advanced-settings single-advanced-settings">
+                <details className="advanced-settings single-advanced-settings" hidden={selectedSuite === 'gridworld'}>
                   <summary>
                     <span>更多设置</span>
                     <span>
@@ -2821,8 +2955,12 @@ export default function App() {
                     <>
                       <p className="loading-note" role="status">
                         {liveRun.status === 'running' ? '正在接收真实 Trace 事件。' : liveRun.status === 'completed' ? '本次运行已结束，结果已保存。' : '实时连接已中断，后端运行状态未知。'}
+                        {liveRun.environmentVersion === 'gridworld-key-door-v1'
+                          && liveRun.provider === 'aihubmix'
+                          && ` ${meta?.models.find(model => model.id === liveRun.model)?.name ?? liveRun.model} · 实验性真实运行；临时累计 Token 额度 ${gridworldRealBudget.total}，费用可能未知。`}
                         {liveRun.episodeId && ` Episode ID：${liveRun.episodeId}`}
                       </p>
+                      {liveRun.environmentVersion === 'gridworld-key-door-v1' && <GridWorldMap key="live-gridworld" events={liveRun.events} animate />}
                       {liveRun.events.length > 0 && <McpFlowReplay displayMode={liveRun.status === 'completed' ? 'completed' : 'live'} events={liveRun.events}
                         environmentVersion={liveRun.environmentVersion} model={liveRun.model} provider={liveRun.provider}
                         finalState={artifact?.episode.final_state ?? {}} evaluation={artifact?.evaluation}
@@ -2835,6 +2973,9 @@ export default function App() {
                     </>
                   ) : artifact && artifact.events.length > 0 ? (
                     <>
+                      {artifact.run_config.environment_version === 'gridworld-key-door-v1'
+                        && <GridWorldMap key={artifact.episode.episode_id} events={artifact.events} cutoff={replayIndex}
+                          animate={replayView === 'flow' && gridReplayMotion} />}
                       <div className="view-switch flow-switch" data-active={replayView} aria-label="Replay 视图">
                         <button type="button" className={replayView === 'flow' ? 'active' : ''}
                           aria-pressed={replayView === 'flow'}
@@ -2858,7 +2999,7 @@ export default function App() {
                         model={artifact.agent.model.model} provider={artifact.agent.model.provider} finalState={artifact.episode.final_state}
                         evaluation={artifact.evaluation}
                         termination={artifact.episode.termination_reason} detail={artifact.episode.detail}
-                        eventIndex={replayIndex} onSelectEvent={setReplayIndex} />}
+                        eventIndex={replayIndex} onSelectEvent={selectFlowReplayEvent} />}
                       <div hidden={replayView === 'flow'}>
                       {replayView === 'story' && <div className="step-rail" role="group" aria-label="执行步骤（方向键切换）"
                         onKeyDown={(event) => {
@@ -3166,9 +3307,9 @@ export default function App() {
                 </section>
               </div>
             </div>
-            <ClassroomScenarios tasks={meta?.tasks ?? []} disabled={isLoading || metadataLoading || !meta}
+            {!isGridWorldWorkspace && <ClassroomScenarios tasks={meta?.tasks ?? []} disabled={isLoading || metadataLoading || !meta}
               selectedTaskNames={(meta?.tasks ?? []).filter((task) => task.id === selectedSingleTask).map((task) => task.name)}
-              hasSavedResult={Boolean(artifact || experiment || activeJobId)} onConfigure={configureClassroomScenario} />
+              hasSavedResult={Boolean(artifact || experiment || activeJobId)} onConfigure={configureClassroomScenario} />}
           </div>
         )}
       </main>

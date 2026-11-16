@@ -53,3 +53,15 @@ test('detail sections deep-link without changing the saved identity', () => {
     assert.equal(canonicalLocation(direct).pathname, `/runs/${episode}`);
   }
 });
+
+test('GridWorld has an independent workspace and read-only history URLs', () => {
+  const home = new URL('/gridworld?mode=single', base);
+  assert.equal(workspaceFor(home), 'gridworld');
+  assert.equal(canonicalLocation(home).href, new URL('/gridworld', base).href);
+  const direct = new URL(`/gridworld/${episode}?section=results`, base);
+  assert.equal(workspaceFor(direct), 'gridworld-episode');
+  assert.equal(areaFor(workspaceFor(direct)), 'gridworld');
+  assert.equal(routeParams(direct).get('episode_id'), episode);
+  assert.equal(canonicalLocation(direct).pathname, direct.pathname);
+  assert.equal(sectionFor(canonicalLocation(direct)), 'results');
+});

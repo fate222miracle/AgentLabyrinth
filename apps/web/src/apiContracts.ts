@@ -20,6 +20,35 @@ const runtimeFields = {
   runtime_strategy: z.optional(z.enum(['handwritten', 'handwritten_recovery'])),
   runtime_version: z.optional(z.string()),
 };
+
+const gridWorldRow = z.object({
+    episode_id: uuid, started_at: utc, comparison_key: hash,
+    task_name: z.string(), task_version: z.string(), seed: z.int(),
+    model_id: z.string(), provider: z.enum(['fake', 'aihubmix']),
+    context_rounds: z.nullable(count), max_steps: count, token_budget: count,
+    max_execution_time_ms: z.nullable(count),
+    success: z.boolean(), termination, detail: z.string(),
+    actions: z.nullable(count), illegal_actions: z.nullable(count), duration_ms: count,
+    input_tokens: z.nullable(count), output_tokens: z.nullable(count), usage_complete: z.boolean(),
+});
+export const gridWorldComparisonSchema = z.object({
+  schema_version: z.literal('1.0'), skipped_count: count, items: z.array(gridWorldRow),
+});
+export type GridWorldComparisonRow = z.infer<typeof gridWorldRow>;
+export const gridWorldBatchSchema = z.object({
+  schema_version: z.literal('1.0'), batch_id: uuid, created_at: utc,
+  task: z.string(), task_version: z.string(), seed: z.int(), max_steps: count,
+  input_threshold: count, output_per_call: count, timeout_ms: count, context_rounds: count,
+  running: z.boolean(), runs: z.array(z.object({
+    model: z.string(), episode_id: uuid,
+    status: z.enum(['queued', 'running', 'completed', 'failed', 'unavailable', 'error', 'interrupted', 'not_started']),
+    row: z.nullable(gridWorldRow),
+  })).check(z.length(4)),
+});
+export const gridWorldBatchListSchema = z.object({
+  schema_version: z.literal('1.0'), skipped_count: count, items: z.array(gridWorldBatchSchema),
+});
+export type GridWorldBatch = z.infer<typeof gridWorldBatchSchema>;
 const contextPolicy = z.looseObject({
   schema_version: z.enum(['1.0', '1.1']), algorithm_version: z.enum(['tool-round-window-v1', 'tool-round-window-memory-v1']),
   mode: z.enum(['full', 'recent_tool_rounds']),
@@ -39,6 +68,22 @@ const usage = z.looseObject({ prompt_tokens: count, completion_tokens: count, si
 const cost = z.looseObject({ amount: decimal, currency: z.literal('USD'),
   price_table_version: z.string(), is_known: z.boolean() });
 
+export const gridWorldReviewSchema = z.object({
+  schema_version: z.literal('1.0'), review_id: uuid, episode_ids: z.tuple([uuid, uuid]),
+  source_hashes: z.tuple([hash, hash]), comparison_key: hash, review_input_hash: hash,
+  judge_model: z.string(), prompt_version: z.enum(['gridworld-pair-review-v1', 'gridworld-pair-review-v2']), created_at: utc,
+  output: z.nullable(z.object({
+    assessment: z.enum(['a', 'b', 'tradeoff', 'insufficient']), rationale: z.string(),
+    citations: z.array(z.object({ side: z.enum(['a', 'b']), event_id: uuid })),
+  })),
+  failure_code: z.nullable(z.enum(['JUDGE_PROVIDER_ERROR', 'JUDGE_REQUEST_TIMEOUT', 'INVALID_JUDGE_OUTPUT', 'INVALID_EVENT_REFERENCE'])),
+  token_usage: z.nullable(usage), estimated_cost: z.nullable(cost),
+}).check(z.refine(value => (value.output === null) !== (value.failure_code === null), 'review state mismatch'));
+export type GridWorldReview = z.infer<typeof gridWorldReviewSchema>;
+export const gridWorldReviewListSchema = z.object({
+  schema_version: z.literal('1.0'), reviews: z.array(gridWorldReviewSchema), skipped_count: count,
+});
+
 export const metaSchema = z.looseObject({
   schema_version: z.literal('1.0'), request_id: uuid,
   models: z.array(z.looseObject({ id: z.string(), name: z.string(),
@@ -46,9 +91,10 @@ export const metaSchema = z.looseObject({
     is_experimental: z.boolean(), notes: z.string(), scenarios: z.array(z.string()) })),
   tasks: z.array(z.looseObject({ id: z.string(), name: z.string(), category: z.string(),
     description: z.string(), max_steps: count, token_budget: count,
-    suite: z.enum(['tool_lab_core', 'bfcl_adapted', 'bfcl_java_adapted']),
+    suite: z.enum(['tool_lab_core', 'bfcl_adapted', 'bfcl_java_adapted', 'gridworld']),
     split: z.string(), supports_mcp: z.boolean(), supports_planning: z.optional(z.boolean()),
-    supports_reflection: z.optional(z.boolean()) })),
+    supports_reflection: z.optional(z.boolean()),
+    allowed_model_ids: z.nullish(z.array(z.string())) })),
   default_model: z.string(), default_task: z.string(),
   model_catalog_status: z.enum(['live', 'unavailable', 'static']),
 }).check(z.refine((value) => value.models.some((model) => model.id === value.default_model)

@@ -19,7 +19,25 @@ const motion = mark.replace('</title>', ' · 动态展示</title>').replace('  <
     @media (prefers-reduced-motion: reduce) { .fox, .features, .route { animation: none; } }
   </style>
   <defs>`);
-for (const [name, svg] of [['fox-monochrome', monochrome], ['fox-icon', icon], ['fox-motion', motion]]) {
+// Replay the same 1330 ms sequence with a 670 ms hold.
+const loading = mark.replace('  <defs>', `  <style>
+    .fox { transform-box: fill-box; transform-origin: center; animation: loading-appear 2s cubic-bezier(.2,.7,.2,1) infinite; }
+    .features { animation: loading-focus 2s ease-out infinite; }
+    .route { animation: loading-trace 2s cubic-bezier(.25,.6,.2,1) infinite; }
+    @keyframes loading-appear {
+      0% { opacity: 0; transform: translateY(12px); }
+      28%, 100% { opacity: 1; transform: none; }
+    }
+    @keyframes loading-focus { 0%, 9% { opacity: 0; } 24%, 100% { opacity: 1; } }
+    @keyframes loading-trace {
+      0%, 19% { clip-path: inset(0 100% 0 0); }
+      66.45% { clip-path: inset(0 0% 0 0); }
+      66.5%, 100% { clip-path: none; }
+    }
+    @media (prefers-reduced-motion: reduce) { .fox, .features, .route { animation: none; } }
+  </style>
+  <defs>`);
+for (const [name, svg] of [['fox-monochrome', monochrome], ['fox-icon', icon], ['fox-motion', motion], ['fox-loading', loading]]) {
   await writeFile(path.join(assets, `${name}.svg`), svg);
 }
-process.stdout.write('Fox static, monochrome, app icon and finite motion share the master paths.\n');
+process.stdout.write('Fox static, monochrome, app icon and motion share the master paths.\n');

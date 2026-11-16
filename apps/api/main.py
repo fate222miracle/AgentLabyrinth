@@ -1,6 +1,7 @@
 """FastAPI entrypoint and routing for AgentLabyrinth M1 Slice B."""
 
 import asyncio
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -11,10 +12,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import ValidationError
 
+from apps.api.gridworld_batch import BatchList, BatchRequest, BatchView
 from apps.api.schemas import (
     CreateEpisodeRequest,
     CreateEpisodeReviewRequest,
     CreateExperimentRequest,
+    CreateGridWorldReviewRequest,
     EpisodeResponse,
     EpisodeReviewListResponse,
     EpisodeReviewPartialListResponse,
@@ -24,10 +27,13 @@ from apps.api.schemas import (
     ExperimentJobState,
     ExperimentProgressResponse,
     ExperimentResponse,
+    GridWorldComparisonResponse,
+    GridWorldReviewListResponse,
     MetaResponse,
 )
 from apps.api.service import DEFAULT_ARTIFACTS_DIR, EpisodeService, ExperimentJobStopped
 from packages.application.experiment import ExperimentTokenBudgetError, ReferenceCostBudgetExceeded
+from packages.application.gridworld_review import PairReview
 from packages.domain.models import TraceEvent
 
 app = FastAPI(
@@ -41,6 +47,17 @@ LOCAL_BROWSER_ORIGINS = [
     for host in ("127.0.0.1", "localhost", "[::1]")
     for port in (5173, 4173, 8000)
 ]
+e2e_web_port = os.environ.get("AGENTLABYRINTH_E2E_WEB_PORT")
+if e2e_web_port is not None:
+    try:
+        e2e_port = int(e2e_web_port)
+    except ValueError as exc:
+        raise RuntimeError("AGENTLABYRINTH_E2E_WEB_PORT must be an integer") from exc
+    if not 1 <= e2e_port <= 65535:
+        raise RuntimeError("AGENTLABYRINTH_E2E_WEB_PORT must be between 1 and 65535")
+    e2e_origin = f"http://127.0.0.1:{e2e_port}"
+    if e2e_origin not in LOCAL_BROWSER_ORIGINS:
+        LOCAL_BROWSER_ORIGINS.append(e2e_origin)
 
 app.add_middleware(
     CORSMiddleware,
@@ -313,6 +330,63 @@ async def resume_episode(
             detail="Episode resume encountered an unexpected failure.",
         ) from exc
     return EpisodeResponse(request_id=uuid4(), artifact=artifact)
+
+
+@app.get(
+    "/api/v1/episodes/gridworld-comparison",
+    response_model=GridWorldComparisonResponse,
+    summary="List recent saved GridWorld results for model comparison",
+)
+async def gridworld_comparison(
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> GridWorldComparisonResponse:
+    return await asyncio.to_thread(service.gridworld_comparison)
+
+
+@app.post("/api/v1/gridworld-batches", response_model=BatchView, status_code=202)
+async def start_gridworld_batch(
+    req: BatchRequest, service: Annotated[EpisodeService, Depends(get_episode_service)]
+) -> BatchView:
+    try:
+        return await service.start_gridworld_batch()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/gridworld-batches", response_model=BatchList)
+async def gridworld_batches(
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> BatchList:
+    return await asyncio.to_thread(service.gridworld_batches)
+
+
+@app.post(
+    "/api/v1/gridworld-comparison-reviews",
+    response_model=PairReview,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_gridworld_review(
+    req: CreateGridWorldReviewRequest,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> PairReview:
+    try:
+        return await service.create_gridworld_review(req)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/gridworld-comparison-reviews", response_model=GridWorldReviewListResponse)
+async def list_gridworld_reviews(
+    episode_a: UUID,
+    episode_b: UUID,
+    service: Annotated[EpisodeService, Depends(get_episode_service)],
+) -> GridWorldReviewListResponse:
+    try:
+        return await asyncio.to_thread(service.list_gridworld_reviews, episode_a, episode_b)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get(

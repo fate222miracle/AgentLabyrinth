@@ -91,14 +91,14 @@ export function McpFlowReplay({ events, environmentVersion, model, provider, fin
   finalState: Record<string, unknown>; termination: string; detail: string;
   displayMode?: 'live' | 'completed' | 'replay';
   evaluation?: { success: boolean; reason: string };
-  eventIndex?: number; onSelectEvent?: (index: number) => void;
+  eventIndex?: number; onSelectEvent?: (index: number, auto: boolean) => void;
 }) {
   const live = displayMode === 'live';
   const following = displayMode !== 'replay';
   const frames = useMemo(() => flowFrames(events, environmentVersion), [events, environmentVersion]);
   const index = following ? frames.length - 1 : frameIndexAt(frames, eventIndex);
-  const selectFrame = (next: number) => {
-    if (frames[next]) onSelectEvent?.(frames[next].eventIndex);
+  const selectFrame = (next: number, auto = false) => {
+    if (frames[next]) onSelectEvent?.(frames[next].eventIndex, auto);
   };
   const [playing, setPlaying] = useState(false);
   const [duration, setDuration] = useState(1400);
@@ -118,14 +118,14 @@ export function McpFlowReplay({ events, environmentVersion, model, provider, fin
   const [focused, setFocused] = useState(false);
   const [focusError, setFocusError] = useState('');
   useEffect(() => {
-    if (displayMode !== 'completed') return;
+    if (displayMode !== 'completed' || environmentVersion === 'gridworld-key-door-v1') return;
     const pending = requestAnimationFrame(() => {
       const delivery = section.current?.querySelector<HTMLElement>('.run-delivery.saved');
       delivery?.focus({ preventScroll: true });
       delivery?.scrollIntoView({ block: 'start' });
     });
     return () => cancelAnimationFrame(pending);
-  }, [displayMode]);
+  }, [displayMode, environmentVersion]);
   useEffect(() => {
     const update = () => {
       const active = document.fullscreenElement === section.current;
@@ -194,7 +194,7 @@ export function McpFlowReplay({ events, environmentVersion, model, provider, fin
     if (!playing) return;
     const timer = window.setTimeout(() => {
       if (index >= frames.length - 1) setPlaying(false);
-      else selectFrame(index + 1);
+      else selectFrame(index + 1, true);
     }, duration);
     return () => window.clearTimeout(timer);
   }, [playing, index, duration, frames, onSelectEvent]);

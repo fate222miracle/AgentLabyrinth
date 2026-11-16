@@ -35,7 +35,10 @@ class BudgetTracker:
         task: TaskSpec,
         is_simulated: bool = True,
         price_table_version: str = "fake-zero-v1",
+        *,
+        stop_at_token_limit: bool = False,
     ) -> None:
+        self.stop_at_token_limit = stop_at_token_limit
         self.max_steps = min(agent_budget.max_steps, task.max_steps)
         self.max_model_calls = agent_budget.max_model_calls
         self.max_tool_calls = agent_budget.max_tool_calls
@@ -95,6 +98,26 @@ class BudgetTracker:
             return False, TerminationReason.MAX_STEPS, "max_steps_reached"
         if self.model_call_count >= self.max_model_calls:
             return False, TerminationReason.MAX_STEPS, "max_model_calls_reached"
+        if not self.stop_at_token_limit:
+            return True, None, None
+        if self.prompt_tokens >= self.max_prompt_tokens:
+            return (
+                False,
+                TerminationReason.TOKEN_BUDGET_EXCEEDED,
+                "agent_max_prompt_tokens_reached",
+            )
+        if self.completion_tokens >= self.max_completion_tokens:
+            return (
+                False,
+                TerminationReason.TOKEN_BUDGET_EXCEEDED,
+                "agent_max_completion_tokens_reached",
+            )
+        if self.prompt_tokens + self.completion_tokens >= self.task_token_budget:
+            return (
+                False,
+                TerminationReason.TOKEN_BUDGET_EXCEEDED,
+                "task_token_budget_reached",
+            )
         return True, None, None
 
     def accrue_usage(

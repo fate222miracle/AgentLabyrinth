@@ -24,13 +24,17 @@ export const taskCategoryLabels: Record<string, string> = {
   error_recovery: '错误恢复',
   reflection_challenge: '停滞反思',
   bfcl_single_call: '单次函数调用',
+  gridworld: '部分可观测环境',
 };
 
 export function taskDescription(task: TaskOption): string {
+  if (task.name === 'key-door-002-v1') return '在档案室找到钥匙，回到主廊开门，再绕过隔墙抵达出口。';
   return task.suite !== 'tool_lab_core' ? bfclDescriptions[task.id] ?? task.description : task.description;
 }
 
 export const taskTitles: Record<string, string> = {
+  'key-door-001-v1': '钥匙与门 · 局部探索',
+  'key-door-002-v1': '回廊档案室',
   'return-evidence-chain-001': '退货审批 · 查齐依据',
   'delivery-evidence-chain-002': '配送争议 · 核查处理结论',
   'refund-evidence-chain-003': '退款审批 · 追踪审核链',

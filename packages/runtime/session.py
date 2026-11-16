@@ -13,11 +13,13 @@ from pydantic import (
     Field,
     JsonValue,
     SerializerFunctionWrapHandler,
+    TypeAdapter,
     model_serializer,
     model_validator,
 )
 
 from packages.domain.models import (
+    GRIDWORLD_ENVIRONMENT_VERSION,
     AgentSpec,
     ContextPolicy,
     EpisodeResult,
@@ -160,12 +162,14 @@ class EpisodeSession:
         self.started = perf_counter()
         self.agent, self.task = agent, task
         self.environment, self.recorder, self.provider = environment, recorder, provider
+        self.is_gridworld = recorder.run_config.environment_version == GRIDWORLD_ENVIRONMENT_VERSION
         simulated = agent.model.provider == "fake"
         self.budget = BudgetTracker(
             agent.budget,
             task,
             is_simulated=simulated,
             price_table_version="fake-zero-v1" if simulated else "aihubmix-free-unverified",
+            stop_at_token_limit=self.is_gridworld,
         )
         self.messages: list[Message] = []
         self.plan: tuple[PlanItem, ...] = ()
@@ -182,6 +186,7 @@ class EpisodeSession:
         self.seen_call_ids: set[str] = set()
         self.retried = False
         self.last_state: dict[str, JsonValue] = {}
+        self.public_state_snapshot: dict[str, JsonValue] = {}
         self.termination_reason = TerminationReason.FAILED
         self.detail = "loop_terminated_without_submission"
         events = recorder.events
@@ -264,8 +269,14 @@ class EpisodeSession:
         self._restore_plan(state)
         self.environment.reset(self.task, self.recorder.run_config.seed)
         self.environment.restore(state.last_state)
-        if self.environment.snapshot() != state.last_state:
+        restored_private = self._validated_state(self.environment.snapshot())
+        if restored_private != state.last_state:
             raise ValueError("Environment checkpoint mismatch")
+        restored_public = self._validated_state(self.environment.public_state())
+        if self.is_gridworld:
+            recorded_public = self.last_recorded_public_state(self.recorder.events)
+            if recorded_public is not None and restored_public != recorded_public:
+                raise ValueError("Restored public state differs from the saved Trace prefix")
         self.budget.restore(state.budget)
         self.messages = list(state.messages)
         self.plan = tuple(state.plan)
@@ -280,7 +291,8 @@ class EpisodeSession:
         self.pending_calls = list(state.pending_calls)
         if self.pending_calls and state.next_node == "execute":
             self._restore_batch(state)
-        self.last_state = state.last_state
+        self.last_state = restored_private
+        self.public_state_snapshot = restored_public
         self.termination_reason = state.termination_reason
         self.detail = state.detail
         self.started = perf_counter() - state.elapsed_ms / 1000
@@ -288,6 +300,24 @@ class EpisodeSession:
         self.parent_event_id = events[-1].event_id if events else None
         self._restore_reflection()
         return state.next_node
+
+    @staticmethod
+    def last_recorded_public_state(events: tuple[TraceEvent, ...]) -> dict[str, JsonValue] | None:
+        """Find the latest persisted public environment projection in the Trace."""
+        for event in reversed(events):
+            candidate: object | None = None
+            if event.event_type == EventType.ENVIRONMENT_UPDATED:
+                candidate = event.payload.get("state")
+            elif event.event_type == EventType.OBSERVATION_CREATED:
+                candidate = event.payload.get("initial_state")
+            if isinstance(candidate, dict):
+                return EpisodeSession._validated_state(candidate)
+        return None
+
+    @staticmethod
+    def _validated_state(state: object) -> dict[str, JsonValue]:
+        """Validate a state projection before using it at a persistence boundary."""
+        return TypeAdapter(dict[str, JsonValue]).validate_python(state, strict=True)
 
     def _restore_reflection(self) -> None:
         """Validate saved reflection state and reconstruct the last progress candidate."""
@@ -490,10 +520,13 @@ class EpisodeSession:
     def observe(self) -> NextNode:
         """Reset the environment and build only the public model context."""
         obs = self.environment.reset(self.task, self.recorder.run_config.seed)
-        self.last_state = self.environment.snapshot()
+        private_state = self._validated_state(self.environment.snapshot())
+        public_state = self._validated_state(self.environment.public_state())
+        self.last_state = private_state
+        self.public_state_snapshot = public_state
         self.record(
             EventType.OBSERVATION_CREATED,
-            {"observation": obs.content, "initial_state": self.last_state},
+            {"observation": obs.content, "initial_state": self.public_state_snapshot},
         )
         self.messages = [
             Message(
@@ -806,6 +839,15 @@ class EpisodeSession:
         )
         if self.time_exceeded():
             return self.stop_for_time()
+        if (
+            self.is_gridworld
+            and self.agent.model.max_tokens is not None
+            and response.token_usage.completion_tokens > self.agent.model.max_tokens
+        ):
+            return self.stop(
+                TerminationReason.TOKEN_BUDGET_EXCEEDED,
+                "model_completion_tokens_exceeded",
+            )
         if not allowed:
             return self.stop(
                 reason or TerminationReason.TOKEN_BUDGET_EXCEEDED, detail or "token_budget_exceeded"
@@ -1048,7 +1090,13 @@ class EpisodeSession:
         try:
             # ToolLab may cross a real network boundary; keep the event loop responsive.
             step = await asyncio.to_thread(self.environment.step, action)
-            self.last_state = self.environment.snapshot()
+            if step.error is None:
+                private_state = self._validated_state(self.environment.snapshot())
+                public_state = self._validated_state(self.environment.public_state())
+                self.last_state = private_state
+                self.public_state_snapshot = public_state
+            elif not self.is_gridworld:
+                self.last_state = self._validated_state(self.environment.snapshot())
         except Exception:
             self.record(
                 EventType.TOOL_FAILED,
@@ -1073,7 +1121,7 @@ class EpisodeSession:
             EventType.ENVIRONMENT_UPDATED,
             {
                 "done": step.done,
-                "state": self.last_state,
+                "state": self.public_state_snapshot,
                 **({"call_id": action.call_id} if self.pending_calls else {}),
             },
         )

@@ -17,8 +17,10 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    case,
     create_engine,
     event,
+    func,
     inspect,
     select,
 )
@@ -30,6 +32,7 @@ from packages.application.checkpoint import (
     validate_completed_episode,
 )
 from packages.application.experiment import ExperimentArtifact, ExperimentCheckpoint
+from packages.application.gridworld_review import PairReview
 from packages.application.review import EpisodeReviewArtifact
 from packages.application.trace import JsonTraceRecorder, sanitize
 from packages.domain.models import AgentSpec, EpisodeArtifact, RunConfig, TaskSpec
@@ -61,6 +64,15 @@ _records = Table(
         name="artifact_record_kind",
     ),
 )
+_pair_reviews = Table(
+    "gridworld_comparison_reviews",
+    _metadata,
+    Column("review_id", String(36), primary_key=True),
+    Column("pair_key", String(73), nullable=False),
+    Column("payload", Text, nullable=False),
+    Column("sha256", String(64), nullable=False),
+    Column("created_at_ns", BigInteger(), nullable=False),
+)
 
 
 def _serialized(model: EpisodeCheckpoint | EpisodeArtifact) -> tuple[str, str]:
@@ -83,6 +95,31 @@ def _checked_record(payload: str, digest: str) -> None:
         raise ValueError("Stored artifact digest mismatch")
 
 
+def _terminal_checkpoint_transition(
+    previous: EpisodeCheckpoint, checked: EpisodeCheckpoint
+) -> bool:
+    """Allow a budget stop to persist terminal runtime metadata without a new Trace event."""
+    prior = previous.session
+    current = checked.session
+    if (
+        prior.next_node != "model"
+        or current.next_node != "end"
+        or current.elapsed_ms < prior.elapsed_ms
+        or current.termination_reason == prior.termination_reason
+        or previous.events != checked.events
+    ):
+        return False
+    expected = prior.model_copy(
+        update={
+            "next_node": "end",
+            "termination_reason": current.termination_reason,
+            "detail": current.detail,
+            "elapsed_ms": current.elapsed_ms,
+        }
+    )
+    return expected == current
+
+
 class SQLiteEpisodeStore:
     """Store one immutable result or one extend-only safety point per Episode."""
 
@@ -103,7 +140,7 @@ class SQLiteEpisodeStore:
         self._upgrade()
 
     def _upgrade(self) -> None:
-        allowed = {"alembic_version", "episode_records", "artifact_records"}
+        allowed = {"alembic_version", "episode_records", "artifact_records", _pair_reviews.name}
         with self.engine.connect() as connection:
             tables = set(inspect(connection).get_table_names())
             if tables - allowed or ("episode_records" in tables) != ("alembic_version" in tables):
@@ -343,6 +380,42 @@ class SQLiteEpisodeStore:
     def review_ids(self, episode_id: UUID | None = None) -> list[UUID]:
         return self._record_ids("review", parent_id=episode_id)
 
+    def save_pair_review(self, review: PairReview) -> None:
+        """Save one immutable comparison review in a short transaction."""
+        payload, digest = _json_payload(review)
+        with self.engine.begin() as connection:
+            connection.execute(
+                _pair_reviews.insert().values(
+                    review_id=str(review.review_id),
+                    pair_key=f"{review.episode_ids[0]}:{review.episode_ids[1]}",
+                    payload=payload,
+                    sha256=digest,
+                    created_at_ns=time_ns(),
+                )
+            )
+
+    def pair_reviews(self, pair: tuple[UUID, UUID]) -> tuple[list[PairReview], int]:
+        """Read up to twenty saved rows for the pair and skip corrupt records."""
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(_pair_reviews)
+                .where(_pair_reviews.c.pair_key == f"{pair[0]}:{pair[1]}")
+                .order_by(_pair_reviews.c.created_at_ns.desc(), _pair_reviews.c.review_id.desc())
+                .limit(20)
+            ).all()
+        reviews = []
+        skipped = 0
+        for row in rows:
+            try:
+                _checked_record(row.payload, row.sha256)
+                review = PairReview.model_validate_json(row.payload)
+                if str(review.review_id) != row.review_id or review.episode_ids != pair:
+                    raise ValueError("Stored pair review identity mismatch")
+                reviews.append(review)
+            except ValueError:
+                skipped += 1
+        return reviews, skipped
+
     def _record_ids(
         self,
         kind: str,
@@ -405,14 +478,18 @@ class SQLiteEpisodeStore:
                     if previous == checked:
                         connection.commit()
                         return
+                    trace_extends = (
+                        len(previous.events) < len(checked.events)
+                        and checked.events[: len(previous.events)] == previous.events
+                    )
+                    terminal_transition = _terminal_checkpoint_transition(previous, checked)
                     if (
                         previous.episode_id != checked.episode_id
                         or previous.agent != checked.agent
                         or previous.task != checked.task
                         or previous.run_config != checked.run_config
                         or previous.fake_scenario != checked.fake_scenario
-                        or len(previous.events) >= len(checked.events)
-                        or checked.events[: len(previous.events)] != previous.events
+                        or not (trace_extends or terminal_transition)
                     ):
                         raise ValueError("Checkpoint does not extend the saved safety point")
                     connection.execute(
@@ -525,6 +602,23 @@ class SQLiteEpisodeStore:
         artifact = EpisodeArtifact.model_validate_json(row.payload)
         validate_completed_episode(artifact, episode_id)
         return artifact
+
+    def recent_completed_ids(self, environment_version: str, *, limit: int) -> list[UUID]:
+        """Find recent saved runs for one environment without loading their traces."""
+        environment = case(
+            (
+                func.json_valid(_episodes.c.payload),
+                func.json_extract(_episodes.c.payload, "$.run_config.environment_version"),
+            )
+        )
+        with self.engine.connect() as connection:
+            values = connection.execute(
+                select(_episodes.c.episode_id)
+                .where(_episodes.c.kind == "finished", environment == environment_version)
+                .order_by(_episodes.c.updated_at_ns.desc(), _episodes.c.episode_id)
+                .limit(limit)
+            ).scalars()
+            return [UUID(value) for value in values]
 
     def checkpoint_ids(self, *, before_ns: int) -> list[UUID]:
         with self.engine.connect() as connection:

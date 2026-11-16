@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "id": "a70c6633-c787-4ae3-9e99-85055d519b5f",
+  "name": "key-door-001-v1",
+  "version": "1.0.0",
+  "category": "gridworld",
+  "description": "Explore the local map, collect the matching key, open its door, and enter the goal.",
+  "initial_state": {
+    "map_id": "key-door-001-v1",
+    "start": [1, 2]
+  },
+  "goal_conditions": {
+    "rule_id": "collect-key-open-matching-door-enter-goal-v1"
+  },
+  "constraints": [
+    "Use one environment action per model response.",
+    "Only act on targets identified by your observations."
+  ],
+  "expected_tools": [
+    "move_up",
+    "move_down",
+    "move_left",
+    "move_right",
+    "inspect",
+    "pickup",
+    "use"
+  ],
+  "forbidden_tools": [],
+  "max_steps": 16,
+  "token_budget": 16000,
+  "evaluator_config": {
+    "name": "gridworld_key_door_v1",
+    "split": "development",
+    "origin": "native"
+  }
+}

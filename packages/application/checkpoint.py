@@ -22,7 +22,12 @@ from packages.domain.ports import AgentRuntime, Environment, Evaluator
 from packages.runtime.session import SessionState
 
 CHECKPOINT_ENVIRONMENTS = frozenset(
-    {"tool-lab-m0-v1", "tool-lab-mcp-v1", "bfcl-adapted-single-call-v1"}
+    {
+        "tool-lab-m0-v1",
+        "tool-lab-mcp-v1",
+        "bfcl-adapted-single-call-v1",
+        "gridworld-key-door-v1",
+    }
 )
 
 
