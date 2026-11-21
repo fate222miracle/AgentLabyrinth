@@ -1,52 +1,33 @@
 <p align="center">
-  <img src="apps/web/public/brand/fox-mark-512.png" alt="AgentLabyrinth 狐狸标志" width="88" height="88">
+  <img src="apps/web/public/brand/fox-mark-512.png" alt="AgentLabyrinth 狐狸 Logo" width="88" height="88">
 </p>
 
-# AgentLabyrinth
+<h1 align="center">AgentLabyrinth</h1>
 
-**面向工具型 AI Agent 的可视化测试台和可复现评测平台。**
+<p align="center"><strong>运行、回放和比较工具型 AI Agent</strong></p>
 
-逐轮查看 Agent 当时获得的信息、提出的动作、收到的反馈，以及任务状态如何变化。在相同条件下比较模型、工具策略或协作方式，定位失败并验证改动。回放以实际保存的输入、工具调用、消息和环境反馈为依据。
+<p align="center">
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#功能">功能</a> ·
+  <a href="#文档与贡献">文档与贡献</a>
+</p>
 
-[快速开始](#快速开始) · [开发预览](#开发预览) · [产品需求](docs/product/requirements.md) · [贡献指南](CONTRIBUTING.md)
+AgentLabyrinth 是一个在本机运行的 Agent 测试台。逐步查看 Agent 读到了哪些资料、调用了什么工具，以及环境如何响应。用同一道任务比较模型或运行配置，核对一次改动是否改善了结果。
 
-![离线工具任务的执行路径、最终交付与证据回放](docs/design/ui-workspaces-20261103/fake-delivery.png)
-
-*ToolLab 离线回放示例。可以从规则结论和引用证据回查执行步骤。*
-
-## 可以用它做什么
-
-| 能力 | 解决的问题 |
-| --- | --- |
-| **逐轮执行与回放** | 核对 Agent 当时看到了什么、调用了哪个工具，以及业务状态在哪一步发生变化。 |
-| **同题对照** | 固定任务和预算，每次调整一个实验变量，观察结果、调用次数、已报告 Token 和耗时的变化。 |
-| **规则评分与模型评审** | 用确定性规则核查业务终态和提交证据，用独立评审补充对执行过程的分析。 |
-| **工具校验与 MCP** | 检查工具选择和参数，沿记录定位本地执行或 MCP HTTP 调用的失败。 |
-| **运行留档与恢复** | 重新打开保存的结果，在支持恢复的流程中从已确认的进度继续。 |
-
-### 主分支可体验
-
-- **ToolLab** 提供订单查询、文档检索、证据提交等任务，可查看逐轮 Trace、最终答案和规则结论。
-- **GridWorld** 提供局部视野迷宫、二维和三维展示，以及保存结果的模型对照。
-
-## 开发预览
-
-V0.5 和 V0.6 正在开发工具审批、DeepSeek 接入和冷链协作。下述案例来自开发环境的真实记录。
-
-首组 DeepSeek 冷链对照中，单 Agent 第一轮返回多个工具调用，被单动作协议拦截，双 Agent 完成交接。回放把失败定位在动作协议。两组统一使用单动作 JSON 后，单 Agent 在 3 轮完成，双 Agent 在 4 轮完成，其中一轮用于送达简报。这一对结果验证了协议调整和冷链交接流程。
+![AgentLabyrinth 的执行回放，显示工具调用、答案和引用证据](docs/design/ui-workspaces-20261103/fake-delivery.png)
 
 ## 快速开始
 
-需要 Python **3.12**、[uv](https://docs.astral.sh/uv/) 和 Node.js **22.21+**。首次体验可选择 **Fake** 离线模型，无需模型 API Key。
-
-从仓库根目录安装锁定依赖：
+需要 **Python 3.12**、[uv](https://docs.astral.sh/uv/) 和 **Node.js 22.21+**。第一次运行使用 Fake 模型，无需 API Key。
 
 ~~~bash
+git clone https://github.com/fate222miracle/AgentLabyrinth.git
+cd AgentLabyrinth
 uv sync --locked
 npm --prefix apps/web ci
 ~~~
 
-分别打开两个终端，在仓库根目录启动后端和前端：
+在仓库根目录开两个终端，分别启动 API 和 Web。
 
 ~~~bash
 uv run --locked python -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8000
@@ -56,29 +37,32 @@ uv run --locked python -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8000
 npm --prefix apps/web run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ~~~
 
-打开 [本机工作台](http://127.0.0.1:5173/)。从「任务库」选一个 ToolLab 任务，在「执行工作台」选择 Fake 并运行，结束后可回看执行过程、结果与证据。也可以打开 [GridWorld](http://127.0.0.1:5173/gridworld)，选择 Fake 离线模型运行单人迷宫。
+打开 [本机工作台](http://127.0.0.1:5173/)，从「任务库」挑一道 ToolLab 任务，在「执行工作台」选择 **Fake** 并开始运行。完成后点击执行路径中的任一步，检查当轮的工具调用和反馈，再回看提交的答案及证据。
 
-### 使用真实模型
+也可以进入 [GridWorld](http://127.0.0.1:5173/gridworld)，回放 Agent 在局部视野下拾取钥匙、开门并走到目标的过程。
 
-参考 [.env.example](.env.example)，在仓库根目录创建本机 .env，配置 `AIHUBMIX_API_KEY`。将后端启动命令改为：
+<details>
+<summary>配置真实模型</summary>
+
+参考 [.env.example](.env.example) 在仓库根目录创建本机的 .env 文件，配置 `AIHUBMIX_API_KEY`。使用以下命令启动 API，再在页面选择可用型号。
 
 ~~~bash
 uv run --locked --env-file .env python -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8000
 ~~~
 
-在支持真实模型的页面显式选择型号后运行。API Key 由本机后端读取，费用以服务商账单为准。
+</details>
 
-## 开发与验证
+## 功能
 
-- `apps/api` 和 `apps/web` 分别提供 FastAPI 服务与 React 工作台。
-- `packages` 包含运行时、环境、评测、模型适配和 SQLite 持久化。
-- `benchmarks` 和 `scripts` 保存任务、固定回归配置与验收命令。
+- **复盘执行。** 在 ToolLab 中追踪订单查询、文档阅读与证据提交，核对工具参数、环境反馈和规则评分。
+- **比较结果。** 在同一任务上对照模型或运行配置，查看任务结果、已报告的 Token 和耗时。
+- **观察环境。** 用二维或三维 GridWorld 回放迷宫动作。支持 MCP 的任务还可沿 Trace 查看工具调用与返回。
+- **回查历史。** 重新打开保存的运行，在支持恢复的流程中从已确认的进度继续。
 
-安装依赖后，可以运行后端与前端单测：
+## 文档与贡献
 
-~~~bash
-uv run --locked python -m pytest -q
-npm --prefix apps/web test
-~~~
+- [需求与路线图](docs/product/requirements.md)
+- [贡献指南与质量检查](CONTRIBUTING.md)
+- [反馈问题](https://github.com/fate222miracle/AgentLabyrinth/issues)
 
-完整质量检查、浏览器依赖和协作流程见 [贡献指南](CONTRIBUTING.md)。当前交付和后续范围见 [项目状态](docs/handoffs/current-state.md)。
+**开发预览** · 工具审批、DeepSeek 接入和多 Agent 冷链协作属于后续开发版本。进度见 [项目记录](docs/handoffs/current-state.md)。
