@@ -14,6 +14,7 @@ import pytest
 from packages.domain.models import FinalAnswer, Message, ModelConfig, ToolCall, ToolSchema
 from packages.domain.ports import ModelProviderError
 from packages.providers.aihubmix import AIHubMixModelProvider, list_available_model_ids
+from packages.providers.deepseek import DeepSeekModelProvider
 
 
 @pytest.mark.parametrize("operation", ["catalog", "completion"])
@@ -493,3 +494,53 @@ def test_request_pacing_reserves_start_times() -> None:
             with pytest.raises(ModelProviderError):
                 provider._send_http_request({}, "test-key")
         assert [call.args[0] for call in sleep.call_args_list] == [0, 13]
+
+
+def test_deepseek_uses_its_own_key_and_native_tool_choice(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AIHUBMIX_API_KEY", "unrelated")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    provider = DeepSeekModelProvider(required_tool=True)
+    config = ModelConfig(provider="deepseek", model="deepseek-flash")
+    with patch.object(AIHubMixModelProvider, "_send_http_request") as send:
+        with pytest.raises(ModelProviderError, match="AUTHENTICATION_FAILED"):
+            asyncio.run(provider.generate([], [], config))
+        send.assert_not_called()
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "direct-test")
+        send.return_value = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "direct-action",
+                                "function": {"name": "inspect", "arguments": "{}"},
+                            }
+                        ]
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 3},
+        }
+        result = asyncio.run(
+            provider.generate(
+                [Message(role="user", content={"goal": "inspect"})],
+                [
+                    ToolSchema(
+                        name="inspect",
+                        description="Observe current tile",
+                        parameters={"type": "object"},
+                        version="1.0",
+                        risk_level="READ_ONLY",
+                    )
+                ],
+                config,
+            )
+        )
+    payload, key = send.call_args.args
+    assert key == "direct-test" and provider._base_url == "https://api.deepseek.com"
+    assert payload["tool_choice"] == "required" and payload["thinking"] == {"type": "disabled"}
+    assert "parallel_tool_calls" not in payload
+    assert isinstance(result.action, ToolCall) and result.action.name == "inspect"
+    assert result.estimated_cost.price_table_version == "deepseek-official-unverified"
+    assert result.estimated_cost.is_known is False

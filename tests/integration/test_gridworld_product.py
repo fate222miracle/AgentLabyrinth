@@ -793,7 +793,9 @@ def test_fixed_gridworld_batch_persists_four_slots_and_reuses_saved_rows(
 
 def test_demo_service_keeps_gridworld_fake_only(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only")
     demo = DemoService(artifacts_dir=tmp_path)
     assert {model.provider for model in demo.get_meta().models} == {"fake"}
     request = CreateEpisodeRequest.model_validate(_real_episode_request())
@@ -801,6 +803,13 @@ def test_demo_service_keeps_gridworld_fake_only(
         with pytest.raises(ValueError, match="Fake models only"):
             asyncio.run(demo.execute_episode(request))
     provider_factory.assert_not_called()
+    paid = CreateEpisodeRequest.model_validate(
+        _real_episode_request(provider="deepseek", model="deepseek-flash")
+    )
+    with patch("apps.api.service.DeepSeekModelProvider") as direct:
+        with pytest.raises(ValueError, match="DeepSeek"):
+            asyncio.run(demo.execute_episode(paid))
+        direct.assert_not_called()
 
 
 def test_real_gridworld_network_failure_is_saved_and_cannot_resume_or_rerun(
@@ -1085,4 +1094,33 @@ def test_gridworld_private_checkpoint_resumes_after_process_exit(
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "--crash-gridworld":
     _crash_gridworld_after_actions(
         Path(sys.argv[2]), Path(sys.argv[3]), int(sys.argv[4]), UUID(sys.argv[5])
+    )
+
+
+def test_deepseek_catalog_and_gridworld_single_use_the_direct_provider(
+    product_client: tuple[TestClient, EpisodeService], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, service = product_client
+    req = _real_episode_request(provider="deepseek", model="deepseek-flash")
+    substitute = LocalGridWorldModelSubstitute()
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    assert "deepseek-flash" not in {m.id for m in service.get_meta().models}
+    with patch("apps.api.service.DeepSeekModelProvider", return_value=substitute) as direct:
+        assert client.post("/api/v1/episodes", json=req).status_code == 400
+        direct.assert_not_called()
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only")
+        catalog = client.get("/api/v1/meta").json()
+        model = next(item for item in catalog["models"] if item["id"] == "deepseek-flash")
+        assert model["provider"] == "deepseek" and not model["is_default"]
+        assert catalog["default_model"] != "deepseek-flash"
+        assert "按量计费" in model["name"]
+        response = client.post("/api/v1/episodes", json=req)
+    assert response.status_code == 201, response.text
+    direct.assert_called_once_with(required_tool=True, timeout=30.0, compact_message_json=False)
+    result = response.json()["artifact"]
+    assert result["agent"]["model"]["provider"] == "deepseek"
+    assert result["evaluation"]["success"]
+    assert (
+        client.get(f"/api/v1/episodes/{result['episode']['episode_id']}").json()["artifact"]
+        == result
     )

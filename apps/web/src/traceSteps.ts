@@ -100,6 +100,7 @@ export function explainFailure(detail: string): string {
     NETWORK_CONNECTION_FAILED: '后端未能完成与模型网关的连接；仅凭此错误不能判断每日额度是否耗尽。已保存进度保留，不会自动重试。',
     EXPERIMENT_TOKEN_USAGE_UNKNOWN: '部分模型请求的用量未知，已停止后续运行；未执行侧不能按失败或零用量统计。',
     MULTIPLE_TOOL_CALLS: '模型在单工具模式返回了多个调用，已按保存协议停止，未擅自选取其中一个。',
+    INSUFFICIENT_BALANCE: 'DeepSeek 账户余额不足，请检查官方账户。',
     REQUEST_TIMEOUT: '模型请求超时。',
     OUTPUT_TRUNCATED: '模型输出达到单次上限，未形成完整行动。',
     INVALID_ARGUMENTS: '工具参数不符合 schema；Baseline 会终止，Recovery 最多纠错一次。',

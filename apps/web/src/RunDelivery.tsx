@@ -23,7 +23,7 @@ export function RunDelivery({ state, environmentVersion, termination, detail, ev
   return <section className={`run-delivery flow-bookend output ${live ? 'pending' : 'saved'} ${failed ? 'failed' : ''}`} aria-label={label} tabIndex={-1}>
     <div className="delivery-heading"><h3>{live ? '等待最终产物' : bfcl ? '函数调用提议 · 已保存' : '最终输出 · 已保存'}</h3>
       {!live && evaluation && <span className={`delivery-verdict ${evaluation.success ? 'passed' : 'failed'}`}>评测结论：{evaluation.success ? '通过' : '未通过'}</span>}</div>
-    <p className="delivery-boundary">{provider === 'fake' ? 'Fake 离线模拟 · 只验证机制，不代表模型能力' : provider === 'aihubmix' ? '真实模型运行 · 单次结果' : '运行来源未记录'}</p>
+    <p className="delivery-boundary">{provider === 'fake' ? 'Fake 离线模拟 · 只验证机制，不代表模型能力' : provider === 'deepseek' ? 'DeepSeek 官方 · 按量计费' : provider === 'aihubmix' ? '真实模型运行 · 单次结果' : '运行来源未记录'}</p>
     {!live && replay && <p className="delivery-boundary">整次运行的最终结果；下方按选定步骤回放。</p>}
     {live ? <p className="delivery-pending">{termination === '连接中断' ? '请稍后按 Episode ID 回读最终产物' : '运行完成后显示评测结果'}</p>
       : <>

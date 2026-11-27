@@ -25,6 +25,7 @@ from packages.domain.models import (
     ToolCallMode,
 )
 from packages.environments.gridworld.environment import GRID_LAYOUTS, SOURCE_TOKEN_BUDGET
+from packages.providers.deepseek import DEEPSEEK_MODEL
 
 ALLOWED_AIHUBMIX_MODELS: set[str] = {
     "coding-minimax-m2.7-free",
@@ -66,7 +67,7 @@ class ModelOption(BaseModel):
 
     id: str
     name: str
-    provider: Literal["fake", "aihubmix"]
+    provider: Literal["fake", "aihubmix", "deepseek"]
     is_default: bool = False
     is_experimental: bool = False
     notes: str = ""
@@ -116,7 +117,7 @@ class CreateEpisodeRequest(BaseModel):
     schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"] = "1.3"
     tool_call_mode: ToolCallMode | None = None
     request_id: UUID = Field(default_factory=uuid4)
-    provider: Literal["fake", "aihubmix"]
+    provider: Literal["fake", "aihubmix", "deepseek"]
     model: str
     scenario: (
         Literal[
@@ -199,8 +200,10 @@ class CreateEpisodeRequest(BaseModel):
                 and self.token_budget in (None, SOURCE_TOKEN_BUDGET)
             )
             real_configuration = (
-                self.provider == "aihubmix"
-                and self.model in GRIDWORLD_ALLOWED_MODEL_IDS
+                (
+                    (self.provider == "aihubmix" and self.model in GRIDWORLD_ALLOWED_MODEL_IDS)
+                    or (self.provider == "deepseek" and self.model == DEEPSEEK_MODEL)
+                )
                 and self.scenario is None
                 and self.token_budget is None
             )
@@ -229,7 +232,7 @@ class GridWorldComparisonRow(BaseModel):
     task_version: str
     seed: int
     model_id: str
-    provider: Literal["fake", "aihubmix"]
+    provider: Literal["fake", "aihubmix", "deepseek"]
     context_rounds: int | None
     max_steps: int
     token_budget: int
@@ -285,7 +288,7 @@ class CreateEpisodeReviewRequest(BaseModel):
     request_id: UUID = Field(default_factory=uuid4)
     episode_id: UUID
     method: Literal["human", "llm_judge"]
-    judge_provider: Literal["aihubmix"] | None = None
+    judge_provider: Literal["aihubmix", "deepseek"] | None = None
     judge_model: str | None = Field(default=None, min_length=1, max_length=200)
     human: HumanReviewInput | None = None
     judge_scenario: Literal["success", "invalid_json", "bad_reference", "provider_error"] | None = (
@@ -302,7 +305,7 @@ class CreateEpisodeReviewRequest(BaseModel):
             self.method != "llm_judge"
             or "human" in self.model_fields_set
             or "judge_scenario" in self.model_fields_set
-            or self.judge_provider != "aihubmix"
+            or self.judge_provider is None
             or self.judge_model is None
             or not self.judge_model.strip()
         ):
@@ -354,7 +357,7 @@ class CreateExperimentRequest(BaseModel):
     ] = "1.5"
     tool_call_mode: ToolCallMode | None = None
     request_id: UUID = Field(default_factory=uuid4)
-    provider: Literal["fake", "aihubmix"]
+    provider: Literal["fake", "aihubmix", "deepseek"]
     model: str
     scenario: (
         Literal[

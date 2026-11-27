@@ -42,7 +42,9 @@ _next_request_at = 0.0
 
 
 def _transport_failure(
-    error: OSError | http.client.HTTPException, operation: Literal["catalog", "completion"]
+    error: OSError | http.client.HTTPException,
+    operation: Literal["catalog", "completion"],
+    provider: str = "aihubmix",
 ) -> ModelProviderError:
     """Log fixed local categories, keeping raw errors out of logs and public artifacts."""
     reason = error.reason if isinstance(error, urllib.error.URLError) else error
@@ -65,10 +67,11 @@ def _transport_failure(
     else:
         category = "NETWORK_UNKNOWN"
     logging.getLogger(__name__).warning(
-        "provider_network_failure provider=aihubmix operation=%s category=%s",
+        "provider_network_failure provider=%s operation=%s category=%s",
+        provider,
         operation,
         category,
-        extra={"provider": "aihubmix", "operation": operation, "network_category": category},
+        extra={"provider": provider, "operation": operation, "network_category": category},
     )
     return ModelProviderError(
         "REQUEST_TIMEOUT" if category == "REQUEST_TIMEOUT" else "NETWORK_CONNECTION_FAILED"
@@ -168,6 +171,9 @@ def inline_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
 class AIHubMixModelProvider(ModelProvider):
     """OpenAI-compatible Chat Completions provider for AIHubMix models."""
 
+    provider_name = "aihubmix"
+    unknown_price_version = "aihubmix-free-unverified"
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -175,12 +181,14 @@ class AIHubMixModelProvider(ModelProvider):
         timeout: float = 30.0,
         min_request_interval: float = 0.0,
         reasoning_split: bool | None = None,
+        compact_message_json: bool = False,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._min_request_interval = min_request_interval
         self._reasoning_split = reasoning_split
+        self._compact_message_json = compact_message_json
 
     def _resolve_key(self) -> str:
         """Resolve API key on demand without persisting in logs or public fields."""
@@ -190,6 +198,7 @@ class AIHubMixModelProvider(ModelProvider):
 
     def _format_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
         """Format domain Message list into OpenAI Chat Completions message dicts."""
+        separators = (",", ":") if self._compact_message_json else None
         formatted: list[dict[str, Any]] = []
         for msg in messages:
             if msg.role == "tool":
@@ -197,7 +206,7 @@ class AIHubMixModelProvider(ModelProvider):
                     {
                         "role": "tool",
                         "tool_call_id": msg.tool_call_id or "call_default",
-                        "content": json.dumps(msg.content)
+                        "content": json.dumps(msg.content, separators=separators)
                         if not isinstance(msg.content, str)
                         else msg.content,
                     }
@@ -221,7 +230,7 @@ class AIHubMixModelProvider(ModelProvider):
                     ]
                 else:
                     item["content"] = (
-                        json.dumps(msg.content)
+                        json.dumps(msg.content, separators=separators)
                         if not isinstance(msg.content, str) and msg.content is not None
                         else (msg.content or "")
                     )
@@ -230,7 +239,7 @@ class AIHubMixModelProvider(ModelProvider):
                 formatted.append(
                     {
                         "role": msg.role,
-                        "content": json.dumps(msg.content)
+                        "content": json.dumps(msg.content, separators=separators)
                         if not isinstance(msg.content, str)
                         else msg.content,
                     }
@@ -288,6 +297,8 @@ class AIHubMixModelProvider(ModelProvider):
             # Inspect only known codes, including when upstream wraps them in 5xx.
             if err.code == 401:
                 code = "AUTHENTICATION_FAILED"
+            elif err.code == 402 and self.provider_name == "deepseek":
+                code = "INSUFFICIENT_BALANCE"
             elif err.code == 429:
                 code = "RATE_LIMIT_EXCEEDED"
             elif upstream_code == "no_available_channel":
@@ -302,7 +313,7 @@ class AIHubMixModelProvider(ModelProvider):
                 code = "CLIENT_REQUEST_FAILED"
             raise ModelProviderError(code) from None
         except (OSError, http.client.HTTPException) as err:
-            raise _transport_failure(err, "completion") from None
+            raise _transport_failure(err, "completion", self.provider_name) from None
         except (ValueError, UnicodeError):
             raise ModelProviderError("INVALID_MODEL_RESPONSE") from None
 
@@ -414,7 +425,7 @@ class AIHubMixModelProvider(ModelProvider):
         estimated_cost = EstimatedCost(
             amount=Decimal("0"),
             currency="USD",
-            price_table_version="aihubmix-free-unverified",
+            price_table_version=self.unknown_price_version,
             estimated=True,
             is_known=False,
         )

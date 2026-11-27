@@ -110,10 +110,11 @@ export function EpisodeReviewPanel({ artifact, models }: Props) {
   const [judgeModel, setJudgeModel] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const judgeModels = models.filter((model) => model.provider === 'aihubmix');
+  const judgeModels = models.filter((model) => model.provider !== 'fake');
   const hasSubmission = typeof artifact.episode.final_state.submission === 'object'
     && artifact.episode.final_state.submission !== null;
-  const modelAvailable = judgeModels.some((model) => model.id === judgeModel);
+  const selectedJudge = judgeModels.find((model) => model.id === judgeModel);
+  const modelAvailable = Boolean(selectedJudge);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -145,7 +146,7 @@ export function EpisodeReviewPanel({ artifact, models }: Props) {
     .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
 
   async function runJudge(): Promise<void> {
-    if (saving || !hasSubmission || !modelAvailable) return;
+    if (saving || !hasSubmission || !selectedJudge) return;
     const requestedModel = judgeModel;
     setSaving(true);
     setSaveError('');
@@ -153,11 +154,11 @@ export function EpisodeReviewPanel({ artifact, models }: Props) {
       const response = await fetch('/api/v1/episode-reviews', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ schema_version: '1.1', episode_id: episodeId,
-          method: 'llm_judge', judge_provider: 'aihubmix', judge_model: requestedModel }),
+          method: 'llm_judge', judge_provider: selectedJudge.provider, judge_model: requestedModel }),
       });
       const data = await readApi(response, episodeReviewResponseSchema);
       requireIdentity(data.review.episode_id, episodeId);
-      if (data.review.method !== 'llm_judge' || data.review.provider !== 'aihubmix'
+      if (data.review.method !== 'llm_judge' || data.review.provider !== selectedJudge.provider
         || data.review.model !== requestedModel) throw new Error('评审返回的模型与本次选择不一致。');
       setReviews((current) => [...current, data.review]);
     } catch (reason) {

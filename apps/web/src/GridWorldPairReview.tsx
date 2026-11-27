@@ -63,7 +63,7 @@ export function GridWorldPairReview({ rows: [a, b], artifacts, models }: {
     return () => controller.abort();
   }, [open, ready, revision, pairA, pairB, key]);
 
-  const candidates = models.filter(model => model.provider === 'aihubmix'
+  const candidates = models.filter(model => model.provider !== 'fake'
     && ![a.model_id.toLowerCase(), b.model_id.toLowerCase()].includes(model.id.toLowerCase()));
   const hasActions = (a.actions ?? 0) + (b.actions ?? 0) > 0;
   async function submit() {

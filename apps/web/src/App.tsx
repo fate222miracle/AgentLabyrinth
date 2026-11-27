@@ -828,7 +828,7 @@ export default function App() {
 
       const payload = selectedSuite === 'gridworld' ? {
         schema_version: '1.3',
-        provider: isFake ? 'fake' : 'aihubmix',
+        provider: isFake ? 'fake' : currentModelObj?.provider ?? 'aihubmix',
         model: isFake ? 'fake-model' : selectedModel,
         scenario: isFake ? selectedScenario : null,
         task_id: selectedSingleTask,
@@ -852,7 +852,7 @@ export default function App() {
           ? { planning: { schema_version: '1.0', algorithm_version: 'plan-update-v1' } } : {}),
         tool_call_mode: singleReflection ? 'single' : selectedSuite === 'tool_lab_core' ? singleCallMode : 'single',
         ...(!singleReflection && singleContextChoice !== 'full' ? { context_policy: contextInput(singleContextChoice, singleContextWindow, singleMemoryBytes) } : {}),
-        provider: isFake ? 'fake' : 'aihubmix',
+        provider: isFake ? 'fake' : currentModelObj?.provider ?? 'aihubmix',
         model: isFake ? 'fake-model' : selectedModel,
         scenario: isFake ? selectedScenario : null,
         task_id: selectedSingleTask,
@@ -1006,7 +1006,7 @@ export default function App() {
       setErrorMsg('Seed 必须是 1–10 个不重复整数，用英文逗号分隔');
       return;
     }
-    if (expReferenceBudget !== '' && (!/^\d+(?:\.\d+)?$/.test(expReferenceBudget) || Number(expReferenceBudget) <= 0)) {
+    if (currentExpModelMeta?.provider === 'aihubmix' && expReferenceBudget !== '' && (!/^\d+(?:\.\d+)?$/.test(expReferenceBudget) || Number(expReferenceBudget) <= 0)) {
       setErrorMsg('原厂标价参考预算必须是正数 USD，或留空');
       return;
     }
@@ -1037,7 +1037,7 @@ export default function App() {
       const isFake = expModel === 'fake' || currentModelObj?.provider === 'fake';
 
       const payload = {
-        provider: isFake ? 'fake' : 'aihubmix',
+        provider: isFake ? 'fake' : currentModelObj?.provider ?? 'aihubmix',
         model: isFake ? 'fake-model' : expModel,
         scenario: isFake ? expScenario : null,
         task_ids: expTasks,
@@ -1046,7 +1046,7 @@ export default function App() {
         token_budget: isFake ? null : expTokenBudget,
         max_total_tokens: expGlobalTokenBudget === '' ? null : Number(expGlobalTokenBudget),
         max_execution_time_ms: expExecutionSeconds * 1000,
-        max_reference_cost_usd: isFake || expReferenceBudget === '' ? null : expReferenceBudget,
+        max_reference_cost_usd: currentModelObj?.provider === 'aihubmix' && expReferenceBudget !== '' ? expReferenceBudget : null,
         comparison_axis: comparisonAxis,
         ...(comparisonAxis === 'context_policy' ? { context_policy: contextInput(contextChoice, contextWindow, memoryBytes) } : {}),
         ...(comparisonAxis === 'memory_ablation' ? { context_policy: contextInput('memory', memoryAxisWindow, memoryAxisBytes) } : {}),
@@ -1215,7 +1215,7 @@ export default function App() {
   const currentSingleModelMeta = meta?.models.find((m) => m.id === selectedModel);
   const gridworldTaskMeta = meta?.tasks.find((task) => task.suite === 'gridworld' && task.id === selectedSingleTask);
   const gridworldRealGallery = selectedSingleTask === gridworldRealGalleryDefaults.taskId
-    && currentSingleModelMeta?.provider === 'aihubmix';
+    && currentSingleModelMeta && currentSingleModelMeta.provider !== 'fake';
   const gridworldMaxSteps = gridworldRealGallery ? gridworldRealGalleryDefaults.maxSteps : gridworldTaskMeta?.max_steps ?? 16;
   const gridworldSeconds = gridworldRealGallery ? gridworldRealGalleryDefaults.seconds : 300;
   const gridworldOutputPerCall = currentSingleModelMeta?.provider === 'fake' ? 800 : gridworldRealBudget.perCall;
@@ -1719,7 +1719,7 @@ export default function App() {
 
       <details className="advanced-settings experiment-settings">
         <summary><span>种子与预算设置</span><small>Seed {expSeedsText} · 重复 {expRepeatCount} 次 · {expExecutionSeconds} 秒
-          {expModel !== 'fake' && ` · Token ${expTokenBudget ?? '任务原预算'}${expReferenceBudget ? ` · 原厂参考上限 $${expReferenceBudget}` : ''}`}
+          {expModel !== 'fake' && ` · Token ${expTokenBudget ?? '任务原预算'}${currentExpModelMeta?.provider === 'aihubmix' && expReferenceBudget ? ` · 原厂参考上限 $${expReferenceBudget}` : ''}`}
           {expGlobalTokenBudget && ` · 全局 Token ${expGlobalTokenBudget}`}
         </small></summary>
       <div className="form-group">
@@ -1776,7 +1776,7 @@ export default function App() {
           onChange={(event) => setExpGlobalTokenBudget(event.target.value.trim())} disabled={isLoading} />
         <p className="metric-sub">累计所有任务、两侧、Seed 与重复的输入和输出；达到阈值后不启动或恢复下一运行，在途可能超额。Fake 使用模拟 Token。</p>
       </div>
-      {expModel !== 'fake' && (
+      {currentExpModelMeta?.provider === 'aihubmix' && (
         <div className="form-group">
           <label htmlFor="exp-reference-budget">原厂标价参考预算（USD，可选）</label>
           <input id="exp-reference-budget" type="text" inputMode="decimal"
@@ -2459,7 +2459,7 @@ export default function App() {
                     </button>
                     {!artifact.evaluation.success
                       && !(artifact.run_config.environment_version === 'gridworld-key-door-v1'
-                        && artifact.agent.model.provider === 'aihubmix') && (
+                        && artifact.agent.model.provider !== 'fake') && (
                       <button className="btn-secondary" disabled={isLoading}
                         onClick={handleRerunFailedEpisode}>
                         单独重跑失败 Episode
@@ -2470,7 +2470,7 @@ export default function App() {
               </div>
               {artifact && !artifact.evaluation.success
                 && artifact.run_config.environment_version === 'gridworld-key-door-v1'
-                && artifact.agent.model.provider === 'aihubmix' && (
+                && artifact.agent.model.provider !== 'fake' && (
                   <p className="metric-sub">真实模型 GridWorld 结果只读；本版本不支持恢复或重跑，请检查已保存的 Trace 与用量。</p>
                 )}
               {artifact && !singleConfigOpen && <button className="btn-secondary" disabled={isLoading}
@@ -2616,6 +2616,7 @@ export default function App() {
                         <div className="suite-provenance">
                           <strong>{currentSingleModelMeta?.provider === 'fake'
                             ? '离线 Fake 试玩'
+                            : currentSingleModelMeta?.provider === 'deepseek' ? currentSingleModelMeta.name
                             : `${currentSingleModelMeta?.name ?? selectedModel} · 实验性真实运行`}</strong>
                           <p>{currentSingleModelMeta?.provider === 'fake'
                             ? `固定路线离线试玩。最多 ${gridworldMaxSteps} 轮、累计 16,000 Token 和 300 秒。`
@@ -2681,7 +2682,7 @@ export default function App() {
                             <span className="task-option-description">{taskDescription(task)}</span>
                             <span className="task-option-foot">
                               {task.split === 'development' ? '开发集' : task.split === 'evaluation' ? '评测集' : task.split} · 最多 {
-                                task.id === gridworldRealGalleryDefaults.taskId && currentSingleModelMeta?.provider === 'aihubmix'
+                                task.id === gridworldRealGalleryDefaults.taskId && currentSingleModelMeta && currentSingleModelMeta.provider !== 'fake'
                                   ? gridworldRealGalleryDefaults.maxSteps : task.max_steps
                               } 步 · {
                                 task.suite === 'tool_lab_core'
@@ -2739,7 +2740,7 @@ export default function App() {
                     </div>
                   </details>
                 </div>
-                {isGridWorldWorkspace && !gridworldModelOptions.some(model => model.provider === 'aihubmix') && (
+                {isGridWorldWorkspace && !gridworldModelOptions.some(model => model.provider !== 'fake') && (
                   <p className="task-list-message" role="status">
                     当前模型目录未提供 GridWorld 准入的真实型号；仍可使用 Fake 离线试玩。
                   </p>
@@ -2956,8 +2957,8 @@ export default function App() {
                       <p className="loading-note" role="status">
                         {liveRun.status === 'running' ? '正在接收真实 Trace 事件。' : liveRun.status === 'completed' ? '本次运行已结束，结果已保存。' : '实时连接已中断，后端运行状态未知。'}
                         {liveRun.environmentVersion === 'gridworld-key-door-v1'
-                          && liveRun.provider === 'aihubmix'
-                          && ` ${meta?.models.find(model => model.id === liveRun.model)?.name ?? liveRun.model} · 实验性真实运行；临时累计 Token 额度 ${gridworldRealBudget.total}，费用可能未知。`}
+                          && liveRun.provider && liveRun.provider !== 'fake'
+                          && ` ${meta?.models.find(model => model.id === liveRun.model)?.name ?? liveRun.model} · 真实运行；临时累计 Token 额度 ${gridworldRealBudget.total}，费用可能未知。`}
                         {liveRun.episodeId && ` Episode ID：${liveRun.episodeId}`}
                       </p>
                       {liveRun.environmentVersion === 'gridworld-key-door-v1' && <GridWorldMap key="live-gridworld" events={liveRun.events} animate />}

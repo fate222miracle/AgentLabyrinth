@@ -24,7 +24,7 @@ const runtimeFields = {
 const gridWorldRow = z.object({
     episode_id: uuid, started_at: utc, comparison_key: hash,
     task_name: z.string(), task_version: z.string(), seed: z.int(),
-    model_id: z.string(), provider: z.enum(['fake', 'aihubmix']),
+    model_id: z.string(), provider: z.enum(['fake', 'aihubmix', 'deepseek']),
     context_rounds: z.nullable(count), max_steps: count, token_budget: count,
     max_execution_time_ms: z.nullable(count),
     success: z.boolean(), termination, detail: z.string(),
@@ -87,7 +87,7 @@ export const gridWorldReviewListSchema = z.object({
 export const metaSchema = z.looseObject({
   schema_version: z.literal('1.0'), request_id: uuid,
   models: z.array(z.looseObject({ id: z.string(), name: z.string(),
-    provider: z.enum(['fake', 'aihubmix']), is_default: z.boolean(),
+    provider: z.enum(['fake', 'aihubmix', 'deepseek']), is_default: z.boolean(),
     is_experimental: z.boolean(), notes: z.string(), scenarios: z.array(z.string()) })),
   tasks: z.array(z.looseObject({ id: z.string(), name: z.string(), category: z.string(),
     description: z.string(), max_steps: count, token_budget: count,
@@ -293,7 +293,7 @@ export const episodeReviewSchema = z.looseObject({
   evidence_support: z.nullable(z.enum(['pass', 'fail', 'unknown'])),
   process_safety: z.nullable(z.enum(['pass', 'fail', 'unknown'])),
   rationale: z.nullable(z.string()), event_ids: z.array(uuid), reviewer_label: z.nullable(z.string()),
-  provider: z.nullable(z.enum(['fake', 'aihubmix'])), model: z.nullable(z.string()),
+  provider: z.nullable(z.enum(['fake', 'aihubmix', 'deepseek'])), model: z.nullable(z.string()),
   prompt_version: z.nullable(z.enum(['episode-review-v1', 'episode-review-v2'])), token_usage: z.nullable(usage),
   estimated_cost: z.nullable(cost),
   failure_code: z.nullable(z.enum(['JUDGE_PROVIDER_ERROR', 'INVALID_JUDGE_OUTPUT', 'INVALID_EVENT_REFERENCE'])),

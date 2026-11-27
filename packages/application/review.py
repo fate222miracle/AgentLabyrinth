@@ -91,7 +91,7 @@ class EpisodeReviewArtifact(Contract):
     rationale: str | None = Field(default=None, max_length=2000)
     event_ids: tuple[UUID, ...] = ()
     reviewer_label: str | None = Field(default=None, max_length=80)
-    provider: Literal["fake", "aihubmix"] | None = None
+    provider: Literal["fake", "aihubmix", "deepseek"] | None = None
     model: str | None = None
     prompt_version: JudgePromptVersion | None = None
     token_usage: TokenUsage | None = None
