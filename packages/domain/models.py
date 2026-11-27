@@ -66,7 +66,7 @@ class ModelConfig(Contract):
 
     schema_version: Literal["1.0", "1.1"] = "1.0"  # type: ignore[assignment]
     tool_call_mode: ToolCallMode | None = None
-    provider: Literal["fake", "aihubmix"] = "fake"
+    provider: Literal["fake", "aihubmix", "deepseek"] = "fake"
     model: str = "fake-orders-v1"
     temperature: float = Field(default=0.0, ge=0, le=2)
     max_tokens: PositiveInt | None = None

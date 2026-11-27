@@ -21,7 +21,7 @@ const cost = (value: string | null | undefined) => value == null ? '未知' : `$
 const faultLabels: Record<string, string> = { none: '无故障', tool_timeout: '工具超时', empty_result: '查询空结果', mcp_disconnect: 'MCP 断线' };
 const scenarioLabels: Record<string, string> = { success: '正常场景', 'invalid-then-success': '首次参数错误' };
 const faultLabel = (value: string | null | undefined) => faultLabels[value ?? ''] ?? value ?? '未记录';
-const scenarioLabel = (item: ExperimentDashboardItem) => item.provider === 'aihubmix' ? '真实请求' : scenarioLabels[item.scenario ?? ''] ?? item.scenario ?? '未记录';
+const scenarioLabel = (item: ExperimentDashboardItem) => item.provider === 'deepseek' ? 'DeepSeek 官方' : item.provider === 'aihubmix' ? '真实请求' : scenarioLabels[item.scenario ?? ''] ?? item.scenario ?? '未记录';
 
 export function ExperimentDashboard({ items, loading, error, skipped, activeId, onRefresh, onOpen }: Props) {
   const [selectedKey, setSelectedKey] = useState('');
@@ -58,7 +58,7 @@ export function ExperimentDashboard({ items, loading, error, skipped, activeId, 
         <div className="chart-heading"><div><span className="story-section-label">单场结果 · 不汇总不同配置</span>
           <h3>{spotlight.model_id ?? '模型未记录'} · {axisLabel(spotlight)}</h3></div>
           <button type="button" className="btn-secondary" onClick={() => onOpen(spotlight.experiment_id)}>读取这场实验</button></div>
-        <p className="chart-note">{spotlight.provider === 'fake' ? '离线模拟' : spotlight.provider === 'aihubmix' ? '真实模型记录' : '来源未记录'} · {new Date(spotlight.created_at).toLocaleString()} · {spotlight.total_pairs} 对任务</p>
+        <p className="chart-note">{spotlight.provider === 'fake' ? '离线模拟' : spotlight.provider === 'deepseek' ? 'DeepSeek 官方' : spotlight.provider === 'aihubmix' ? '真实模型记录' : '来源未记录'} · {new Date(spotlight.created_at).toLocaleString()} · {spotlight.total_pairs} 对任务</p>
         <ExperimentCharts labels={comparisonLabels(spotlight.comparison_axis, spotlight.recovery_backend)} total={spotlight.total_pairs}
           rates={[spotlight.baseline_success_rate, spotlight.recovery_success_rate]}
           tokens={[spotlight.baseline_total_tokens, spotlight.recovery_total_tokens]}
@@ -84,7 +84,7 @@ export function ExperimentDashboard({ items, loading, error, skipped, activeId, 
             <article className="experiment-dashboard-item" key={item.experiment_id}>
               <button className="dashboard-open" type="button" aria-current={activeId === item.experiment_id ? 'true' : undefined} onClick={() => onOpen(item.experiment_id)}>
                 <strong>{axisLabel(item)} · {item.model_id ?? '模型未记录'}</strong>
-                <span>{item.provider === 'fake' ? '离线模拟' : item.provider === 'aihubmix' ? '真实模型' : '来源未记录'} · {item.total_pairs} 对 · {new Date(item.created_at).toLocaleString()}</span>
+                <span>{item.provider === 'fake' ? '离线模拟' : item.provider === 'deepseek' ? 'DeepSeek 官方' : item.provider === 'aihubmix' ? '真实模型' : '来源未记录'} · {item.total_pairs} 对 · {new Date(item.created_at).toLocaleString()}</span>
               </button>
               <div className="dashboard-bars" aria-label="两侧成功率">
                 {[item.baseline_success_rate, item.recovery_success_rate].map((rate, index) => (

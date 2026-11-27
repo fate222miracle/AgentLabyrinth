@@ -112,6 +112,9 @@ class DemoService(EpisodeService):
         models = [model for model in meta.models if model.provider == "fake"]
         return meta.model_copy(update={"models": models, "default_model": models[0].id})
 
+    def _deepseek_configured(self) -> bool:
+        return False
+
     def _require_live_model(self, model_id: str) -> None:
         raise ValueError("This isolated course preview supports Fake models only")
 

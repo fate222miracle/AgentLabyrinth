@@ -44,10 +44,19 @@ npm --prefix apps/web run dev -- --host 127.0.0.1 --port 5173 --strictPort
 <details>
 <summary>配置真实模型</summary>
 
-参考 [.env.example](.env.example) 在仓库根目录创建本机的 .env 文件，配置 `AIHUBMIX_API_KEY`。使用以下命令启动 API，再在页面选择可用型号。
+参考 [.env.example](.env.example) 在仓库根目录创建 `.env`。使用 DeepSeek 官方接口时填写 `DEEPSEEK_API_KEY`，使用 AIHubMix 时填写 `AIHUBMIX_API_KEY`。只需填写自己使用的服务。然后用以下命令启动或重启 API。
 
 ~~~bash
 uv run --locked --env-file .env python -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8000
+~~~
+
+在工作台或单 Agent GridWorld 的模型菜单中选择 **DeepSeek Flash · 官方按量计费**，点击「开始运行 Episode」。密钥由本机后端读取。选择模型和查看历史免费，启动运行或发起模型评审会产生官方 API 用量。
+
+也可以在 PowerShell 中运行下面的示例，通过本机 API 让 DeepSeek 查询模拟订单。执行一次会启动一局付费运行，可能包含多次模型调用。
+
+~~~powershell
+$episode = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8000/api/v1/episodes' -ContentType 'application/json' -Body '{"provider":"deepseek","model":"deepseek-flash","task_id":"order-status-001","token_budget":8000}'
+$episode.artifact.evaluation
 ~~~
 
 </details>
@@ -65,4 +74,4 @@ uv run --locked --env-file .env python -m uvicorn apps.api.main:app --host 127.0
 - [贡献指南与质量检查](CONTRIBUTING.md)
 - [反馈问题](https://github.com/fate222miracle/AgentLabyrinth/issues)
 
-**开发预览** · 工具审批、DeepSeek 接入和多 Agent 冷链协作属于后续开发版本。进度见 [项目记录](docs/handoffs/current-state.md)。
+**开发预览** · 工具审批和多 Agent 冷链协作属于后续开发版本。进度见 [项目记录](docs/handoffs/current-state.md)。

@@ -164,11 +164,16 @@ class EpisodeSession:
         self.environment, self.recorder, self.provider = environment, recorder, provider
         self.is_gridworld = recorder.run_config.environment_version == GRIDWORLD_ENVIRONMENT_VERSION
         simulated = agent.model.provider == "fake"
+        self.unknown_price_version = (
+            "deepseek-official-unverified"
+            if agent.model.provider == "deepseek"
+            else "aihubmix-free-unverified"
+        )
         self.budget = BudgetTracker(
             agent.budget,
             task,
             is_simulated=simulated,
-            price_table_version="fake-zero-v1" if simulated else "aihubmix-free-unverified",
+            price_table_version="fake-zero-v1" if simulated else self.unknown_price_version,
             stop_at_token_limit=self.is_gridworld,
         )
         self.messages: list[Message] = []
@@ -639,7 +644,7 @@ class EpisodeSession:
             return self.stop_for_time(usage_unknown=True)
         except ModelProviderError as exc:
             if exc.token_usage is not None:
-                cost = EstimatedCost(is_known=False, price_table_version="aihubmix-free-unverified")
+                cost = EstimatedCost(is_known=False, price_table_version=self.unknown_price_version)
                 self.budget.accrue_usage(exc.token_usage, cost)
                 self.record(
                     EventType.MODEL_RESPONDED,
@@ -807,7 +812,7 @@ class EpisodeSession:
             return self.stop_for_time(usage_unknown=True)
         except ModelProviderError as exc:
             if exc.token_usage is not None:
-                cost = EstimatedCost(is_known=False, price_table_version="aihubmix-free-unverified")
+                cost = EstimatedCost(is_known=False, price_table_version=self.unknown_price_version)
                 self.budget.accrue_usage(exc.token_usage, cost)
                 self.record(
                     EventType.MODEL_RESPONDED,

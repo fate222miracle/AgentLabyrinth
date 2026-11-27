@@ -135,10 +135,14 @@ test('GridWorld Fake live runs expose arrived state and history replay never pos
   });
 });
 
-for (const taskId of ['key-door-001-v1', 'key-door-002-v1']) {
-  test(`GridWorld sends one real request using the frozen budget for ${taskId}`, async ({ page }) => {
+for (const [taskId, provider] of [
+  ['key-door-001-v1', 'aihubmix'], ['key-door-002-v1', 'aihubmix'],
+  ['key-door-001-v1', 'deepseek'], ['key-door-002-v1', 'deepseek'],
+] as const) {
+  test(`GridWorld sends one real request using the frozen budget for ${taskId} (${provider})`, async ({ page }) => {
     const gallery = taskId === 'key-door-002-v1';
-    const modelId = 'coding-glm-5.3-free';
+    const modelId = provider === 'deepseek' ? 'deepseek-flash' : 'coding-glm-5.3-free';
+    const modelName = provider === 'deepseek' ? 'DeepSeek Flash · 官方按量计费' : 'Coding GLM 5.3 Free';
     let capturedRequest: Record<string, unknown> | undefined;
     const writes: string[] = [];
     page.on('request', request => {
@@ -154,8 +158,8 @@ for (const taskId of ['key-door-001-v1', 'key-door-002-v1']) {
       };
       metadata.models.push({
         id: modelId,
-        name: 'Coding GLM 5.3 Free',
-        provider: 'aihubmix',
+        name: modelName,
+        provider,
         is_default: false,
         is_experimental: true,
         notes: 'E2E metadata substitute',
@@ -188,7 +192,7 @@ for (const taskId of ['key-door-001-v1', 'key-door-002-v1']) {
     await expect(page.locator('#gridworld-scenario')).toBeVisible();
     await page.locator('#model-select').selectOption(modelId);
     await expect(page.locator('#gridworld-scenario')).toHaveCount(0);
-    await expect(page.getByText('Coding GLM 5.3 Free · 实验性真实运行', { exact: true })).toBeVisible();
+    await expect(page.locator('#single-stage-controls')).toContainText(modelName);
     await expect(page.getByText(/每次最多 2,048 输出 Token、累计输入 \+ 输出 160,000 Token/)).toBeVisible();
     if (gallery) await expect(page.getByRole('button', { name: /回廊档案室/ })).toContainText('最多 24 步');
     await expect(page.locator('#single-stage-controls')).toContainText(gallery ? '最多 24 轮' : '最多 16 轮');
@@ -200,7 +204,7 @@ for (const taskId of ['key-door-001-v1', 'key-door-002-v1']) {
     expect(writes).toEqual(['POST']);
     expect(capturedRequest).toMatchObject({
       schema_version: '1.3',
-      provider: 'aihubmix',
+      provider,
       model: modelId,
       scenario: null,
       task_id: taskId,

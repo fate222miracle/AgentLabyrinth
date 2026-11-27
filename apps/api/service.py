@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -150,6 +151,7 @@ from packages.environments.tool_lab.mcp import MCP_DISCONNECTED_URL, MCPToolLabE
 from packages.evaluation.bfcl import BFCLEvaluator
 from packages.evaluation.order_status import OrderStatusEvaluator
 from packages.providers.aihubmix import AIHubMixModelProvider, list_available_model_ids
+from packages.providers.deepseek import DEEPSEEK_MODEL, DeepSeekModelProvider
 from packages.providers.fake import FakeModelProvider
 from packages.providers.gridworld_fake import GridWorldFakeProvider
 from packages.runtime.factory import create_runtime, runtime_version
@@ -596,7 +598,7 @@ class EpisodeService:
 
     @staticmethod
     def _gridworld_agent(
-        provider: Literal["fake", "aihubmix"] = "fake",
+        provider: Literal["fake", "aihubmix", "deepseek"] = "fake",
         model: str = "gridworld-fake-v1",
         *,
         max_actions: int = GRIDWORLD_MAX_ACTIONS,
@@ -765,6 +767,15 @@ class EpisodeService:
                     (model.id for model in models if model.provider == "aihubmix"), "fake"
                 )
 
+        if self._deepseek_configured():
+            models.append(
+                ModelOption(
+                    id=DEEPSEEK_MODEL,
+                    name="DeepSeek Flash · 官方按量计费",
+                    provider="deepseek",
+                    notes="直连 DeepSeek 官方。手动开始后产生按量计费请求。",
+                )
+            )
         return models, default_model
 
     def get_meta(self) -> MetaResponse:
@@ -800,7 +811,9 @@ class EpisodeService:
                 token_budget=task.token_budget,
                 suite="gridworld",
                 split=str(task.evaluator_config.get("split", "development")),
-                allowed_model_ids=sorted(GRIDWORLD_ALLOWED_MODEL_IDS),
+                allowed_model_ids=sorted(
+                    GRIDWORLD_ALLOWED_MODEL_IDS | {m.id for m in models if m.provider == "deepseek"}
+                ),
             )
             for task in self._load_gridworld_tasks()
         )
@@ -830,6 +843,28 @@ class EpisodeService:
             model_catalog_status=self._model_catalog_status,
         )
 
+    def _deepseek_configured(self) -> bool:
+        return bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
+
+    def _admit_real_model(self, provider: str, model: str) -> None:
+        if provider == "deepseek":
+            if model != DEEPSEEK_MODEL or not self._deepseek_configured():
+                raise ValueError("DeepSeek Flash 未配置或型号不受支持")
+            return
+        if (
+            provider != "aihubmix"
+            or model == DEEPSEEK_MODEL
+            or not is_model_permitted(model, self._configured_model_ids())
+        ):
+            raise ValueError(f"Model '{model}' is not in the allowed free model whitelist")
+        self._require_live_model(model)
+
+    @staticmethod
+    def _real_provider(provider: str) -> ModelProvider:
+        if provider == "deepseek":
+            return DeepSeekModelProvider()
+        return AIHubMixModelProvider(min_request_interval=13.0)
+
     def _require_live_model(self, model_id: str) -> None:
         """Keep catalog preflight except for explicitly configured tested candidates."""
         if model_id in self._configured_model_ids(catalog_optional=True):
@@ -848,30 +883,25 @@ class EpisodeService:
         if req.suite != "tool_lab_core" and req.tool_call_mode == "serial":
             raise ValueError("BFCL single-call tasks require single tool call mode")
         # 1. Validate requested model/scenario against permissive free model catalog
-        if req.provider == "aihubmix":
-            if not is_model_permitted(req.model, self._configured_model_ids()):
-                raise ValueError(f"Model '{req.model}' is not in the allowed free model whitelist")
-            await asyncio.to_thread(self._require_live_model, req.model)
-            provider: ModelProvider = AIHubMixModelProvider(min_request_interval=13.0)
+        if req.provider != "fake":
+            await asyncio.to_thread(self._admit_real_model, req.provider, req.model)
+            provider = self._real_provider(req.provider)
             agent_text = DEFAULT_AIHUBMIX_AGENT.read_text(encoding="utf-8")
             agent = AgentSpec.model_validate_json(agent_text)
             agent = agent.model_copy(
                 update={
                     "model": agent.model.model_copy(
-                        update={"provider": "aihubmix", "model": req.model}
+                        update={"provider": req.provider, "model": req.model}
                     )
                 }
             )
-        elif req.provider == "fake":
+        else:
             scenario = req.scenario or "success"
             if scenario not in ALLOWED_FAKE_SCENARIOS:
                 raise ValueError(f"Scenario '{scenario}' is not in allowed fake scenarios")
             provider = FakeModelProvider(scenario=scenario)
             agent_text = DEFAULT_FAKE_AGENT.read_text(encoding="utf-8")
             agent = AgentSpec.model_validate_json(agent_text)
-        else:
-            raise ValueError(f"Unsupported provider: {req.provider}")
-
         # 2. Load Task
         agent = self._agent_with_time_budget(agent, req.max_execution_time_ms)
         bfcl_case = None
@@ -1012,20 +1042,22 @@ class EpisodeService:
             provider: ModelProvider = GridWorldFakeProvider(scenario, task_name=task.name)
             agent = self._gridworld_agent(max_actions=task.max_steps)
         else:
-            if (
-                req.provider != "aihubmix"
-                or req.model not in GRIDWORLD_ALLOWED_MODEL_IDS
-                or not is_model_permitted(req.model, self._configured_model_ids())
-            ):
+            if req.provider == "aihubmix" and req.model not in GRIDWORLD_ALLOWED_MODEL_IDS:
                 raise ValueError("GridWorld real model is not approved by server configuration")
-            await asyncio.to_thread(self._require_live_model, req.model)
+            await asyncio.to_thread(self._admit_real_model, req.provider, req.model)
             gallery_v3 = (
                 task.name == GRIDWORLD_GALLERY_TASK_NAME
                 and req.max_steps is None
                 and req.max_execution_time_ms is None
             )
-            task, agent = self._gridworld_real_configuration(task, req.model, gallery_v3=gallery_v3)
-            provider = self._gridworld_real_provider(gallery_v3=gallery_v3)
+            task, agent = self._gridworld_real_configuration(
+                task, req.model, gallery_v3=gallery_v3, provider=req.provider
+            )
+            provider = self._gridworld_real_provider(
+                gallery_v3=gallery_v3,
+                provider=req.provider,
+                gallery=task.name == GRIDWORLD_GALLERY_TASK_NAME,
+            )
         episode_id = uuid4()
         if self._sqlite_store is None and req.provider == "fake":
             self._save_fake_scenario(episode_id, scenario or "success")
@@ -1040,12 +1072,17 @@ class EpisodeService:
         )
 
     def _gridworld_real_configuration(
-        self, task: TaskSpec, model: str, *, gallery_v3: bool
+        self,
+        task: TaskSpec,
+        model: str,
+        *,
+        gallery_v3: bool,
+        provider: Literal["aihubmix", "deepseek"] = "aihubmix",
     ) -> tuple[TaskSpec, AgentSpec]:
         task = self._gridworld_real_budget_task(task, gallery_v3=gallery_v3)
         GridWorldEnvironment._validate_task(task)
         agent = self._gridworld_agent(
-            provider="aihubmix",
+            provider=provider,
             model=model,
             max_actions=task.max_steps,
             max_time_ms=GRIDWORLD_GALLERY_REAL_MAX_TIME_MS if gallery_v3 else 300_000,
@@ -1060,7 +1097,15 @@ class EpisodeService:
         return task, agent
 
     @staticmethod
-    def _gridworld_real_provider(*, gallery_v3: bool) -> ModelProvider:
+    def _gridworld_real_provider(
+        *, gallery_v3: bool, provider: str = "aihubmix", gallery: bool = False
+    ) -> ModelProvider:
+        if provider == "deepseek":
+            return DeepSeekModelProvider(
+                required_tool=True,
+                timeout=60.0 if gallery_v3 else 30.0,
+                compact_message_json=gallery,
+            )
         if gallery_v3:
             return AIHubMixModelProvider(timeout=60.0, min_request_interval=13.0)
         return AIHubMixModelProvider(min_request_interval=13.0)
@@ -1362,7 +1407,12 @@ class EpisodeService:
             b.agent.model.model.casefold(),
         }:
             raise ValueError("请选择不同于两局参评模型的评审模型")
-        provider, config = await self._live_judge(req.judge_model, timeout=60.0)
+        judge_provider: Literal["aihubmix", "deepseek"] = (
+            "deepseek" if req.judge_model == DEEPSEEK_MODEL else "aihubmix"
+        )
+        provider, config = await self._live_judge(
+            req.judge_model, timeout=60.0, provider=judge_provider
+        )
         review = await judge_pair(a, b, data, provider, config)
         await asyncio.to_thread(store.save_pair_review, review)
         return review
@@ -1406,13 +1456,17 @@ class EpisodeService:
         return self.artifacts_dir / "reviews" / f"{review_id}.json"
 
     async def _live_judge(
-        self, model: str, *, timeout: float = 30.0
+        self,
+        model: str,
+        *,
+        timeout: float = 30.0,
+        provider: Literal["aihubmix", "deepseek"] = "aihubmix",
     ) -> tuple[ModelProvider, ModelConfig]:
-        if not is_model_permitted(model, self._configured_model_ids()):
-            raise ValueError("所选评审模型不在后端允许列表中")
-        await asyncio.to_thread(self._require_live_model, model)
+        await asyncio.to_thread(self._admit_real_model, provider, model)
         return (
-            AIHubMixModelProvider(
+            DeepSeekModelProvider(timeout=timeout)
+            if provider == "deepseek"
+            else AIHubMixModelProvider(
                 timeout=timeout,
                 min_request_interval=13.0,
                 reasoning_split=True if "minimax" in model.lower() else None,
@@ -1420,7 +1474,7 @@ class EpisodeService:
             ModelConfig(
                 schema_version="1.1",
                 tool_call_mode="single",
-                provider="aihubmix",
+                provider=provider,
                 model=model,
                 temperature=0.0,
                 max_tokens=4096,
@@ -1476,8 +1530,8 @@ class EpisodeService:
             review_input = build_review_input(episode)
             if len(review_input.model_dump_json().encode("utf-8")) > 65536:
                 raise ValueError("评审输入超过65536字节，本次未发送模型请求")
-            assert req.judge_model is not None
-            provider, config = await self._live_judge(req.judge_model)
+            assert req.judge_model is not None and req.judge_provider is not None
+            provider, config = await self._live_judge(req.judge_model, provider=req.judge_provider)
             artifact = await create_judge_review(episode, provider, config)
         else:
             scenario = req.judge_scenario or "success"
@@ -1651,11 +1705,9 @@ class EpisodeService:
                     initial_call_count=checkpoint.session.budget.model_call_count,
                 )
         else:
-            model_id = checkpoint.agent.model.model
-            if not is_model_permitted(model_id, self._configured_model_ids()):
-                raise ValueError("Saved model is no longer permitted")
-            await asyncio.to_thread(self._require_live_model, model_id)
-            provider = AIHubMixModelProvider(min_request_interval=13.0)
+            model = checkpoint.agent.model
+            await asyncio.to_thread(self._admit_real_model, model.provider, model.model)
+            provider = self._real_provider(model.provider)
         environment, validator, evaluator = self._saved_environment(
             checkpoint.task,
             checkpoint.run_config.environment_version,
@@ -1776,11 +1828,9 @@ class EpisodeService:
                 else FakeModelProvider(scenario=scenario)
             )
         else:
-            if not is_model_permitted(model.model, self._configured_model_ids()):
-                raise ValueError("Saved model is no longer permitted")
-            await asyncio.to_thread(self._require_live_model, model.model)
+            await asyncio.to_thread(self._admit_real_model, model.provider, model.model)
             scenario = None
-            provider = AIHubMixModelProvider(min_request_interval=13.0)
+            provider = self._real_provider(model.provider)
         environment, validator, evaluator = self._saved_environment(
             source.task, source.run_config.environment_version, source.agent.tool_set_version
         )
@@ -1843,16 +1893,14 @@ class EpisodeService:
         ]
 
         # 2. Validate requested model/scenario and configure agents & provider factory
-        if req.provider == "aihubmix":
-            if not is_model_permitted(req.model, self._configured_model_ids()):
-                raise ValueError(f"Model '{req.model}' is not in the allowed free model whitelist")
-            await asyncio.to_thread(self._require_live_model, req.model)
+        if req.provider != "fake":
+            await asyncio.to_thread(self._admit_real_model, req.provider, req.model)
             base_text = DEFAULT_AIHUBMIX_AGENT.read_text(encoding="utf-8")
             baseline_agent = AgentSpec.model_validate_json(base_text)
             baseline_agent = baseline_agent.model_copy(
                 update={
                     "model": baseline_agent.model.model_copy(
-                        update={"provider": "aihubmix", "model": req.model}
+                        update={"provider": req.provider, "model": req.model}
                     ),
                     "runtime_strategy": "handwritten",
                 }
@@ -1867,7 +1915,7 @@ class EpisodeService:
 
             resolved_scenario: str | None = None
 
-        elif req.provider == "fake":
+        else:
             scenario = req.scenario or "invalid-then-success"
             if scenario == "clean":
                 scenario = "success"
@@ -1887,9 +1935,6 @@ class EpisodeService:
                 )
 
             resolved_scenario = scenario
-
-        else:
-            raise ValueError(f"Unsupported provider: {req.provider}")
 
         # 3. Run paired experiment
         baseline_agent = self._agent_with_task_capacity(baseline_agent, tasks)
@@ -2345,20 +2390,18 @@ class EpisodeService:
                     return FakeModelProvider(scenario=scenario, initial_call_count=call_count)
 
             else:
-                if not is_model_permitted(model.model, self._configured_model_ids()):
-                    raise ValueError("Saved model is no longer permitted")
                 saved_price_version = state.config_metadata.get("reference_price_version")
                 if saved_price_version is not None and (
                     reference_price_version(model.model) != saved_price_version
                 ):
                     raise ValueError("Saved Experiment reference price version changed")
-                await asyncio.to_thread(self._require_live_model, model.model)
+                await asyncio.to_thread(self._admit_real_model, model.provider, model.model)
 
                 def provider_factory() -> ModelProvider:
-                    return AIHubMixModelProvider(min_request_interval=13.0)
+                    return self._real_provider(model.provider)
 
                 def resume_provider_factory(call_count: int) -> ModelProvider:
-                    return AIHubMixModelProvider(min_request_interval=13.0)
+                    return self._real_provider(model.provider)
 
             return await run_experiment(
                 baseline_agent=state.baseline_agent,

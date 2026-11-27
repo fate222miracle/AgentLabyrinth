@@ -21,7 +21,7 @@ export function EpisodeSummary({ artifact, explanation }: Props) {
       <h3 className="episode-cost-heading">这次运行用了多少资源</h3>
       <div className="episode-provenance" aria-label="已保存运行来源">
         <span className={`badge ${simulated ? 'badge-blue' : 'badge-yellow'}`}>
-          {simulated ? 'Fake 离线模拟' : agent.model.provider === 'aihubmix' ? '真实 API · 探索性结果' : `来源：${agent.model.provider}`}
+          {simulated ? 'Fake 离线模拟' : agent.model.provider === 'deepseek' ? 'DeepSeek 官方 · 按量计费' : agent.model.provider === 'aihubmix' ? '真实 API · 探索性结果' : `来源：${agent.model.provider}`}
         </span>
         <strong id="metric-model">{agent.model.model}</strong>
         <span>{suite.startsWith('bfcl_')
@@ -30,7 +30,7 @@ export function EpisodeSummary({ artifact, explanation }: Props) {
       <div className="episode-runtime">
         <span>{agent.runtime_backend ?? 'handwritten'} Runtime</span>
         <span>{agent.runtime_strategy === 'handwritten_recovery' ? '一次参数纠错' : '无参数纠错'}</span>
-        <span>工具传输：{config.environment_version === 'tool-lab-mcp-v1' ? 'MCP HTTP' : '本地'}</span>
+        <span>工具传输：{config.environment_version === 'tool-lab-mcp-v1' || config.tool_transport === 'mcp' ? 'MCP HTTP' : '本地'}</span>
         <span>工具调用：{agent.model.tool_call_mode === 'serial' ? '多工具 · 顺序执行' : '单工具'}</span>
         {agent.planning && <span>规划：声明计划 · {agent.planning.algorithm_version}</span>}
         {agent.reflection && <span>反思：停滞后最多一次 · {agent.reflection.algorithm_version}</span>}
